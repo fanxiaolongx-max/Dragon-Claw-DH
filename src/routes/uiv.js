@@ -76,7 +76,7 @@ export async function uivRoutes(fastify) {
 export async function uivAiAdapterRoutes(fastify) {
     fastify.post('/parse-fetch', async (req, reply) => {
         try {
-            const parsed = parseFetchSnippet(req.body?.source);
+            const parsed = await parseFetchSnippet(req.body?.source);
             const sensitiveHeaderNames = Object.keys(parsed.headers || {}).filter((k) => /authorization|cookie|token|secret|api[-_]?key|csrf|xsrf/i.test(k));
             return { parsed, sensitiveHeaderNames };
         } catch (err) {

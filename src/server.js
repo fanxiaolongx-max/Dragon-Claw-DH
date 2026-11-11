@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Fastify from 'fastify';
-import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { config, STATIC_DIR } from './config.js';
 import { BusinessError } from './core/errors.js';
@@ -128,12 +127,18 @@ export async function createServer() {
         },
     });
 
-    await app.register(multipart, {
-        limits: {
-            fileSize: 64 * 1024 * 1024,
-            files: 10,
-        },
-    });
+    // 文件上传插件不在规范依赖白名单内：有就注册，没有（精简包）时上传接口给出明确提示
+    let multipart = null;
+    try { multipart = (await import('@fastify/multipart')).default; } catch { /* 精简包 */ }
+    if (multipart) {
+        await app.register(multipart, { limits: { fileSize: 64 * 1024 * 1024, files: 10 } });
+    } else {
+        app.decorateRequest('file', async function file() {
+            throw new BusinessError('当前安装包未包含文件上传组件（精简包），请改用完整包或在页面内粘贴/解析后提交', 501);
+        });
+        app.addContentTypeParser('multipart/form-data', (_req, payload, done) => { payload.resume(); done(null, {}); });
+        pushLog({ level: 'WARN', category: 'BOOT', message: '未安装 @fastify/multipart：文件上传接口不可用' });
+    }
 
     if (fs.existsSync(STATIC_DIR)) {
         await app.register(fastifyStatic, {

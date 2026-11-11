@@ -12,7 +12,8 @@
     "dev": "node scripts/dev.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "check": "node scripts/check.js",
-    "build": "npm run check && node scripts/build.js"
+    "build": "npm run check && node scripts/build.js",
+    "build:lite": "npm run check && node scripts/build.js --lite"
   },
   "dependencies": {
     "@fastify/multipart": "8.3.1",
@@ -23,7 +24,6 @@
     "fastify": "4.29.1",
     "jszip": "3.10.2",
     "pino": "9.6.0",
-    "undici": "6.21.0",
-    "zod": "3.24.1"
+    "undici": "6.21.0"
   }
 }

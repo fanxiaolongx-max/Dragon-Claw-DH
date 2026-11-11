@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import ExcelJS from 'exceljs';
+import { optionalDep } from '../core/optional.js';
 import { TEMPLATES_DIR } from '../config.js';
 import { kvGet, kvSet, selectTable, upsertRow, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 
@@ -408,6 +408,7 @@ function findYuxiangTemplate() {
 export async function readYuxiangTemplateMapping() {
     const templatePath = findYuxiangTemplate();
     if (!templatePath) return [];
+    const { default: ExcelJS } = await optionalDep('exceljs', '裕湘模板 Excel 导出');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(templatePath);
     const sheet = workbook.worksheets[0];
@@ -431,6 +432,7 @@ export async function saveYuxiangTemplateMapping(updates = {}) {
 
 export async function exportYuxiangBuffer(body = {}) {
     const templatePath = findYuxiangTemplate();
+    const { default: ExcelJS } = await optionalDep('exceljs', '裕湘模板 Excel 导出');
     const workbook = new ExcelJS.Workbook();
     if (templatePath) {
         await workbook.xlsx.readFile(templatePath);

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import JSZip from 'jszip';
+import { optionalDep } from '../core/optional.js';
 import {
     kvGet,
     kvSet,
@@ -648,6 +648,7 @@ export async function exportReportDataBackupZip() {
             owners: owners.length,
         },
     };
+    const { default: JSZip } = await optionalDep('jszip', '报表数据备份导出');
     const zip = new JSZip();
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
     zip.file('data.json', JSON.stringify({ snapshots, catScores, metrics, owners }));
@@ -656,6 +657,7 @@ export async function exportReportDataBackupZip() {
 }
 
 export async function importReportDataBackupZip(zipBuffer, { mode = 'merge' } = {}) {
+    const { default: JSZip } = await optionalDep('jszip', '报表数据备份导入');
     const zip = await JSZip.loadAsync(zipBuffer);
     const dataFile = zip.file('data.json');
     if (!dataFile) fail('无效的报表备份包（缺少 data.json）');

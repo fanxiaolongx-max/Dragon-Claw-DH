@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { optionalDep } from '../core/optional.js';
 import {
     kvGet,
     kvSet,
@@ -207,7 +208,7 @@ export async function exportReportMsgBuffer(rawBody = {}) {
         }
     }
 
-    const { Email, Attachment, MessageEditorFormat, CFB } = await import('@tutao/oxmsg');
+    const { Email, Attachment, MessageEditorFormat, CFB } = await optionalDep('@tutao/oxmsg', '月报 .msg 邮件导出');
     const message = new Email(true);
     message.subject(subject);
     const fallbackText = (text || html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500_000);

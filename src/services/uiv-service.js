@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import * as acorn from 'acorn';
+import { optionalDep } from '../core/optional.js';
 import {
     kvGet, kvSet, selectTable, upsertRow, updateRows, deleteRows,
     cacheSet, cacheGet, sqlVal, parseJsonCol,
@@ -186,9 +186,10 @@ export async function saveBatchScope(data) {
 // UIV Fetch Parser (AST via acorn) & AI Script Adapter
 // ============================================================
 
-export function parseFetchSnippet(codeText) {
+export async function parseFetchSnippet(codeText) {
     const raw = String(codeText || '').trim();
     if (!raw) throw new Error('请输入从 Chrome DevTools 复制的 fetch(...) 代码');
+    const acorn = await optionalDep('acorn', 'fetch 代码解析');
     let ast;
     try {
         ast = acorn.parse(raw, { ecmaVersion: 'latest', sourceType: 'script' });
@@ -260,7 +261,7 @@ Existing Name: ${payload.name || ''}`;
 }
 
 export async function analyzeFetchWithAi(payload = {}) {
-    const parsed = payload.fetchCode ? parseFetchSnippet(payload.fetchCode) : payload;
+    const parsed = payload.fetchCode ? await parseFetchSnippet(payload.fetchCode) : payload;
     const res = await callAiCompletion({
         messages: [{
             role: 'user',

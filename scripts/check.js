@@ -63,8 +63,27 @@ export async function runCheck() {
         if (BANNED_DB_PKGS.has(dep)) errors.push(`R1 违规：package.json 禁止包含直接连库依赖 ${dep}`);
         if (BANNED_AUTH_PKGS.has(dep)) errors.push(`R2 违规：package.json 禁止包含自建登录鉴权依赖 ${dep}`);
     }
+    if (pkg.engines?.node !== '22.21.1') errors.push(`package.json engines.node 必须精确为 22.21.1，当前: ${pkg.engines?.node}`);
+    if (pkg.type !== 'module') errors.push('package.json 必须声明 "type": "module"');
+    for (const [file, expect] of [['.nvmrc', '22.21.1']]) {
+        const p = path.join(ROOT, file);
+        if (!fs.existsSync(p) || fs.readFileSync(p, 'utf8').trim() !== expect) errors.push(`${file} 内容必须为 ${expect}`);
+    }
+    const versionFile = path.join(ROOT, 'dragon-claw-dh.version');
+    if (!fs.existsSync(versionFile) || !/^\d+\.\d+\.\d+$/.test(fs.readFileSync(versionFile, 'utf8').trim())) errors.push('dragon-claw-dh.version 必须是纯版本号（如 1.0.0）');
+    if (!fs.existsSync(path.join(ROOT, 'static', 'js', 'api.js'))) errors.push('缺少 static/js/api.js（规范 §2.1 必含）');
+    // 精简包的依赖必须是完整包的子集，且版本一致
+    const litePkgPath = path.join(ROOT, 'profiles', 'lite', 'package.json');
+    if (fs.existsSync(litePkgPath)) {
+        const lite = JSON.parse(fs.readFileSync(litePkgPath, 'utf8'));
+        for (const [dep, ver] of Object.entries(lite.dependencies || {})) {
+            if (pkg.dependencies?.[dep] !== ver) errors.push(`profiles/lite/package.json 的 ${dep}@${ver} 与主 package.json 不一致`);
+        }
+        const liteLock = fs.readFileSync(path.join(ROOT, 'profiles', 'lite', 'package-lock.json'), 'utf8');
+        if (/registry\.npmjs\.org|registry\.npmmirror\.com|mirrors\.tools\.huawei\.com/i.test(liteLock)) errors.push('profiles/lite/package-lock.json 包含公网源地址');
+    }
     for (const scriptName of Object.keys(pkg.scripts || {})) {
-        if (/^(?:pre|post)?install$/i.test(scriptName)) {
+        if (/^(?:(?:pre|post)?install|prepare)$/i.test(scriptName)) {
             errors.push(`R8 违规：package.json 禁止安装脚本 ${scriptName}`);
         }
     }
@@ -79,7 +98,7 @@ export async function runCheck() {
             errors.push(`package-lock.json lockfileVersion 必须 >= 2，当前: ${lock.lockfileVersion}`);
         }
         const rawLock = fs.readFileSync(lockPath, 'utf8');
-        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com/i.test(rawLock)) {
+        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|mirrors\.tools\.huawei\.com/i.test(rawLock)) {
             errors.push('package-lock.json 包含外网公网 resolved URL');
         }
     }
