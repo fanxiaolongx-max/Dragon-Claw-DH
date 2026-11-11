@@ -141,7 +141,7 @@ export async function activateProfile(profileId) {
             name: p.name,
             provider: p.provider,
             is_active: active ? 1 : 0,
-            config_json: JSON.stringify({ ...p, isActive: active }),
+            config_json: JSON.stringify({ ...p, isActive: active, apiKey: encryptSecret(p.apiKey) }),
             created_at: p.createdAt || Date.now(),
             updated_at: Date.now(),
         }, ['id']);

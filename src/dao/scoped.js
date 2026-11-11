@@ -313,7 +313,9 @@ export async function debugProbeAction(action, params = {}) {
         case 'rep-offices':
         case 'app-menus':
         case 'datasources':
-            return { mode: 'memory', action, simulated: true, items: [] };
+        case 'row-limit':
+        case 'sql-size':
+            return { mode: 'memory', action, simulated: true, message: '离线内存模式：该探针只在连接真实基座时有意义', items: [] };
         default:
             throw new DatabaseError(`未知调试动作: ${action}`);
         }
@@ -367,6 +369,41 @@ export async function debugProbeAction(action, params = {}) {
             schema: 'netcare',
             sql: "INSERT INTO demo_test (msg) VALUES ('越权写netcare测试')",
         }, 'debug:write_netcare');
+    case 'row-limit': {
+        // 基座省略 limit 时返回多少行、单页上限是多少：决定报表类查询是否会被静默截断
+        const base = { datasourceId: config.appDatasourceId, schema: config.appSchema, sql: 'SELECT COLUMN_NAME FROM information_schema.COLUMNS' };
+        const out = {};
+        for (const [label, limit] of [['省略 limit', undefined], ['limit=1000', 1000], ['limit=5000', 5000]]) {
+            try {
+                const r = await rawBasePost(endpoints.query, limit ? { ...base, limit } : base, `debug:row_limit:${limit || 'default'}`);
+                out[label] = r.code === 0 ? { 返回行数: r.data?.rows?.length ?? r.data?.rowCount ?? null } : { code: r.code, message: r.message };
+            } catch (error) {
+                out[label] = { error: error.message };
+            }
+        }
+        return { action, 说明: '本应用按单页 1000 行自动翻页；若“limit=5000”返回超过 1000 行，可把 MAX_PAGE_SIZE 调大', 结果: out };
+    }
+    case 'sql-size': {
+        // 单条 SQL 请求体上限：决定快照 / 月报 / 图片这类大字段能否一次写入
+        const key = 'dh_probe_blob';
+        const steps = [];
+        try {
+            for (const kb of [64, 512, 1024, 4096, 8192]) {
+                const started = Date.now();
+                try {
+                    await kvSet(key, 'x'.repeat(kb * 1024));
+                    steps.push({ 大小: `${kb}KB`, 写入: '成功', 耗时ms: Date.now() - started });
+                } catch (error) {
+                    steps.push({ 大小: `${kb}KB`, 写入: '失败', 原因: error.message.slice(0, 200), 耗时ms: Date.now() - started });
+                    break;
+                }
+            }
+        } finally {
+            await deleteRows('sys_kv_store', { whereSql: `\`kv_key\` = ${sqlVal(key)}`, memFilter: (r) => r.kv_key === key }).catch(() => {});
+        }
+        const okSteps = steps.filter((s) => s.写入 === '成功');
+        return { action, 最大成功写入: okSteps.length ? okSteps[okSteps.length - 1].大小 : '无', 明细: steps };
+    }
     case 'datasources':
         return rawBaseGet(endpoints.datasources, 'debug:datasources');
     case 'rep-offices':

@@ -32,6 +32,8 @@
         { action: 'datasources', label: '🗄️ 数据源列表' },
         { action: 'rep-offices', label: '🏢 代表处列表' },
         { action: 'app-menus', label: '📑 应用菜单权限' },
+        { action: 'row-limit', label: '📏 查询行数上限' },
+        { action: 'sql-size', label: '📦 单条 SQL 大小上限' },
     ];
 
     const state = {
@@ -118,7 +120,7 @@
         state.activeTab = id;
         for (const [k, btn] of tabBtns.entries()) btn.classList.toggle('active', k === id);
         for (const [k, pnl] of panels.entries()) pnl.classList.toggle('active', k === id);
-        if (id === 'identity') loadSummary();
+        if (id === 'identity') { loadSummary(); loadAdmins(); }
         if (id === 'logs') ensureSse();
     }
 
@@ -143,6 +145,51 @@
     const probeResultsBox = el('div', 'dh-dbg-probe-list');
     probeSec.appendChild(probeResultsBox);
     probePanel.appendChild(probeSec);
+
+    // 流式与出站：对话是否能逐字输出、模型网关是否可达
+    const netSec = el('div', 'dh-dbg-section');
+    netSec.appendChild(el('h4', '', '🌐 流式响应与出站连通'));
+    const netActions = el('div', 'dh-dbg-btn-grid');
+    const streamBtn = el('button', 'dh-dbg-btn', '⏱️ 流式是否被网关缓冲');
+    const outboundBtn = el('button', 'dh-dbg-btn', '🛰️ 模型网关出站连通');
+    streamBtn.type = 'button';
+    outboundBtn.type = 'button';
+    netActions.append(streamBtn, outboundBtn);
+    const netPre = el('pre', 'dh-dbg-pre', '点击上方按钮开始测试...');
+    netSec.append(netActions, netPre);
+    probePanel.appendChild(netSec);
+
+    streamBtn.onclick = async () => {
+        netPre.textContent = '测试中（约 3 秒）...';
+        try {
+            const started = Date.now();
+            const res = await fetch(apiUrl('/api/debug/stream-test'));
+            const reader = res.body.getReader();
+            const arrivals = [];
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value && value.length) arrivals.push(Date.now() - started);
+            }
+            const spread = arrivals.length ? arrivals[arrivals.length - 1] - arrivals[0] : 0;
+            const buffered = arrivals.length <= 1 || spread < 1000;
+            netPre.textContent = JSON.stringify({
+                结论: buffered ? '被缓冲：数据在结束时一次性到达，对话无法逐字输出（需要平台对该路径关闭代理缓冲）' : '正常：数据分批实时到达，对话可以逐字输出',
+                分片到达时间ms: arrivals,
+            }, null, 2);
+        } catch (err) {
+            netPre.textContent = `流式测试失败: ${err.message}`;
+        }
+    };
+    outboundBtn.onclick = async () => {
+        netPre.textContent = '测试中...';
+        try {
+            const res = await fetch(apiUrl('/api/debug/outbound-test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            netPre.textContent = JSON.stringify(await res.json(), null, 2);
+        } catch (err) {
+            netPre.textContent = `出站测试失败: ${err.message}`;
+        }
+    };
 
     // Custom Notify Tester
     const notifySec = el('div', 'dh-dbg-section');
@@ -251,8 +298,37 @@
     idHead.appendChild(idRefreshBtn);
     const idKvGrid = el('div', 'dh-dbg-kv-grid');
     const idRawPre = el('pre', 'dh-dbg-pre', '加载中...');
+    // 管理员名单：环境变量 DH_ADMIN_USERS 之外的管理员在这里维护（每行或逗号分隔一个工号）
+    const adminSec = el('div', 'dh-dbg-section');
+    adminSec.appendChild(el('h4', '', '👤 管理员名单'));
+    const adminHint = el('small', '', '首位访问者自动成为管理员。普通用户只能使用对话、AI 月报和个人偏好，不能修改全局配置。');
+    const adminTextarea = el('textarea', 'dh-dbg-textarea');
+    adminTextarea.rows = 3;
+    const adminActions = el('div', 'dh-dbg-btn-grid');
+    adminActions.style.marginTop = '8px';
+    const adminSaveBtn = el('button', 'dh-dbg-btn primary', '保存管理员名单');
+    adminSaveBtn.type = 'button';
+    const adminMsg = el('small', '', '');
+    adminActions.append(adminSaveBtn, adminMsg);
+    adminSec.append(adminHint, adminTextarea, adminActions);
+    async function loadAdmins() {
+        try {
+            const data = await (await fetch(apiUrl('/api/auth/admins'))).json();
+            adminTextarea.value = (data.stored || []).join('\n');
+            adminMsg.textContent = (data.env || []).length ? `环境变量固定管理员：${data.env.join('、')}` : '';
+        } catch (err) { adminMsg.textContent = `读取失败: ${err.message}`; }
+    }
+    adminSaveBtn.onclick = async () => {
+        const users = adminTextarea.value.split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean);
+        try {
+            const res = await fetch(apiUrl('/api/auth/admins'), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ users }) });
+            const data = await res.json();
+            adminMsg.textContent = res.ok ? `已保存（${(data.stored || []).length} 人）` : `保存失败：${data.error || res.status}`;
+            if (res.ok) loadAdmins();
+        } catch (err) { adminMsg.textContent = `保存失败: ${err.message}`; }
+    };
     idSummarySec.append(idHead, idKvGrid, idRawPre);
-    identityPanel.appendChild(idSummarySec);
+    identityPanel.append(adminSec, idSummarySec);
 
     async function loadSummary() {
         try {

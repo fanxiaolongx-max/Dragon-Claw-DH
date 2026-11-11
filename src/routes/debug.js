@@ -3,6 +3,8 @@ import { resolveRequestIdentity, parseCookies } from '../core/identity.js';
 import { listLogs, clearLogs, subscribeLogs, pushLog } from '../core/log-ring.js';
 import { debugProbeAction, isMemoryMode } from '../dao/scoped.js';
 import { sendExpediteNotification } from '../services/report-service.js';
+import { getActiveSettings } from '../services/ai-service.js';
+import { secretsAreStrong } from '../core/secrets.js';
 
 function maskVal(val) {
     const s = String(val || '');
@@ -30,6 +32,7 @@ export async function debugRoutes(fastify) {
             pid: process.pid,
             uptimeSec: Math.round(process.uptime()),
             memoryMode: isMemoryMode(),
+            secretKeyConfigured: secretsAreStrong(),
             identity,
             // Cookie 是登录凭据：只回显与身份/语言识别有关的几个值，其余只给长度
             cookies: Object.fromEntries(Object.entries(cookies).map(([k, v]) => (
@@ -123,6 +126,38 @@ export async function debugRoutes(fastify) {
             memoryMode: isMemoryMode(),
             result,
         };
+    });
+
+    // 流式探针：每 500ms 推一行，前端记录每行到达时间，判断网关是否把流式响应攒到最后才下发
+    fastify.get('/stream-test', async (req, reply) => {
+        reply.raw.writeHead(200, {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-store, no-transform',
+            'X-Accel-Buffering': 'no',
+        });
+        let n = 0;
+        const timer = setInterval(() => {
+            if (reply.raw.destroyed || reply.raw.writableEnded) return clearInterval(timer);
+            n += 1;
+            reply.raw.write(`${JSON.stringify({ n, serverTime: Date.now() })}\n`);
+            if (n >= 6) { clearInterval(timer); reply.raw.end(); }
+        }, 500);
+        req.raw.on('close', () => clearInterval(timer));
+        return reply;
+    });
+
+    // 出站探针：容器能否访问当前启用的模型网关（只看连通性与耗时，不发送对话内容）
+    fastify.post('/outbound-test', async (req) => {
+        const settings = await getActiveSettings();
+        const target = String(req.body?.url || settings.apiBaseUrl || '').trim();
+        if (!/^https?:\/\//i.test(target)) return { ok: false, message: '尚未配置模型网关地址（AI 设置里填写 API Base URL 后再测）' };
+        const started = Date.now();
+        try {
+            const res = await fetch(target, { method: 'GET', signal: AbortSignal.timeout(8000), redirect: 'manual' });
+            return { ok: true, target: maskVal(target), httpStatus: res.status, durationMs: Date.now() - started, 说明: '能收到 HTTP 响应即表示出站可达（401/404 也算可达）' };
+        } catch (error) {
+            return { ok: false, target: maskVal(target), durationMs: Date.now() - started, error: `${error.name}: ${error.cause?.code || error.message}` };
+        }
     });
 
     fastify.post('/notify-test', async (req) => {

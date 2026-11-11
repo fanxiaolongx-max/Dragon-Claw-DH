@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,19 +13,36 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, '..');
 const require = createRequire(import.meta.url);
 
+// Playwright 与 Chromium 不是本包依赖：用环境变量指定，或从本机常见位置自动发现；找不到时本用例跳过
 const PW_CANDIDATES = [
     process.env.PLAYWRIGHT_MODULE_PATH,
     'playwright',
-    '/Users/dragon/.hermes/hermes-agent/node_modules/playwright',
+    'playwright-core',
 ].filter(Boolean);
+
+function discoverChromium() {
+    const cache = path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright');
+    const linuxCache = path.join(os.homedir(), '.cache', 'ms-playwright');
+    const found = [];
+    for (const root of [cache, linuxCache]) {
+        if (!fs.existsSync(root)) continue;
+        // 完整版 Chromium 优先于 headless shell（后者截图不稳定），同类里按目录名顺序
+        const dirs = fs.readdirSync(root).sort();
+        for (const dir of [...dirs.filter((d) => d.startsWith('chromium-')), ...dirs.filter((d) => d.startsWith('chromium_headless_shell-'))]) {
+            for (const rel of [
+                'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+                'chrome-headless-shell-mac-arm64/chrome-headless-shell',
+                'chrome-linux/chrome',
+                'chrome-headless-shell-linux/chrome-headless-shell',
+            ]) found.push(path.join(root, dir, rel));
+        }
+    }
+    return found;
+}
 
 const CHROME_CANDIDATES = [
     process.env.CHROMIUM_EXECUTABLE_PATH,
-    '/Users/dragon/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    '/Users/dragon/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Users/dragon/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell',
-    '/Users/dragon/Library/Caches/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-mac-arm64/chrome-headless-shell',
+    ...discoverChromium(),
 ].filter(Boolean);
 
 function loadPlaywright() {
