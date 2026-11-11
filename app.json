@@ -1,0 +1,33 @@
+{
+  "runtime": "node",
+  "runtimeVersion": "22.21.1",
+  "entry": "run.js",
+  "packageManager": "npm",
+  "install": {
+    "command": "npm ci --omit=dev --ignore-scripts --no-audit --no-fund",
+    "registry": "https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/",
+    "lockfile": "package-lock.json"
+  },
+  "health": {
+    "path": "/api/healthz",
+    "intervalSec": 10,
+    "failThreshold": 3
+  },
+  "port": {
+    "env": "PORT",
+    "default": 8000
+  },
+  "static": {
+    "dir": "static",
+    "index": "index.html"
+  },
+  "db": {
+    "init": "db/init.sql",
+    "upgrade": "db/upgrade.sql"
+  },
+  "redLines": [
+    "no-direct-db",
+    "no-own-login",
+    "region-filter-in-dao"
+  ]
+}

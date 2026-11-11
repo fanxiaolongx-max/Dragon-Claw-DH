@@ -1,0 +1,666 @@
+/* ==========================================================================
+   Dragon Claw · Multi-Agent Swarm HTML Live Painter (右侧浏览器多指针协同实时绘制画布)
+
+   配色：整场绘制只用三种色调 --sw-a / --sw-b / --sw-c，由 html-swarm-canvas.js
+   每次从 Pantone 2026 色板里随机选一套写入；其余全部是中性的石墨灰。
+   ========================================================================== */
+
+.dc-browser-panel.is-swarm-canvas .dc-browser-surface {
+    background: #0b0d10;
+    overflow: hidden;
+}
+
+.dc-browser-panel.is-swarm-canvas .dc-browser-agent-view,
+.dc-browser-panel.is-swarm-canvas .dc-browser-operator,
+.dc-browser-panel.is-swarm-canvas .dc-browser-ai-pointer {
+    display: none !important;
+}
+
+.dc-swarm-stage {
+    --sw-a: #96bae0;
+    --sw-b: #5c97cb;
+    --sw-c: #f0eee9;
+    --sw-chrome: #0d0f13;
+    --sw-hairline: rgba(255, 255, 255, 0.08);
+    --sw-text: #9aa1ad;
+    --sw-text-strong: #eceef2;
+    --sw-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    background: #0b0d10;
+    color: var(--sw-text-strong);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    user-select: none;
+    overflow: hidden;
+}
+
+.dc-swarm-stage[hidden] {
+    display: none !important;
+}
+
+/* ── Top bar ───────────────────────────────────────────────────────────── */
+.dc-swarm-topbar {
+    position: relative;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 12px;
+    background: var(--sw-chrome);
+    border-bottom: 1px solid var(--sw-hairline);
+    font-size: 11.5px;
+    flex-shrink: 0;
+}
+
+.dc-swarm-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+}
+
+.dc-swarm-live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 9px 3px 8px;
+    border-radius: 999px;
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.1px;
+    color: var(--sw-text-strong);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--sw-hairline);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.dc-swarm-pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sw-a);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--sw-a) 22%, transparent);
+    animation: dcSwarmPulse 1.6s ease-in-out infinite;
+}
+
+.dc-swarm-stage.is-finished .dc-swarm-pulse-dot {
+    animation: none;
+    box-shadow: none;
+}
+
+@keyframes dcSwarmPulse {
+    0%, 100% { opacity: 0.45; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
+.dc-swarm-agent-cluster {
+    display: inline-flex;
+    align-items: center;
+    padding-left: 5px;
+    flex-shrink: 0;
+}
+
+.dc-swarm-agent-dot {
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    margin-left: -5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8.5px;
+    font-weight: 600;
+    background: var(--sw-a);
+    color: #14161a;
+    box-shadow: 0 0 0 1.5px var(--sw-chrome);
+    opacity: 0.72;
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+}
+
+.dc-swarm-agent-dot.is-active {
+    opacity: 1;
+    transform: translateY(-2px);
+    z-index: 1;
+}
+
+.dc-swarm-ticker {
+    min-width: 0;
+    flex: 1;
+    color: var(--sw-text);
+    font-family: var(--sw-mono);
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dc-swarm-ticker strong {
+    color: var(--sw-text-strong);
+    font-weight: 500;
+}
+
+.dc-swarm-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.dc-browser-panel .dc-swarm-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    height: 24px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--sw-text);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+    white-space: nowrap;
+}
+
+.dc-swarm-btn svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dc-browser-panel .dc-swarm-btn:hover {
+    color: var(--sw-text-strong);
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.dc-browser-panel .dc-swarm-btn[aria-pressed="true"] {
+    color: var(--sw-text-strong);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--sw-hairline);
+}
+
+.dc-browser-panel .dc-swarm-btn:focus-visible {
+    outline: 1.5px solid var(--sw-a);
+    outline-offset: 1px;
+}
+
+/* ── Main viewport ─────────────────────────────────────────────────────── */
+.dc-swarm-viewport {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: #0b0d10;
+}
+
+/* Scaffold: 页面真实 DOM 挂载前的轻量真实待命层（坚决不展示虚构骨架卡片） */
+.dc-swarm-scaffold {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background-color: #0b0d10;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 32px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+    transition: opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dc-swarm-scaffold.is-faded {
+    opacity: 0;
+}
+
+.dc-swarm-scaffold-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 480px;
+    width: 100%;
+    padding: 24px 26px;
+    border-radius: 14px;
+    border: 1px solid var(--sw-hairline, rgba(255, 255, 255, 0.09));
+    background: rgba(18, 22, 28, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+    text-align: center;
+    gap: 10px;
+}
+
+.dc-swarm-scaffold-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dc-swarm-scaffold-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--sw-a, #60a5fa);
+    box-shadow: 0 0 8px var(--sw-a, #60a5fa);
+    animation: dcSwarmScaffoldPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dcSwarmScaffoldPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.35); opacity: 0.55; }
+}
+
+.dc-swarm-scaffold-tag {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sw-text-strong, #f1f5f9);
+}
+
+.dc-swarm-scaffold-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--sw-text, #94a3b8);
+}
+
+.dc-swarm-scaffold-stream {
+    width: 100%;
+    margin-top: 4px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.38);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    font-family: var(--sw-mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--sw-text, #94a3b8);
+    text-align: left;
+    max-height: 96px;
+    overflow: hidden;
+}
+
+.dc-swarm-scaffold-stream:empty {
+    display: none;
+}
+
+.dc-swarm-scaffold-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dc-swarm-scaffold-line span {
+    color: var(--sw-a, #60a5fa);
+    margin-right: 4px;
+}
+
+.dc-swarm-blueprint { display: none; }
+
+/* ── Live rendered iframe ──────────────────────────────────────────────── */
+.dc-swarm-preview-wrap {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: #ffffff;
+}
+
+.dc-swarm-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: transparent;
+}
+
+/* ── Source view ───────────────────────────────────────────────────────── */
+.dc-swarm-code-view {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    background: #0b0d10;
+    color: #d5d9e0;
+    overflow: auto;
+    padding: 16px;
+    font-family: var(--sw-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    user-select: text;
+}
+
+.dc-swarm-code-view pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ── FX canvas & cursor layer ──────────────────────────────────────────── */
+.dc-swarm-fx {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 4;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+}
+
+.dc-swarm-cursors {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none;
+    overflow: hidden;
+    transition: opacity 0.4s ease;
+}
+
+.dc-swarm-stage.is-cursors-hidden .dc-swarm-fx,
+.dc-swarm-stage.is-cursors-hidden .dc-swarm-cursors {
+    opacity: 0 !important;
+}
+
+/* 位置只通过 transform 逐帧更新；其余状态（名牌、按下、离场）都是 opacity/transform 过渡 */
+.dc-swarm-cursor {
+    position: absolute;
+    left: 0;
+    top: 0;
+    will-change: transform;
+    pointer-events: none;
+}
+
+.dc-swarm-cursor-svg {
+    display: none;
+    width: 20px;
+    height: 22px;
+    margin: -2px 0 0 -3px;
+    overflow: visible;
+    filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.32)) drop-shadow(0 3px 8px rgba(0, 0, 0, 0.18));
+    transform-origin: 3px 2px;
+    transition: transform 0.14s cubic-bezier(0.3, 0, 0.2, 1), opacity 0.45s ease;
+}
+
+.dc-swarm-cursor:not([data-tool]) .dc-swarm-cursor-svg--arrow,
+.dc-swarm-cursor[data-tool="arrow"] .dc-swarm-cursor-svg--arrow,
+.dc-swarm-cursor[data-tool="crosshair"] .dc-swarm-cursor-svg--crosshair,
+.dc-swarm-cursor[data-tool="ibeam"] .dc-swarm-cursor-svg--ibeam,
+.dc-swarm-cursor[data-tool="pen"] .dc-swarm-cursor-svg--pen {
+    display: block;
+}
+
+.dc-swarm-cursor-svg--crosshair {
+    width: 18px;
+    height: 18px;
+    margin: -9px 0 0 -9px;
+    transform-origin: 9px 9px;
+}
+
+.dc-swarm-cursor-svg--ibeam {
+    width: 14px;
+    height: 20px;
+    margin: -10px 0 0 -7px;
+    transform-origin: 7px 10px;
+}
+
+.dc-swarm-cursor-svg--pen {
+    width: 20px;
+    height: 20px;
+    margin: -2px 0 0 -2px;
+    transform-origin: 2px 2px;
+}
+
+.dc-swarm-cursor-svg path {
+    fill: var(--cursor-color, #96bae0);
+    stroke: #ffffff;
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+}
+
+.dc-swarm-cursor-svg .dc-swarm-cursor-halo {
+    fill: none;
+    stroke: #ffffff;
+    stroke-width: 3.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dc-swarm-cursor-svg .dc-swarm-cursor-stroke {
+    fill: none;
+    stroke: var(--cursor-color, #96bae0);
+    stroke-width: 1.65;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dc-swarm-cursor-svg .dc-swarm-cursor-slit {
+    fill: none;
+    stroke: #ffffff;
+    stroke-width: 1.1;
+    stroke-linecap: round;
+}
+
+.dc-swarm-cursor-svg .dc-swarm-cursor-dot {
+    fill: #ffffff;
+    stroke: none;
+}
+
+/* 深色指针落在深色画面上时（亮色页面的色板不会出现，这里只是兜底）仍有白边可辨 */
+.dc-swarm-stage.is-page-light .dc-swarm-cursor-svg {
+    filter: drop-shadow(0 1px 1.5px rgba(15, 20, 30, 0.28)) drop-shadow(0 4px 10px rgba(15, 20, 30, 0.14));
+}
+
+.dc-swarm-cursor.is-pressed .dc-swarm-cursor-svg {
+    transform: scale(0.86);
+}
+
+.dc-swarm-cursor.is-away .dc-swarm-cursor-svg {
+    opacity: 0;
+}
+
+.dc-swarm-cursor-tag {
+    position: absolute;
+    left: 13px;
+    top: 17px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 3px 9px 9px 9px;
+    background: var(--cursor-color, #96bae0);
+    color: var(--cursor-ink, #14161a);
+    font-size: 10.5px;
+    line-height: 1.35;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    transform: translate3d(-3px, -3px, 0) scale(0.94);
+    transform-origin: 0 0;
+    transition: opacity 0.22s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dc-swarm-cursor.is-labeled .dc-swarm-cursor-tag {
+    opacity: 1;
+    transform: none;
+}
+
+.dc-swarm-cursor.is-flip-x .dc-swarm-cursor-tag {
+    left: auto;
+    right: 4px;
+    border-radius: 9px 3px 9px 9px;
+    transform-origin: 100% 0;
+}
+
+.dc-swarm-cursor.is-flip-y .dc-swarm-cursor-tag {
+    top: auto;
+    bottom: 6px;
+    border-radius: 9px 9px 9px 3px;
+    transform-origin: 0 100%;
+}
+
+.dc-swarm-cursor.is-flip-x.is-flip-y .dc-swarm-cursor-tag {
+    border-radius: 9px 9px 3px 9px;
+    transform-origin: 100% 100%;
+}
+
+.dc-swarm-cursor-role {
+    font-weight: 600;
+    letter-spacing: 0.1px;
+}
+
+.dc-swarm-cursor-task {
+    font-family: var(--sw-mono);
+    font-size: 10px;
+    opacity: 0.72;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+.dc-swarm-footer {
+    position: relative;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--sw-chrome);
+    border-top: 1px solid var(--sw-hairline);
+    font-size: 10.5px;
+    color: var(--sw-text);
+    flex-shrink: 0;
+}
+
+.dc-swarm-metrics {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.dc-swarm-metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.dc-swarm-metric b {
+    color: var(--sw-text-strong);
+    font-family: var(--sw-mono);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+.dc-swarm-progress-track {
+    flex: 1;
+    max-width: 180px;
+    height: 2px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.09);
+    overflow: hidden;
+}
+
+.dc-swarm-progress-fill {
+    height: 100%;
+    width: 15%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--sw-b), var(--sw-a));
+    transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── Inline chat trigger on HTML code blocks ───────────────────────────── */
+.dc-swarm-inline-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 13px 6px 11px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--v2-ink, #1f2937);
+    background: var(--v2-bg, #ffffff);
+    border: 1px solid var(--v2-line, rgba(100, 116, 139, 0.35));
+    cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+.dc-swarm-inline-trigger:hover {
+    border-color: #5085c3;
+    background: var(--v2-hover, rgba(80, 133, 195, 0.08));
+}
+
+.dc-swarm-inline-trigger:active {
+    transform: scale(0.98);
+}
+
+.dc-swarm-inline-trigger:focus-visible {
+    outline: 2px solid #5085c3;
+    outline-offset: 2px;
+}
+
+/* 两个叠放的小圆点：协同指针的缩影（Pantone Marina / Dutch Canal） */
+.dc-swarm-inline-mark {
+    position: relative;
+    width: 14px;
+    height: 10px;
+    flex-shrink: 0;
+}
+
+.dc-swarm-inline-mark::before,
+.dc-swarm-inline-mark::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.dc-swarm-inline-mark::before {
+    left: 0;
+    background: #5085c3;
+}
+
+.dc-swarm-inline-mark::after {
+    left: 6px;
+    background: #96bae0;
+    box-shadow: 0 0 0 1.5px var(--v2-bg, #ffffff);
+}
+
+@media (max-width: 640px) {
+    .dc-swarm-agent-cluster {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dc-swarm-pulse-dot {
+        animation: none;
+    }
+    .dc-swarm-scaffold-dot {
+        animation: none;
+    }
+    .dc-swarm-cursor-tag,
+    .dc-swarm-cursor-svg {
+        transition-duration: 0.01s;
+    }
+}

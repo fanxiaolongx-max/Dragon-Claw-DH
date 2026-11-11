@@ -1,0 +1,385 @@
+/* Digital Human Debug Mode Pill & Slide-over Diagnostics Drawer */
+#dhDebugPill {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 2147483000;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.94));
+    color: #f8fafc;
+    font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+    backdrop-filter: blur(12px);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    user-select: none;
+}
+
+#dhDebugPill:hover {
+    transform: translateY(-2px);
+    border-color: rgba(56, 189, 248, 0.85);
+    box-shadow: 0 14px 34px rgba(14, 165, 233, 0.35);
+}
+
+#dhDebugPill .dh-pill-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 8px #22c55e;
+}
+
+#dhDebugPill.is-error-badge .dh-pill-dot {
+    background: #f59e0b;
+    box-shadow: 0 0 8px #f59e0b;
+}
+
+#dhDebugOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483010;
+    background: rgba(2, 6, 23, 0.55);
+    backdrop-filter: blur(4px);
+    display: flex;
+    justify-content: flex-end;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+#dhDebugOverlay[hidden] {
+    display: none;
+}
+
+#dhDebugDrawer {
+    width: min(860px, 96vw);
+    height: 100vh;
+    background: #0b1120;
+    color: #e2e8f0;
+    border-left: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: -16px 0 48px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.dh-dbg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    background: #0f172a;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.dh-dbg-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.dh-dbg-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.dh-dbg-badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.dh-dbg-badge.is-mem {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.32);
+}
+
+.dh-dbg-close {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(30, 41, 59, 0.9);
+    color: #cbd5e1;
+    border-radius: 8px;
+    padding: 6px 11px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.dh-dbg-close:hover {
+    background: #1e293b;
+    color: #fff;
+}
+
+.dh-dbg-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 10px 18px;
+    background: #0f172a;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    overflow-x: auto;
+}
+
+.dh-dbg-tab {
+    border: 1px solid transparent;
+    background: transparent;
+    color: #94a3b8;
+    padding: 7px 13px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.dh-dbg-tab:hover {
+    color: #e2e8f0;
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.dh-dbg-tab.active {
+    background: rgba(14, 165, 233, 0.18);
+    color: #38bdf8;
+    border-color: rgba(56, 189, 248, 0.38);
+}
+
+.dh-dbg-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px 28px;
+}
+
+.dh-dbg-panel {
+    display: none;
+}
+
+.dh-dbg-panel.active {
+    display: block;
+}
+
+.dh-dbg-section {
+    background: #111a2e;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+}
+
+.dh-dbg-section h4 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #f1f5f9;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.dh-dbg-btn-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.dh-dbg-btn {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+
+.dh-dbg-btn:hover {
+    border-color: rgba(56, 189, 248, 0.65);
+    background: #273549;
+}
+
+.dh-dbg-btn.primary {
+    background: #0284c7;
+    border-color: #38bdf8;
+    color: #fff;
+    font-weight: 600;
+}
+
+.dh-dbg-btn.primary:hover {
+    background: #0369a1;
+}
+
+.dh-dbg-kv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.dh-dbg-kv {
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 8px;
+    padding: 9px 11px;
+}
+
+.dh-dbg-kv small {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+    margin-bottom: 3px;
+}
+
+.dh-dbg-kv code {
+    color: #38bdf8;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.dh-dbg-pre {
+    margin: 8px 0 0;
+    padding: 11px 12px;
+    border-radius: 8px;
+    background: #020617;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    color: #a5f3fc;
+    font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    max-height: 300px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.dh-dbg-probe-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.dh-dbg-probe-card {
+    background: #090f1d;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.dh-dbg-probe-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.dh-dbg-pill-ok {
+    color: #4ade80;
+}
+
+.dh-dbg-pill-warn {
+    color: #fbbf24;
+}
+
+.dh-dbg-pill-err {
+    color: #f87171;
+}
+
+.dh-dbg-input,
+.dh-dbg-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: #020617;
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dh-dbg-log-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+.dh-dbg-log-list {
+    background: #020617;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    max-height: calc(100vh - 250px);
+    min-height: 280px;
+    overflow-y: auto;
+    padding: 8px;
+    font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dh-dbg-log-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    word-break: break-word;
+}
+
+.dh-dbg-log-ts {
+    color: #64748b;
+    flex-shrink: 0;
+}
+
+.dh-dbg-log-lvl {
+    font-weight: 700;
+    min-width: 44px;
+    flex-shrink: 0;
+}
+
+.dh-dbg-log-lvl.INFO { color: #38bdf8; }
+.dh-dbg-log-lvl.DEBUG { color: #a78bfa; }
+.dh-dbg-log-lvl.WARN { color: #fbbf24; }
+.dh-dbg-log-lvl.ERROR { color: #f87171; }
+
+.dh-dbg-log-cat {
+    color: #94a3b8;
+    min-width: 56px;
+    flex-shrink: 0;
+}
+
+.dh-dbg-route-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
+}
+
+.dh-dbg-route-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: #0f172a;
+    color: #f8fafc;
+    text-decoration: none;
+}
+
+.dh-dbg-route-card:hover {
+    border-color: #38bdf8;
+    background: #16223a;
+}
+
+.dh-dbg-route-card small {
+    color: #94a3b8;
+    font-size: 11.5px;
+}

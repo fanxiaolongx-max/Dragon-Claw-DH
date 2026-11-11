@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <script src="js/shared/dh-runtime.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-platform-page-title="工具中台" data-platform-page-title-en="Tool Hub">工具中台</title>
+    <script>
+        // 首页统一新版，旧书签和旧偏好也不再恢复旧导航。
+        // 主题默认浅色，可在账号菜单“外观”里切到深色
+        (function () {
+            var root = document.documentElement;
+            root.setAttribute('data-ui', 'v2');
+            try {
+                localStorage.setItem('tools_home_ui', 'v2');
+                root.setAttribute('data-ui', 'v2');
+                root.setAttribute('data-theme', localStorage.getItem('tools_theme') === 'dark' ? 'dark' : 'light');
+            } catch (e) { /* 存储不可用时仍使用新版默认界面 */ }
+        })();
+    </script>
+    <script src="js/shared/fetch-dedupe.js"></script>
+    <script>
+        // 首屏预取：对话区首屏需要的只读接口一次取回（远程访问只回源一次），各模块随后的同名 GET 直接复用
+        (function () {
+            let token = '';
+            try { token = localStorage.getItem('tools_token') || ''; } catch { /* 无痕模式取不到时照常逐个请求 */ }
+            if (!token || !window.ToolsFetchPrefetch) return;
+            let lang = 'zh-CN';
+            try { lang = localStorage.getItem('tools_lang') === 'en-US' ? 'en-US' : 'zh-CN'; } catch { /* 默认中文 */ }
+            window.ToolsFetchPrefetch([
+                '/api/app-version', '/api/migration-status', '/api/nav-settings', '/api/auth/me',
+                '/api/custom-tools', '/api/alert-center/summary', '/api/builtin-promotion/status', '/api/desktop-license/status',
+                '/api/platform-promotions', '/api/platform-promotions/desktop',
+                '/api/home/capabilities?lang=' + lang, '/api/agent-skills?includeHidden=1',
+                '/api/agent-workspace/capability', '/api/agent-workspace/prefs',
+                '/api/ai/conversation-list', '/api/ai/schedules', '/api/ai/models',
+                '/api/ai/sessions?mine=1&pagePath=%2F&limit=40&query=',
+                '/api/channels/available', '/api/channels/ops/pending?limit=20&offset=0',
+                '/api/desktop-agents/settings', '/api/desktop-agents/sessions',
+                '/api/recent-nav', '/api/favorite-nav', '/api/onboarding/defaults/status',
+                '/api/custom-tools/f12-to-extension/scripts',
+                '/api/asset-version?path=%2Fjs%2Fshared%2Fops-inbox.js', '/api/asset-version?path=%2Fcss%2Fops-inbox.css'
+            ], { Authorization: 'Bearer ' + token });
+        })();
+    </script>
+    <script src="js/shared/platform-title.js"></script>
+    <meta name="description" content="统一工具平台入口：UIVF12 抓取引擎 & Task SLA 风险监控台">
+    <link rel="icon" type="image/x-icon" href="favicon.ico?v=20261006">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icon.png">
+    <link rel="apple-touch-icon" href="assets/icon-mac.png">
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/home-promotions.css">
+    <link rel="stylesheet" href="css/home-promo-video.css">
+    <link rel="stylesheet" href="css/home-page.css">
+    <link rel="stylesheet" href="css/home-workspace.css">
+    <link rel="stylesheet" href="css/dragon-claw.css">
+    <link rel="stylesheet" href="css/dragon-claw-skills.css">
+    <link rel="stylesheet" href="css/workspace-panel.css">
+    <link rel="stylesheet" href="css/welink-threads.css">
+    <link rel="stylesheet" href="css/desktop-agents.css">
+    <link rel="stylesheet" href="css/desktop-quota-bar.css">
+    <link rel="stylesheet" href="css/home-mode.css">
+    <link rel="stylesheet" href="css/home-capabilities.css">
+    <link rel="stylesheet" href="css/home-v2.css">
+    <link rel="stylesheet" href="css/home-theme.css">
+    <link rel="stylesheet" href="css/home-sidebar-menu.css">
+    <link rel="stylesheet" href="css/browser-sidebar.css">
+    <link rel="stylesheet" href="css/browser-ai-presence.css">
+    <link rel="stylesheet" href="css/html-swarm-canvas.css">
+    <link rel="stylesheet" href="css/terminal-sidebar.css">
+    <link rel="stylesheet" href="css/conversation-rail.css">
+    <link rel="stylesheet" href="css/conversation-bottom.css">
+    <link rel="stylesheet" href="css/home-skill-hub.css">
+    <link rel="stylesheet" href="css/voice-input.css">
+</head>
+<body class="home-mode-chat home-booting">
+    <script>
+        // 首帧前恢复侧栏收起状态，避免对话列表先出现再收起（规则与 js/home/home-mode.js 一致）
+        (function () {
+            var body = document.body;
+            if (window.innerWidth <= 860) body.classList.add('v2-side-collapsed');
+            try {
+                if (localStorage.getItem('tools_home_wide') === '1') document.documentElement.classList.add('v2-wide');
+                if (window.innerWidth > 860) {
+                    var stored = localStorage.getItem('home_sidebar_mode');
+                    if (stored ? stored === 'collapsed' : window.innerWidth < 1280) body.classList.add('home-sidebar-collapsed');
+                }
+            } catch (e) { /* 无痕模式等读不到存储时按默认展开 */ }
+            setTimeout(function () { body.classList.remove('home-booting'); }, 1500); // 兜底：侧栏脚本未运行时也恢复动画
+        })();
+    </script>
+    <!-- #tools 由新版工具中心接管，等待底部脚本时保持主区隐藏。 -->
+    <script id="homeModeBootstrap">
+        if (location.hash === '#tools') {
+            document.body.classList.add('v2-hub-pending');
+            document.addEventListener('DOMContentLoaded', () => document.body.classList.remove('v2-hub-pending'), { once: true });
+        } else if (performance.getEntriesByType('navigation')[0]?.type === 'reload') {
+            // 刷新欢迎页时从顶部开始；pageshow 后的首帧覆盖浏览器已保存的滚动位置。
+            const previousScrollRestoration = history.scrollRestoration;
+            history.scrollRestoration = 'manual';
+            window.addEventListener('pageshow', () => requestAnimationFrame(() => {
+                if (document.body.classList.contains('home-mode-chat') && !document.body.classList.contains('dc-chatting')) {
+                    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                } else {
+                    history.scrollRestoration = previousScrollRestoration;
+                }
+            }), { once: true });
+            // 离开此页面时还原，后退/前进及其他页面仍由浏览器管理。
+            window.addEventListener('pagehide', () => { history.scrollRestoration = previousScrollRestoration; }, { once: true });
+        }
+    </script>
+    <div class="home-content home-workspace">
+        <aside class="home-sidebar" id="homeSidebar" aria-label="首页导航">
+            <!-- 新版界面侧边栏（js/home/home-v2.js），旧版界面隐藏 -->
+            <div class="v2-side-top" data-v2>
+                <div class="v2-side-tools">
+                    <button type="button" class="v2-icon-btn" id="v2SideToggle" data-v2-i18n-title="collapse"><span class="v2-ico" data-icon="sidebar"></span></button>
+                    <button type="button" class="v2-icon-btn" id="v2SearchBtn" data-v2-i18n-title="search"><span class="v2-ico" data-icon="search"></span></button>
+                    <button type="button" class="v2-icon-btn" id="v2SortBtn" data-v2-i18n-title="sortFilter" aria-haspopup="menu" aria-expanded="false"><span class="v2-ico" data-icon="filter"></span></button>
+                </div>
+                <div class="v2-brand">
+                    <div class="v2-brand-text"><strong>Dragon Claw</strong><span id="v2Version"></span></div>
+                    <button type="button" class="v2-discover-btn" id="v2DiscoverBtn" aria-haspopup="dialog" aria-expanded="false"><span class="v2-ico" data-icon="compass"></span><span data-v2-i18n="discover">发现应用</span><span class="v2-ico v2-chev" data-icon="chevron"></span></button>
+                </div>
+                <nav class="v2-nav" aria-label="主导航">
+                    <button type="button" class="v2-nav-item" data-v2-action="newChat"><span class="v2-ico" data-icon="chatPlus"></span><span data-v2-i18n="newChat">新建对话</span></button>
+                    <button type="button" class="v2-nav-item" data-v2-action="channels"><span class="v2-ico" data-icon="channels"></span><span data-v2-i18n="channels">频道会话</span></button>
+                    <button type="button" class="v2-nav-item" data-v2-action="skillHub"><span class="v2-ico" data-icon="puzzle"></span><span data-v2-i18n="skills">技能·插件·工具</span></button>
+                    <button type="button" class="v2-nav-item" data-v2-action="schedule"><span class="v2-ico" data-icon="alarm"></span><span data-v2-i18n="schedule">定时任务</span></button>
+                    <button type="button" class="v2-nav-item" data-v2-action="library"><span class="v2-ico" data-icon="book"></span><span data-v2-i18n="library">资料库</span></button>
+                    <button type="button" class="v2-nav-item" data-v2-action="opsDrafts"><span class="v2-ico" data-icon="inbox"></span><span data-v2-i18n="opsDrafts">运维待办</span><span class="v2-nav-count" id="v2OpsCount" hidden></span></button>
+                    <button type="button" class="v2-nav-item" data-v2-flyout="more" aria-haspopup="menu" aria-expanded="false"><span class="v2-ico" data-icon="grid"></span><span data-v2-i18n="more">更多</span></button>
+                </nav>
+            </div>
+            <!-- 图标栏：对话 / 工具两种模式互斥（js/home/home-mode.js），友情链接以弹层展示 -->
+            <nav class="home-rail" aria-label="首页模式">
+                <button type="button" class="home-rail-btn" data-home-mode="chat" aria-pressed="true">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 4.5h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 2.8V14h-1A1.5 1.5 0 0 1 3 12.5V6a1.5 1.5 0 0 1 1.5-1.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 8.3h6M7 10.8h3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <span class="home-rail-label" data-home-mode-i18n="chat">对话</span>
+                </button>
+                <button type="button" class="home-rail-btn" data-home-mode="tools" aria-pressed="false">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 3.5h5v5h-5zM11.5 3.5h5v5h-5zM3.5 11.5h5v5h-5zM11.5 11.5h5v5h-5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+                    <span class="home-rail-label" data-home-mode-i18n="tools">工具</span>
+                </button>
+                <!-- 手机：侧栏不显示历史列表，改为弹窗 -->
+                <button type="button" class="home-rail-btn home-rail-history" id="homeHistoryBtn">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.8 10a6.2 6.2 0 1 0 1.9-4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3.5 3.8v2.6h2.6M10 6.6V10l2.4 1.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span class="home-rail-label" data-home-mode-i18n="history">历史</span>
+                </button>
+                <span class="home-rail-spacer" aria-hidden="true"></span>
+                <div class="home-rail-actions" id="customToolsPanel" hidden>
+                    <button type="button" class="home-rail-btn" id="toolMarketBtn" title="工具市场" aria-label="工具市场" aria-haspopup="dialog" aria-controls="toolMarketModal">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7h12l1 9.5H3L4 7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        <span class="home-rail-label" data-home-i18n="home.market.short">市场</span>
+                    </button>
+                    <button type="button" class="home-rail-btn" id="builtinToolsCompareBtn" title="内置工具差异比对与回退" aria-label="内置工具差异比对与回退" aria-haspopup="dialog" aria-controls="builtinToolsSyncModal">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h12m-3-3 3 3-3 3M17 15H5m3-3-3 3 3 3M3 9v6m14-10v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <span class="home-rail-label" data-home-i18n="home.builtin.compareShort">比对</span>
+                    </button>
+                    <button type="button" class="home-rail-btn" id="customToolUploadBtn" title="导入 HTML / ZIP / SKILL" aria-label="导入 HTML / ZIP / SKILL" aria-haspopup="dialog" aria-controls="customToolImportModal">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m-3-3 3 3 3-3M4 12v4.5h12V12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <span class="home-rail-label" data-home-i18n="home.custom.uploadShort">导入</span>
+                    </button>
+                </div>
+                <button type="button" class="home-rail-btn" id="homeLinksBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="homeLinksPop">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.6 11.4a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-1 1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11.4 8.6a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l1-1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <span class="home-rail-label" data-home-mode-i18n="links">链接</span>
+                </button>
+            </nav>
+
+            <div class="home-panel">
+                <!-- 对话模式：历史对话（js/home/dragon-claw.js 渲染列表） -->
+                <section class="home-panel-view" data-home-panel="chat" aria-label="历史对话">
+                    <div class="home-panel-head">
+                        <span class="home-panel-title" data-home-mode-i18n="chatTitle">对话</span>
+                        <button type="button" class="home-sidebar-toggle" aria-label="收起侧栏" title="收起侧栏">
+                            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                    <button type="button" class="home-chat-new" id="homeChatNew">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                        <span data-home-mode-i18n="newChat">新对话</span>
+                    </button>
+                    <label class="home-search home-search--compact">
+                        <span class="home-search-icon" aria-hidden="true">⌕</span>
+                        <input type="search" id="homeChatSearch" placeholder="搜索对话" autocomplete="off" spellcheck="false">
+                    </label>
+                    <div class="home-chat-list" id="homeChatList" role="list"></div>
+                </section>
+
+                <!-- 工具模式：搜索 + 分类（js/home/workspace.js） -->
+                <section class="home-panel-view" data-home-panel="tools" aria-label="工具分类">
+                    <div class="home-panel-head">
+                        <span class="home-panel-title" data-home-mode-i18n="toolsTitle">工具</span>
+                        <button type="button" class="home-sidebar-toggle" aria-label="收起侧栏" title="收起侧栏">
+                            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                    <label class="home-search home-search--compact">
+                        <span class="home-search-icon" aria-hidden="true">⌕</span>
+                        <input type="search" id="homeToolSearch" placeholder="搜索工具 / 拼音首字母" autocomplete="off" spellcheck="false">
+                        <kbd class="home-search-kbd" aria-hidden="true">/</kbd>
+                    </label>
+                    <nav class="home-cat-nav" id="homeCategoryNav" aria-label="工具分类"></nav>
+                    <!-- 插件与脚本：F12 插件 / Python 脚本 / 浮窗脚本等（js/home/capabilities.js，新增后自动出现） -->
+                    <nav class="home-cat-nav home-caps-nav" id="homeCapsNav" aria-label="插件与脚本" hidden></nav>
+                </section>
+            </div>
+
+            <div class="home-sidebar-resizer" id="homeSidebarResizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="homeSidebar" aria-label="调整侧栏宽度" hidden></div>
+
+            <div class="v2-userbar" data-v2>
+                <button type="button" class="v2-user" id="v2UserBtn" aria-haspopup="menu" aria-expanded="false">
+                    <span class="v2-avatar" id="v2Avatar"></span>
+                    <span class="v2-user-text"><strong id="v2UserName"></strong><small><span class="v2-status-dot" id="v2StatusDot"></span><span id="v2UserMeta"></span></small></span>
+                </button>
+                <button type="button" class="v2-icon-btn" id="v2AlertBtn" data-v2-i18n-title="messages"><span class="v2-ico" data-icon="bell"></span><span class="v2-badge" id="v2AlertCount" hidden></span></button>
+                <button type="button" class="v2-icon-btn" id="v2ScanBtn" data-v2-i18n-title="scan" aria-haspopup="dialog" aria-expanded="false"><span class="v2-ico" data-icon="devices"></span></button>
+            </div>
+
+            <!-- 友情链接弹层 -->
+            <div class="home-links-pop" id="homeLinksPop" role="dialog" aria-label="友情链接" hidden>
+                <nav class="friend-links" aria-label="友情链接">
+                    <div class="friend-links-head">
+                        <button type="button" class="friend-links-label" id="friendLinksManageBtn" data-home-i18n="home.links.title">友情链接</button>
+                        <span class="friend-links-count" id="friendLinksCount" hidden></span>
+                    </div>
+                    <div class="friend-links-list">
+                        <a class="friend-link" href="https://wise.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="wise.fanxiaolong.uk"><span class="friend-link-icon">💰</span><span data-home-i18n="home.links.wise">财务管理</span></a>
+                        <a class="friend-link" href="https://app.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="app.fanxiaolong.uk"><span class="friend-link-icon">📱</span><span data-home-i18n="home.links.app">手机控制</span></a>
+                        <a class="friend-link" href="https://yutang.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="yutang.fanxiaolong.uk"><span class="friend-link-icon">🤖</span><span data-home-i18n="home.links.yutang">AI 远程控机</span></a>
+                        <a class="friend-link" data-friend-link-id="api" href="https://api.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="api.fanxiaolong.uk"><span class="friend-link-icon">⚡</span><span data-home-i18n="home.links.api">API 中转</span></a>
+                        <a class="friend-link" href="https://api2.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="api2.fanxiaolong.uk"><span class="friend-link-icon">🔁</span><span data-home-i18n="home.links.api2">API 中转二站</span></a>
+                        <a class="friend-link" href="https://cs2.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="cs2.fanxiaolong.uk"><span class="friend-link-icon">🛟</span><span data-home-i18n="home.links.cs2">工具中台备用</span></a>
+                        <a class="friend-link" href="https://cs.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="cs.fanxiaolong.uk"><span class="friend-link-icon">🏠</span><span data-home-i18n="home.links.csMain">工具中台主站</span></a>
+                        <a class="friend-link" href="https://cs.fanxiaolong.uk/desktop-license-admin" target="_blank" rel="noopener noreferrer" title="cs.fanxiaolong.uk/desktop-license-admin"><span class="friend-link-icon">🔑</span><span data-home-i18n="home.links.license">License 发放</span></a>
+                        <a class="friend-link" href="https://ssh.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="ssh.fanxiaolong.uk"><span class="friend-link-icon">☁️</span><span data-home-i18n="home.links.ssh">移动终端云</span></a>
+                        <a class="friend-link" href="https://pcap.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="pcap.fanxiaolong.uk"><span class="friend-link-icon">📡</span><span data-home-i18n="home.links.pcap">网络分析</span></a>
+                        <a class="friend-link" href="https://openclaw3.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="openclaw3.fanxiaolong.uk"><span class="friend-link-icon">🦞</span><span>OpenClaw</span></a>
+                        <a class="friend-link" href="https://bobapro.life/" target="_blank" rel="noopener noreferrer" title="bobapro.life"><span class="friend-link-icon">🧋</span><span>BobaPro</span></a>
+                        <a class="friend-link" href="https://canting.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="canting.fanxiaolong.uk"><span class="friend-link-icon">🍽️</span><span data-home-i18n="home.links.canting">餐厅服务</span></a>
+                        <a class="friend-link" href="https://ims.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="ims.fanxiaolong.uk"><span class="friend-link-icon">🗂️</span><span>IMS</span></a>
+                        <a class="friend-link" href="https://boda-3xyulq.fly.dev/" target="_blank" rel="noopener noreferrer" title="boda-3xyulq.fly.dev"><span class="friend-link-icon">🏪</span><span>线上中超</span></a>
+                        <a class="friend-link" href="https://canting-demo.fly.dev/" target="_blank" rel="noopener noreferrer" title="canting-demo.fly.dev"><span class="friend-link-icon">🧪</span><span>餐厅 Demo</span></a>
+                        <a class="friend-link" href="https://boda-t0amgq.fly.dev/" target="_blank" rel="noopener noreferrer" title="boda-t0amgq.fly.dev"><span class="friend-link-icon">🍜</span><span>家家乐点餐</span></a>
+                        <a class="friend-link" href="https://boda-0mqtrq.fly.dev/" target="_blank" rel="noopener noreferrer" title="boda-0mqtrq.fly.dev"><span class="friend-link-icon">🧋</span><span>Neferdidi 奶茶店</span></a>
+                        <a class="friend-link" href="https://grok-api2.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" title="grok-api2.fanxiaolong.uk"><span class="friend-link-icon">✦</span><span>Grok API 二站</span></a>
+                    </div>
+                </nav>
+            </div>
+            <div class="home-sidebar-shortcuts" id="homeSidebarShortcuts" hidden><button type="button" class="home-graph-entry" id="homeKnowledgeGraphEntry" data-open-knowledge-graph>
+                <span class="home-graph-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="2.4"></circle><circle cx="5" cy="6" r="1.7"></circle><circle cx="19" cy="7" r="1.7"></circle><circle cx="6" cy="18" r="1.7"></circle><circle cx="18" cy="18" r="1.7"></circle>
+                        <path d="M10.2 10.4 6.3 7.2M13.9 10.6l3.7-2.4M10.1 13.5l-2.8 3M13.9 13.5l2.8 3M7.6 6.3l9.7.5"></path>
+                    </svg>
+                </span>
+                <span class="home-graph-copy">
+                    <span class="home-graph-title" data-home-i18n="home.graph.title">项目知识图谱</span>
+                    <span class="home-graph-divider" aria-hidden="true"></span>
+                    <span class="home-graph-subtitle" data-home-i18n="home.graph.subtitle">探索模块、工具、代码与数据关系</span>
+                </span>
+                <span class="home-graph-arrow" aria-hidden="true">›</span>
+            </button>
+            <button type="button" class="home-graph-entry home-caps-entry" id="homeCapsEntry" hidden>
+                <span class="home-graph-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5h3.2a1.8 1.8 0 1 1 3.6 0H19v3.3a1.8 1.8 0 1 1 0 3.6V15h-3.2a1.8 1.8 0 1 0-3.6 0H9v-3.4a1.8 1.8 0 1 0 0-3.6Z"></path><path d="M5 9v10.5h10.5"></path></svg>
+                </span>
+                <span class="home-graph-copy">
+                    <span class="home-graph-title" data-caps-entry-title>插件与脚本</span>
+                    <span class="home-graph-divider" aria-hidden="true"></span>
+                    <span class="home-graph-subtitle" data-caps-entry-sub></span>
+                </span>
+                <span class="home-graph-arrow" aria-hidden="true">›</span>
+            </button>
+                <div id="homeF12QuickDownloads" class="home-f12-shortcuts"></div>
+            </div>
+        </aside>
+
+        <main class="home-main">
+        <section class="dc" id="dragonClaw" aria-label="Dragon Claw 智能体">
+            <div class="dc-ambient" aria-hidden="true"><span></span><span></span><span></span></div>
+            <a class="dc-feature-link" id="dcDatacomPromo" href="custom-tools/datacom-protocol-expert/index.html">
+                <span class="dc-feature-icon" aria-hidden="true">◈</span>
+                <span class="dc-feature-new">NEW</span>
+                <strong data-dc-i18n="datacomTitle">数通协议专家</strong>
+                <span class="dc-feature-description" data-dc-i18n="datacomDescription">协议图解 · 交互实验 · 视频讲解</span>
+                <span class="dc-feature-arrow" aria-hidden="true">↗</span>
+            </a>
+            <header class="dc-chat-head">
+                <div class="dc-chat-title">
+                    <img src="assets/logo.png" alt="" class="dc-chat-avatar">
+                    <span class="dc-chat-name">Dragon Claw</span>
+                    <span class="dc-chat-badge" data-dc-i18n="badge">全能智能体</span>
+                </div>
+                <div class="dc-chat-actions">
+                    <button type="button" class="dc-ghost-btn dc-workspace-toggle" id="dcWorkspaceToggle" hidden aria-pressed="false"><span class="dc-workspace-toggle-dot" aria-hidden="true"></span><span data-dc-i18n="workspace">工作区</span></button>
+                    <button type="button" class="dc-ghost-btn" id="dcBrowserToggle" aria-pressed="false">浏览器</button>
+                    <button type="button" class="dc-ghost-btn dc-history-btn" id="dcHistoryBtn" data-dc-i18n="history">历史</button>
+                    <div class="dc-export" id="dcExport">
+                        <button type="button" class="dc-ghost-btn" id="dcExportLog" aria-haspopup="menu" aria-expanded="false" aria-controls="dcExportMenu"><span data-dc-i18n="exportLog">导出日志</span><svg class="dc-model-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                        <div class="dc-model-menu dc-export-menu" id="dcExportMenu" role="menu" hidden></div>
+                    </div>
+                    <button type="button" class="dc-ghost-btn" id="dcNewChat" data-dc-i18n="newChat">新对话</button>
+                    <button type="button" class="dc-ghost-btn" id="dcBackToTools" data-dc-i18n="backToTools">浏览工具</button>
+                </div>
+            </header>
+            <div class="dc-landing">
+                <div class="v2-hero" data-v2>
+                    <h1 class="v2-hero-title" data-v2-i18n="heroTitle">Dragon Claw，让想法落地</h1>
+                    <div class="v2-seg" role="tablist" data-v2-modes></div>
+                </div>
+                <div class="dc-orb" aria-hidden="true"><span class="dc-orb-ring"></span><img src="assets/logo.png" alt=""></div>
+                <h1 class="dc-greeting" id="dcGreeting">你好</h1>
+                <p class="dc-tagline" data-dc-i18n="tagline">我是 Dragon Claw，你的全能智能体。问我任何问题，或者让我带你用好平台里的工具。</p>
+            </div>
+            <div class="dc-thread" id="dcThread" role="log" aria-live="polite"></div>
+            <form class="dc-composer" id="dcComposer" autocomplete="off">
+                <div class="dc-composer-surface">
+                <div class="dc-toast" id="dcToast" role="status" aria-live="polite"></div>
+                <!-- 对话附件：上传后显示在输入框上方，发送时把文件路径附在消息末尾（js/home/dragon-claw.js） -->
+                <div class="dc-attachments" id="dcAttachments" hidden></div>
+                <textarea id="dcInput" rows="1" placeholder="有什么我可以帮你？" aria-label="有什么我可以帮你？"></textarea>
+                <div class="dc-composer-bar">
+                    <button type="button" class="dc-attach" id="dcAttach" data-dc-i18n-title="attach" title="添加附件" aria-label="添加附件"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5 9.6 14.4a3.2 3.2 0 0 1-4.5-4.5l5.3-5.3a2.1 2.1 0 0 1 3 3l-5.2 5.2a1 1 0 0 1-1.5-1.5L11.5 6.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    <input type="file" id="dcAttachInput" multiple hidden accept=".xlsx,.xlsm,.csv,.tsv,.txt,.md,.json,.log,.xml,.yaml,.yml,.html,.htm,.docx,.pptx,.zip,.js,.ts,.py,.java,.go,.sql,.sh,.css,.ini,.conf,.png,.jpg,.jpeg,.gif,.webp">
+                    <button type="button" class="dc-composer-icon dc-enhance" id="dcEnhance" data-v2 aria-label="增强提示词" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 2 1.7 4.3L18 8l-4.3 1.7L12 14l-1.7-4.3L6 8l4.3-1.7L12 2ZM4 11l1.1 2.9L8 15l-2.9 1.1L4 19l-1.1-2.9L0 15l2.9-1.1L4 11Z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg></button>
+                    <div class="dc-model" id="dcModel" hidden>
+                        <button type="button" class="dc-model-btn" id="dcModelBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="dcModelMenu">
+                            <span class="dc-model-name" id="dcModelName"></span>
+                            <svg class="dc-model-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        <div class="dc-model-menu" id="dcModelMenu" role="dialog" hidden></div>
+                    </div>
+                    <span class="dc-hint" data-dc-i18n="hint">Enter 发送 · Shift + Enter 换行</span>
+                    <button type="button" class="dc-composer-icon dc-voice" id="dcVoice" aria-label="语音输入" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v3M7.5 18h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                    <button type="submit" class="dc-send" id="dcSend" aria-label="发送">
+                        <svg class="dc-send-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3 17 16.2 10 13.2 3 16.2 10 3Z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>
+                        <svg class="dc-stop-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor"/></svg>
+                    </button>
+                </div>
+                </div>
+                <div class="dc-workspace-chip dc-composer-context" id="dcWorkspaceChip" hidden></div>
+            </form>
+            <div class="dc-prompts" id="dcPrompts"></div>
+            <div class="dc-spotlight" id="dcSpotlight" hidden></div>
+            <div class="v2-agent-illustration" data-v2 aria-hidden="true"><img src="assets/agent-collaboration.png" alt="" width="1536" height="1024"></div>
+        </section>
+
+        <!-- 工具模式标题（js/home/workspace.js 按视图更新） -->
+        <div class="v2-tools-modes" data-v2><div class="v2-seg" role="tablist" data-v2-modes></div></div>
+        <header class="home-tools-head" id="homeToolsHead">
+            <h1 class="home-tools-title" id="homeToolsTitle">全部工具</h1>
+            <span class="home-tools-count" id="homeToolsCount"></span>
+        </header>
+        <div class="tools-grid" id="toolsGrid">
+            <a href="uivf12" class="tool-card uivf12">
+                <div class="card-icon">🚀</div>
+                <div class="card-title">数据抓取</div>
+                <div class="card-desc">自动化脚本工程中心，智能调度仓库，一键生成生产级 UI.Vision 宏代码和 F12 控制台脚本。脚本分类管理，支持批量阵列执行。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🧠 智能 CPC/NID 嗅探</span>
+                    <span class="feature-tag">🔄 翻页引擎</span>
+                    <span class="feature-tag">🌍 NetCare 三大区阵列</span>
+                    <span class="feature-tag">📦 服务端脚本仓库</span>
+                    <span class="feature-tag">📅 运行时双月裂变</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="sla" class="tool-card sla">
+                <div class="card-icon">📊</div>
+                <div class="card-title">数据导入</div>
+                <div class="card-desc">全局数据合控大中台，整改/常规/专项风险三表合一，SLA 预警呼吸灯，支持批量导入、自定义指标推送、分月目标对比。</div>
+                <div class="card-features">
+                    <span class="feature-tag">⚡ SLA 倒计时预警</span>
+                    <span class="feature-tag">🎯 分月指标目标</span>
+                    <span class="feature-tag">📋 列去重提取</span>
+                    <span class="feature-tag">💾 服务端偏好持久化</span>
+                    <span class="feature-tag">📥 XLSX 批量导入</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="report" class="tool-card sla" style="--card-accent: #f5a623;">
+                <div class="card-icon">📈</div>
+                <div class="card-title">报表看板</div>
+                <div class="card-desc">基于历史快照生成多维度健康度排名与扣分概览矩阵，一目了然定位短板客户群，精准推动业务整改。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🏆 客户群健康度排名</span>
+                    <span class="feature-tag">🧩 加减分统筹系统</span>
+                    <span class="feature-tag">📆 多快照历史回溯</span>
+                    <span class="feature-tag">📊 数据透视矩阵</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="expedite" class="tool-card" style="--card-accent: #a855f7;">
+                <div class="card-icon">⚡</div>
+                <div class="card-title">一键催办</div>
+                <div class="card-desc">自动根据短板透视矩阵生成高优先级跟进文本。支持自定义忽略关键词、多模板组装，并可一键关联全屏截图及原始报表，方便无缝推送到业务群。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📋 一键文本复制</span>
+                    <span class="feature-tag">📸 全屏高清截图</span>
+                    <span class="feature-tag">📊 原生 Excel 导出</span>
+                    <span class="feature-tag">⚙️ 自定义催办模板</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="monthly" class="tool-card" style="--card-accent: #ff4081;">
+                <div class="card-icon">📅</div>
+                <div class="card-title">月报页面</div>
+                <div class="card-desc">基于过往历史快照数据，深度挖掘指标长期演进趋势。支持动态多月比对、趋势折线分析，为月度工作复盘提供宏观上帝视角。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📈 跨月趋势对比</span>
+                    <span class="feature-tag">🔍 同比环比分析</span>
+                    <span class="feature-tag">📥 月报快速归档</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="duty-roster" class="tool-card" style="--card-accent: #8b5cf6;">
+                <div class="card-icon">🌙</div>
+                <div class="card-title">夜间运维值班表</div>
+                <div class="card-desc">按月在线编辑夜间运维值班表，严格遵循埃及工作制（周日开始，周五周六为埃及周末并高亮），自动按自然周切分日期区间，并支持一键同步至月报编辑器直接引用。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🇪🇬 埃及周末排班规则</span>
+                    <span class="feature-tag">📅 目标月自动分周</span>
+                    <span class="feature-tag">👥 人员快捷填入/统计</span>
+                    <span class="feature-tag">📑 月报资料库直接调用</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="bigscreen" class="tool-card" style="--card-accent: #39d5ff;">
+                <div class="card-icon">🖥️</div>
+                <div class="card-title">大屏看板</div>
+                <div class="card-desc">面向会议室和全屏展示的运营质量态势屏，汇总月报趋势、报表快照、客户群排名、短板指标和预警信号。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📡 实时态势总览</span>
+                    <span class="feature-tag">🏆 客户群排行</span>
+                    <span class="feature-tag">🚨 短板风险分布</span>
+                    <span class="feature-tag">🧭 趋势驾驶舱</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="topic-analysis" class="tool-card" style="--card-accent: #06b6d4;">
+                <div class="card-icon">📊</div>
+                <div class="card-title">专题分析</div>
+                <div class="card-desc">NetCare 与 DataFab 导入快照的历史记录中心。完整 JSON 持久保存，支持专题月报生成与跨期差异对比。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📜 历史快照中心</span>
+                    <span class="feature-tag">📊 专题月报生成</span>
+                    <span class="feature-tag">🔍 跨期差异对比</span>
+                    <span class="feature-tag">📑 双语工程导出</span>
+                </div>
+                <div class="card-arrow">进入工具 →</div>
+            </a>
+
+            <a href="frt" class="tool-card" style="--card-accent: #e91e63;">
+                <div class="card-icon">📊</div>
+                <div class="card-title">FRT KPI核算</div>
+                <div class="card-desc">FRT自动化核算平台 (动态规则引擎版)，支持导入报表智能提取SR类型，动态筛选、预警扣分项。</div>
+                <div class="card-features">
+                    <span class="feature-tag">⚙️ 动态规则引擎</span>
+                    <span class="feature-tag">📉 扣分项诊断</span>
+                    <span class="feature-tag">📅 多月智能核算</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+
+            <a href="requirements" class="tool-card" style="--card-accent: #00e676;">
+                <div class="card-icon">🎯</div>
+                <div class="card-title">需求管理</div>
+                <div class="card-desc">用于收集、管理和追踪整个平台的新需求。提供直观的流程流转视图，让用户和管理员透明地管理所有功能提议。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📝 全民需求提交</span>
+                    <span class="feature-tag">🔄 流程流转追踪</span>
+                    <span class="feature-tag">📊 进度可视化</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+
+            <a href="praudit" class="tool-card" style="--card-accent: #f39c12;">
+                <div class="card-icon">📋</div>
+                <div class="card-title">PR稽查</div>
+                <div class="card-desc">审计级批量自检系统，用于检查PR进展附件记录，支持导入Excel进行逐项校验，并可生成PDF审计报告。</div>
+                <div class="card-features">
+                    <span class="feature-tag">📥 批量数据导入</span>
+                    <span class="feature-tag">✅ 审计级自检</span>
+                    <span class="feature-tag">📄 导出双语PDF</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+
+            <a href="storage" class="tool-card" style="--card-accent: #22c55e;">
+                <div class="card-icon">🗃️</div>
+                <div class="card-title">迁移状态</div>
+                <div class="card-desc">统一查看 JSON 到 SQLite 的迁移进度、真实读源、一致性校验结果和当前双写状态，方便后续安全切换到 SQLite 主读。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🔍 Auto 读源</span>
+                    <span class="feature-tag">✅ Parity 校验</span>
+                    <span class="feature-tag">📊 JSON / SQLite 数量</span>
+                    <span class="feature-tag">🧭 切库治理面板</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+
+            <a href="db-explorer" class="tool-card" style="--card-accent: #0ea5e9;">
+                <div class="card-icon">🗄️</div>
+                <div class="card-title">数据探索</div>
+                <div class="card-desc">全平台底层数据的上帝视角，直接查询 SQLite 物理表结构与内容，提供 SQL 般直观的浏览体验。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🗄️ SQLite 可视化</span>
+                    <span class="feature-tag">🔍 关系型表查询</span>
+                    <span class="feature-tag">⚡ 实时数据探针</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+
+            <a href="netcare-explorer" class="tool-card" style="--card-accent: #14b8a6;" hidden>
+                <div class="card-icon">🧭</div>
+                <div class="card-title">NetCare 数据探查</div>
+                <div class="card-desc">浏览 NetCare 业务库的表结构与数据，使用只读 SQL 核对业务内容，并维护表名、模块与字段标注。</div>
+                <div class="card-features">
+                    <span class="feature-tag">🗂️ 表结构与数据</span>
+                    <span class="feature-tag">🔍 只读 SQL 查询</span>
+                    <span class="feature-tag">📝 业务标注</span>
+                </div>
+                <div class="card-arrow">进入模块 →</div>
+            </a>
+        </div>
+        <!-- 插件与脚本：藏在各工具内部的小功能（js/home/capabilities.js） -->
+        <section class="home-caps" id="homeCaps" aria-labelledby="homeCapsTitle" hidden></section>
+        <div class="home-empty" id="homeToolsEmpty" hidden>
+            <div class="home-empty-icon" aria-hidden="true">🔍</div>
+            <div class="home-empty-text" id="homeToolsEmptyText">没有匹配的工具</div>
+        </div>
+
+        </main>
+        <!-- Dragon Claw 工作区面板：环境 / 上下文 / 更改（js/home/workspace-panel.js） -->
+        <aside class="home-workspace-panel" id="dcWorkspacePanel" aria-label="Dragon Claw 工作区" hidden>
+            <header class="wsp-head">
+                <span class="wsp-head-title" data-wsp-i18n="panelTitle">工作区</span>
+                <button type="button" class="wsp-icon-btn" id="dcWorkspaceClose" aria-label="关闭">×</button>
+            </header>
+            <section class="wsp-card is-open" data-card="env">
+                <button type="button" class="wsp-card-head" aria-expanded="true"><span data-wsp-i18n="envTitle">环境</span><i class="wsp-caret" aria-hidden="true"></i></button>
+                <div class="wsp-card-body" id="wspEnvBody"></div>
+            </section>
+            <section class="wsp-card is-open" data-card="context">
+                <button type="button" class="wsp-card-head" aria-expanded="true"><span data-wsp-i18n="contextTitle">上下文</span><span class="wsp-card-meta" id="wspCtxMeta"></span><i class="wsp-caret" aria-hidden="true"></i></button>
+                <div class="wsp-card-body" id="wspCtxBody"></div>
+            </section>
+            <section class="wsp-card is-open" data-card="changes">
+                <button type="button" class="wsp-card-head" aria-expanded="true"><span data-wsp-i18n="changesTitle">更改</span><span class="wsp-card-meta" id="wspChangesMeta"></span><i class="wsp-caret" aria-hidden="true"></i></button>
+                <div class="wsp-card-body" id="wspChangesBody"></div>
+            </section>
+        </aside>
+        <!-- 目录选择器（路径输入 + 后端联想），由 workspace-panel.js 挂到 body 并定位 -->
+        <div class="wsp-picker" id="wspDirPicker" role="dialog" aria-modal="true" aria-labelledby="wspPickerTitle" hidden>
+            <div class="wsp-picker-card">
+                <div class="wsp-picker-head">
+                    <strong id="wspPickerTitle" data-wsp-i18n="chooseDir">选择本地目录</strong>
+                    <button type="button" class="wsp-icon-btn" id="wspPickerClose" aria-label="关闭">×</button>
+                </div>
+                <p class="wsp-picker-help" data-wsp-i18n="pickerHelp">输入路径即可联想子目录；清空输入框查看根目录与家目录，↑↓ 选择，Tab 补全，Enter 确认。</p>
+                <div class="wsp-picker-input-wrap">
+                    <input type="text" id="wspPickerInput" class="wsp-picker-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="wspPickerList" aria-autocomplete="list">
+                    <button type="button" class="wsp-picker-clear" id="wspPickerClear" aria-label="清空">×</button>
+                </div>
+                <div class="wsp-picker-status" id="wspPickerStatus"></div>
+                <div class="wsp-picker-list" id="wspPickerList" role="listbox"></div>
+                <div class="wsp-picker-recent" id="wspPickerRecent"></div>
+                <div class="wsp-picker-actions">
+                    <label class="wsp-picker-hidden"><input type="checkbox" id="wspPickerHidden"> <span data-wsp-i18n="showHidden">显示隐藏目录</span></label>
+                    <button type="button" class="wsp-btn wsp-btn-primary" id="wspPickerSelect" data-wsp-i18n="selectThisDir">选择此目录</button>
+                </div>
+            </div>
+        </div>
+        <button type="button" class="wsp-fab" id="dcWorkspaceFab" hidden aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/></svg><span class="wsp-fab-label">工作区</span></button>
+    </div>
+
+    <dialog class="home-promotion-dialog" id="homePromotionDialog" aria-labelledby="homePromotionDialogTitle">
+        <div class="home-promotion-dialog-head">
+            <h2 id="homePromotionDialogTitle" data-i18n="home.promotion.preview">图片预览</h2>
+            <button type="button" class="home-promotion-close" data-i18n-aria-label="home.promotion.close" autofocus>×</button>
+        </div>
+        <div class="home-promotion-dialog-body"><img id="homePromotionPreview" alt=""></div>
+    </dialog>
+
+    <div class="friend-links-overlay" id="friendLinksModal" role="dialog" aria-modal="true" aria-labelledby="friendLinksModalTitle">
+        <div class="friend-links-dialog">
+            <div class="friend-links-dialog-head">
+                <div>
+                    <h2 class="friend-links-dialog-title" id="friendLinksModalTitle" data-home-i18n="home.links.manageTitle">友情链接管理</h2>
+                    <p class="friend-links-dialog-subtitle" data-home-i18n="home.links.manageSubtitle">修改后全平台首页立即生效；状态探测由服务端低频执行并复用缓存。</p>
+                </div>
+                <button type="button" class="friend-links-close" id="friendLinksCloseBtn" aria-label="关闭">×</button>
+            </div>
+            <div class="friend-links-dialog-body">
+                <div class="friend-links-monitor-bar">
+                    <div>
+                        <label class="friend-links-interval-wrap">
+                            <span data-home-i18n="home.links.interval">自动探测间隔</span>
+                            <input class="friend-links-interval" id="friendLinksInterval" type="number" min="10" max="1440" step="5" value="30">
+                            <span data-home-i18n="home.links.minutes">分钟</span>
+                        </label>
+                        <div class="friend-links-monitor-meta" id="friendLinksMonitorMeta">尚未探测</div>
+                    </div>
+                    <button type="button" class="friend-links-probe-all" id="friendLinksProbeAllBtn" data-home-i18n="home.links.probeAll">立即检测全部</button>
+                </div>
+                <div class="friend-link-editor-list" id="friendLinkEditorList"></div>
+                <button type="button" class="friend-links-add" id="friendLinksAddBtn" data-home-i18n="home.links.add">＋ 添加友情链接</button>
+                <div class="friend-links-editor-message" id="friendLinksEditorMessage"></div>
+            </div>
+            <div class="friend-links-dialog-footer">
+                <button type="button" class="friend-links-footer-btn" id="friendLinksCancelBtn" data-home-i18n="home.links.cancel">取消</button>
+                <button type="button" class="friend-links-footer-btn primary" id="friendLinksSaveBtn" data-home-i18n="home.links.save">保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="friend-links-overlay api-relay-overlay" id="apiRelayModal" role="dialog" aria-modal="true" aria-labelledby="apiRelayModalTitle">
+        <div class="friend-links-dialog api-relay-dialog">
+            <div class="friend-links-dialog-head">
+                <div>
+                    <h2 class="friend-links-dialog-title" id="apiRelayModalTitle">⚡ AI API 中转配置</h2>
+                    <p class="friend-links-dialog-subtitle">OpenAI、Anthropic 可直接使用；Gemini 模型默认走稳定的 OpenAI 兼容通道。</p>
+                </div>
+                <button type="button" class="friend-links-close" id="apiRelayCloseBtn" aria-label="关闭">×</button>
+            </div>
+            <div class="friend-links-dialog-body">
+                <div class="api-relay-config">
+                    <div class="api-relay-field">
+                        <label for="apiRelayBaseUrl">公网 BASE URL</label>
+                        <div class="api-relay-input-wrap">
+                            <input class="api-relay-input" id="apiRelayBaseUrl" type="url" value="https://api.fanxiaolong.uk" spellcheck="false">
+                            <button type="button" class="api-relay-icon-btn" id="apiRelayCopyBaseBtn" title="复制 BASE URL">⧉</button>
+                        </div>
+                    </div>
+                    <div class="api-relay-field">
+                        <label for="apiRelayApiKey">API 密钥</label>
+                        <div class="api-relay-input-wrap">
+                            <input class="api-relay-input" id="apiRelayApiKey" type="password" value="xxxx" autocomplete="off" spellcheck="false">
+                            <button type="button" class="api-relay-icon-btn" id="apiRelayToggleKeyBtn" title="显示或隐藏密钥">◉</button>
+                            <button type="button" class="api-relay-icon-btn" id="apiRelayCopyKeyBtn" title="复制 API 密钥">⧉</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="api-relay-models">
+                    <div class="api-relay-field">
+                        <label for="apiRelayOpenAiModel">OpenAI / Gemini 模型</label>
+                        <input class="api-relay-input" id="apiRelayOpenAiModel" value="gemini-3-flash" spellcheck="false">
+                    </div>
+                    <div class="api-relay-field">
+                        <label for="apiRelayDefaultModel">Anthropic / Claude 主模型</label>
+                        <input class="api-relay-input" id="apiRelayDefaultModel" value="claude-3-5-sonnet-20241022" spellcheck="false">
+                    </div>
+                    <div class="api-relay-field">
+                        <label for="apiRelayFastModel">Claude 快速模型</label>
+                        <input class="api-relay-input" id="apiRelayFastModel" value="gemini-2.5-flash" spellcheck="false">
+                    </div>
+                </div>
+                <div class="api-relay-protocols">
+                    <section class="api-protocol-card openai selected" data-api-protocol="openai">
+                        <div class="api-protocol-title"><button type="button" class="api-protocol-select" aria-pressed="true">OpenAI 协议</button><button type="button" class="api-protocol-copy" data-api-copy-protocol="openai">⧉ 复制 BASE</button></div>
+                        <div class="api-protocol-paths"><code>/v1/chat/completions</code><code>/v1/completions</code><code>/v1/responses</code></div>
+                    </section>
+                    <section class="api-protocol-card anthropic" data-api-protocol="anthropic">
+                        <div class="api-protocol-title"><button type="button" class="api-protocol-select" aria-pressed="false">Anthropic 协议</button><button type="button" class="api-protocol-copy" data-api-copy-protocol="anthropic">⧉ 复制 BASE</button></div>
+                        <div class="api-protocol-paths"><code>/v1/messages</code><code>ANTHROPIC_BASE_URL</code><code>ANTHROPIC_AUTH_TOKEN</code></div>
+                    </section>
+                    <section class="api-protocol-card gemini" data-api-protocol="gemini">
+                        <div class="api-protocol-title"><button type="button" class="api-protocol-select" aria-pressed="false">Gemini 模型</button><button type="button" class="api-protocol-copy" data-api-copy-protocol="gemini">⧉ 复制 BASE</button></div>
+                        <div class="api-protocol-paths"><code>/v1/chat/completions</code><code>OpenAI 兼容 REST</code><code>原生 /v1beta 配额受限</code></div>
+                    </section>
+                </div>
+                <div class="api-relay-tabs" role="tablist" aria-label="集成示例">
+                    <button type="button" class="api-relay-tab active" data-api-tab="openai">Python · OpenAI</button>
+                    <button type="button" class="api-relay-tab" data-api-tab="anthropic">Python · Anthropic</button>
+                    <button type="button" class="api-relay-tab" data-api-tab="gemini">Gemini · OpenAI REST</button>
+                    <button type="button" class="api-relay-tab" data-api-tab="claude">Claude Code</button>
+                </div>
+                <div class="api-relay-code-wrap">
+                    <div class="api-relay-code-head"><span id="apiRelayCodeTitle">QUICK INTEGRATION</span><button type="button" class="api-relay-code-copy" id="apiRelayCopyCodeBtn">⧉ 复制当前示例</button></div>
+                    <pre class="api-relay-code" id="apiRelayCode"></pre>
+                </div>
+                <div class="api-relay-actions">
+                    <div class="api-relay-action-group">
+                        <button type="button" class="api-relay-action primary" id="apiRelayCopyAllBtn">⧉ 一键复制全部对接信息</button>
+                        <button type="button" class="api-relay-action success" id="apiRelayInstallClaudeBtn">＋ 自动添加到 Claude Code</button>
+                    </div>
+                    <div class="api-relay-action-group">
+                        <a class="api-relay-action" id="apiRelayOpenSiteBtn" href="https://api.fanxiaolong.uk/" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;text-decoration:none;">打开中转站 ↗</a>
+                        <button type="button" class="api-relay-action" id="apiRelaySaveBtn">保存配置</button>
+                    </div>
+                </div>
+                <div class="api-relay-note" id="apiRelayRuntimeNote">网页版可一键复制；“自动添加”仅在本地 EXE 中可用，并会先备份现有 Claude Code 配置。</div>
+                <div class="friend-links-editor-message" id="apiRelayMessage"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tool-import-overlay" id="customToolImportModal" role="dialog" aria-modal="true" aria-labelledby="customToolImportTitle">
+        <div class="tool-import-dialog">
+            <div class="tool-import-head">
+                <div>
+                    <h2 class="tool-import-title" id="customToolImportTitle">导入自定义工具</h2>
+                    <p class="tool-import-subtitle" id="customToolImportSubtitle">一次填写工具信息并上传 HTML 或 ZIP 工具包（自动支持离线快照与 Pages 静态推送）。</p>
+                </div>
+                <button type="button" class="tool-import-close" id="customToolImportClose" aria-label="关闭">×</button>
+            </div>
+            <form class="tool-import-form" id="customToolImportForm" novalidate>
+                <label class="tool-import-file" id="customToolFilePicker">
+                    <input type="file" id="customToolFileInput" accept=".html,.htm,.zip,.md,text/html,application/zip,text/markdown" hidden>
+                    <span class="tool-import-file-icon">📦</span>
+                    <span class="tool-import-file-main">
+                        <span class="tool-import-file-title" id="customToolFileTitle">选择 HTML / ZIP 文件</span>
+                        <span class="tool-import-file-hint" id="customToolFileHint">HTML 或 ZIP，ZIP 最大 35 MB</span>
+                        <span class="tool-import-file-name" id="customToolFileName"></span>
+                    </span>
+                </label>
+                <div class="tool-import-ai-status" id="customToolAiStatus" aria-live="polite"></div>
+                <div class="tool-import-fields">
+                    <div class="tool-import-locked-hint" id="customToolImportLockedHint" role="status" hidden>🔒 更新模式下工具中英文名称保持锁定，上传的新内容将直接覆盖此工具。</div>
+                    <div class="tool-import-field">
+                        <label for="customToolIcon" id="customToolIconLabel">图标</label>
+                        <input class="tool-import-input" id="customToolIcon" name="icon" value="🧩" maxlength="8">
+                    </div>
+                    <div class="tool-import-field">
+                        <label for="customToolName" id="customToolNameLabel">中文工具名 <span>*</span></label>
+                        <input class="tool-import-input" id="customToolName" name="name" maxlength="80" autocomplete="off" required>
+                    </div>
+                    <div class="tool-import-field full">
+                        <label for="customToolNameEn" id="customToolNameEnLabel">英文工具名</label>
+                        <input class="tool-import-input" id="customToolNameEn" name="nameEn" maxlength="120" autocomplete="off">
+                    </div>
+                    <div class="tool-import-field full">
+                        <label for="customToolDescription" id="customToolDescriptionLabel">中文简介</label>
+                        <textarea class="tool-import-textarea" id="customToolDescription" name="description" maxlength="500"></textarea>
+                    </div>
+                    <div class="tool-import-field full">
+                        <label for="customToolDescriptionEn" id="customToolDescriptionEnLabel">英文简介</label>
+                        <textarea class="tool-import-textarea" id="customToolDescriptionEn" name="descriptionEn" maxlength="1000"></textarea>
+                    </div>
+                    <div class="tool-import-field full">
+                        <label for="customToolTags" id="customToolTagsLabel">标签</label>
+                        <input class="tool-import-input" id="customToolTags" name="tags" autocomplete="off">
+                    </div>
+                </div>
+                <div class="tool-import-error" id="customToolImportError" role="alert"></div>
+                <div class="tool-import-progress" id="customToolImportProgress" hidden>
+                    <div id="customToolImportStatus" role="status" aria-live="polite"></div>
+                    <progress id="customToolImportBar" aria-labelledby="customToolImportStatus" max="100" value="0"></progress>
+                    <div class="tool-import-log" id="customToolImportLog"></div>
+                </div>
+                <div class="tool-import-actions">
+                    <button type="button" class="tool-import-btn" id="customToolImportCancel">取消</button>
+                    <button type="submit" class="tool-import-btn primary" id="customToolImportSubmit">导入工具</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="tool-import-overlay" id="toolMarketModal" role="dialog" aria-modal="true" aria-labelledby="toolMarketTitle">
+        <div class="tool-import-dialog tool-market-dialog">
+            <div class="tool-import-head">
+                <div>
+                    <h2 class="tool-import-title" id="toolMarketTitle">工具市场</h2>
+                    <p class="tool-import-subtitle" id="toolMarketSubtitle">从已启用的仓库安装或更新 HTML 工具。</p>
+                </div>
+                <div class="tool-market-head-actions"><button type="button" class="tool-import-btn" id="toolMarketSettingsBtn" aria-label="仓库设置" title="仓库设置">⚙</button><button type="button" class="tool-import-close" id="toolMarketClose" aria-label="关闭">×</button></div>
+            </div>
+            <div class="tool-market-body">
+                <div class="tool-market-settings" id="toolMarketSettings">
+                    <strong id="toolMarketSettingsTitle">仓库设置</strong>
+                    <div class="tool-market-source"><label><input type="checkbox" id="toolMarketGithubEnabled"> <span id="toolMarketGithubLabel">启用 GitHub 官方仓库</span></label></div>
+                    <div id="toolMarketSources"></div>
+                    <div class="tool-market-settings-actions"><button type="button" class="tool-import-btn" id="toolMarketAddSource">添加第三方仓库</button><button type="button" class="tool-import-btn" id="toolMarketHelpBtn">帮助</button><button type="button" class="tool-import-btn primary" id="toolMarketSaveSettings">保存设置</button></div>
+                    <div class="tool-market-help" id="toolMarketHelp"></div>
+                    <div class="tool-market-source-note" id="toolMarketSettingsMessage" aria-live="polite"></div>
+                </div>
+                <div class="tool-market-toolbar">
+                    <span id="toolMarketSummary">正在加载最新工具目录…</span>
+                    <span class="tool-market-trust" id="toolMarketTrust"></span>
+                </div>
+                <div class="tool-market-list" id="toolMarketPlatformList"></div>
+                <div class="tool-market-list" id="toolMarketList"></div>
+                <div class="tool-market-progress" id="toolMarketProgress">
+                    <div class="tool-market-progress-head"><span id="toolMarketProgressText"></span><span id="toolMarketProgressCount"></span></div>
+                    <div class="tool-market-progress-track"><div class="tool-market-progress-bar" id="toolMarketProgressBar"></div></div>
+                </div>
+                <details class="tool-market-details" id="toolMarketDetails">
+                    <summary id="toolMarketDetailsSummary" data-home-i18n="home.market.details">查看详细更新日志</summary>
+                    <div class="tool-market-log" id="toolMarketLog" role="log" aria-live="polite"></div>
+                </details>
+                <div class="tool-market-footer">
+                    <span class="tool-market-message" id="toolMarketMessage" aria-live="polite"></span>
+                    <div class="tool-import-actions" style="margin-top:0;">
+                        <button type="button" class="tool-import-btn" id="toolMarketRefresh">刷新</button>
+                        <button type="button" class="tool-import-btn primary" id="toolMarketApply">更新所选工具</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/shared/api.js"></script>
+    <script src="js/shared/requirements-client.js"></script>
+    <script src="js/shared/custom-tool-upload.js"></script>
+    <script src="js/shared/migration-status.js"></script>
+    <script src="js/shared/toast.js"></script>
+    <script src="js/shared/i18n.js"></script>
+    <script src="js/home/promotions.js"></script>
+    <script src="js/home/promo-video.js"></script>
+    <script src="js/home/promo-video-status.js"></script>
+    <script src="js/shared/f12-quick-downloads.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/tool-navigation.js"></script>
+    <script src="js/shared/navbar.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <script src="js/home/builtin-promotion.js"></script>
+    <script src="js/home/home-mode.js"></script>
+    <script src="js/home/workspace.js"></script>
+    <script src="js/home/capabilities.js"></script>
+    <script src="js/home/skills-tools.js"></script>
+    <script src="js/shared/sidebar-resize.js"></script>
+    <script src="js/home/todo-dock.js"></script>
+    <script src="js/home/workspace-panel.js"></script>
+    <script src="js/home/browser-sidebar.js"></script>
+    <script src="js/home/html-swarm-canvas.js"></script>
+    <script src="js/home/terminal-sidebar.js"></script>
+    <script src="js/shared/ide-highlighter.js"></script>
+    <script src="js/home/conversation-list.js"></script>
+    <script src="js/home/dragon-claw.js"></script>
+    <script src="js/home/conversation-search.js"></script>
+    <script src="js/home/conversation-rail.js"></script>
+    <script src="js/home/conversation-bottom.js"></script>
+    <script src="js/shared/voice-input.js"></script>
+    <script src="js/home/composer-controls.js"></script>
+    <script src="js/home/welink-threads.js"></script>
+    <script src="js/home/desktop-agents.js"></script>
+    <script src="js/shared/quota-trend-chart.js"></script>
+    <script src="js/shared/desktop-quota-bar.js"></script>
+    <script src="js/home/agent-discussion.js"></script>
+    <script src="js/home/desktop-agent-models.js"></script>
+    <script src="js/home/dragon-claw-skills.js"></script>
+    <script src="js/home/home-page.js"></script>
+    <script src="js/home/home-v2.js"></script>
+    <script src="js/home/sidebar-menu.js"></script>
+    <script src="js/home/tool-menu.js"></script>
+    <script src="js/home/skill-hub.js"></script>
+    <script src="js/home/tool-frame.js"></script>
+    <script src="js/shared/desktop-window.js"></script>
+    <script src="js/shared/desktop-download-manager.js"></script>
+    <script src="js/shared/elegant-scrollbars.js"></script>
+</body>
+</html>

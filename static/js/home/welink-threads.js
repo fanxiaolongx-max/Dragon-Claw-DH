@@ -1,0 +1,1176 @@
+// 首页频道会话（WeLink / 微信）：查看记录、以 Bot 身份手动运营，以及会话内的草稿确认与任务跟进。
+// 以及右侧工作区的「跟进与记忆」卡片（任务、提醒人、频率、下次提醒、跟进记录、关闭情况）。
+// - 对话区借用 Dragon Claw 的渲染（window.DragonClaw.enterExternal），新对话 / 打开个人历史时自动退出；
+// - 右侧卡片借用工作区面板（window.DragonClawWorkspace.showExternal），工作区未启用时也可显示；
+// - 查看对所有登录用户开放；完成、暂停、立即提醒等操作仅管理员（接口 canManage）。
+(function () {
+    'use strict';
+
+    const API_BASE = '/api/channels';
+    const CHANNEL_IDS = ['welink', 'weixin'];
+    const SOURCE_KEY = 'home_chat_source';
+    const PAGE_SIZE = 40;
+    const REFRESH_MS = 20000;
+    const LIVE_MS = 4000; // 打开的会话轮询新消息的间隔
+
+    const TEXT = {
+        'zh-CN': {
+            tac_awaiting_approval: '等待原发起人确认', tac_queued: '已排队', tac_running: '处理中', tac_done: '已完成', tac_failed: '未完成', tac_cancelled: '已取消', tac_expired: '确认已过期', tacReports: '成员结果', tacDelivery: '回传未成功', tacHint: '确认升级需由原发起人在原会话回复，并带上任务编号。',
+            mine: '我的对话', welink: 'WeLink', weixin: '微信', group: '群聊', person: '单聊', loading: '正在加载…', empty: '还没有 {ch} 对话', noMatch: '没有匹配的 {ch} 对话',
+            loadFailed: '加载失败', retry: '重试', openTasks: '{n} 项跟进中', allDone: '跟进已完成', segments: '{n} 段对话', messages: '{n} 条消息',
+            readonly: '只读 · 这是 {ch} {kind}「{name}」的对话记录，在 {ch} 里 @助手 即可继续对话。', back: '返回我的对话',
+            banner: '{ch} {kind} · {name}', start: '对话开始', newContext: '新的对话上下文', newContextHint: '之前的内容不再作为上下文', loadMore: '加载更早的消息', noMessages: '这个会话还没有对话记录',
+            followTitle: '跟进与记忆', followMeta: '{n} 跟进中', noTasks: '该对话还没有跟进任务。在 {ch} 里对助手说「帮我记一下，后边跟进…」即可创建。',
+            workspaceTasks: '会话任务', scheduledTitle: '定时任务', scheduledHint: '向当前会话推送结果的任务', scheduledEmpty: '暂无可查看的定时任务。创建定时任务时，将“推送到”选择为当前会话即可在这里查看。',
+            scheduleAll: '全部', scheduleUpcoming: '待执行', scheduleAttention: '需关注', scheduleHistory: '已结束', scheduleFilteredEmpty: '该状态下暂无任务', scheduleMore: '再显示 {n} 项', scheduleLimited: '最多显示 200 项，待执行任务优先',
+            scheduled_active: '等待执行', scheduled_running: '执行中', scheduled_done: '已完成', scheduled_cancelled: '已取消', scheduled_failed: '执行失败', scheduleNext: '下次执行', scheduleLast: '上次执行', scheduleRuns: '已执行 {n} 次', scheduleRule: '执行规则', scheduleError: '最近异常', schedulePushOk: '已推送到本会话', schedulePushFailed: '推送失败', schedulePreviousFailed: '上次执行失败', scheduleReload: '重新加载',
+            stageStart: '开始', stageActive: '进行', stageEnd: '结束', cancelledEnd: '已取消', details: '跟进详情',
+            status_open: '跟进中', status_paused: '已暂停', status_done: '已完成', status_cancelled: '已取消',
+            urgency_low: '低', urgency_normal: '普通', urgency_high: '高', urgency_urgent: '紧急',
+            remindWho: '提醒', everyone: '群内相关人', currentWeChat: '当前微信单聊', relatedPeople: '相关人', frequency: '频率', urgency: '紧急度', nextRemind: '下次提醒', nextNote: '跟进内容', reminded: '已提醒 {n} 次', lastReminded: '上次 {time}',
+            progress: '最新进展', noProgress: '暂无更新', closed: '关闭', closedBy: '{time} · {who}', due: '截止', creator: '提出人', detail: '任务详情', timeline: '跟进记录',
+            done: '完成', pause: '暂停', resume: '恢复', reopen: '重新打开', cancel: '取消任务', remindNow: '立即提醒', confirmRemind: '立即在 {ch} 中发送一次提醒？', confirmRemindTitle: '立即提醒',
+            confirmClose: '确认将「{title}」标记为{action}？', actionFailed: '操作失败：{error}', updated: '已更新', timezone: '时间为 {zone} 时间',
+            event_created: '创建任务', event_updated: '修改任务', event_progress: '进展', event_reminded: '发送提醒', event_remind_failed: '提醒发送失败', event_paused: '暂停提醒', event_resumed: '恢复提醒',
+            event_done: '完成', event_cancelled: '取消', event_reopened: '重新打开', event_limit: '达到提醒上限', chip_created: '已记录跟进任务', chip_exists: '任务已存在', chip_updated: '更新了跟进任务', chip_progress: '记录了进展', chip_done: '完成了跟进任务', chip_cancelled: '取消了跟进任务',
+            readonly_weixin: '只读 · 这是微信{kind}「{name}」的对话记录，在微信里给助手发消息即可继续对话。',
+            prevTask: '上一个任务', nextTask: '下一个任务', system: '系统',
+            push: '主动推送', push_ops: '运营推送', push_test: '测试推送', push_followup: '跟进提醒', push_schedule: '定时任务',
+            viewMode: '查看记录', viewInfo: '{ch} {kind}「{name}」· 可切换 Bot 身份手动发送消息。', botMode: '以 Bot 身份发送', botRecipient: '以 Bot 身份发送至 {ch} {kind}「{name}」', botHint: '消息将以已连接的 Bot 身份直接发给上述对象。Enter 发送，Shift + Enter 换行。', botPlaceholder: '输入要以 Bot 身份发送的消息…', send: '发送', sending: '发送中…', sent: '已发送至「{name}」', sendFailed: '发送失败：{error}', manualPush: '手动运营', roleLabel: '操作身份'
+        },
+        'en-US': {
+            tac_awaiting_approval: 'Awaiting requester approval', tac_queued: 'Queued', tac_running: 'Running', tac_done: 'Completed', tac_failed: 'Failed', tac_cancelled: 'Cancelled', tac_expired: 'Approval expired', tacReports: 'Agent reports', tacDelivery: 'Delivery failed', tacHint: 'The original requester must confirm in the original conversation with the task ID.',
+            mine: 'My chats', welink: 'WeLink', weixin: 'WeChat', group: 'Group', person: 'Direct', loading: 'Loading…', empty: 'No {ch} conversations yet', noMatch: 'No matching {ch} conversations',
+            loadFailed: 'Could not load', retry: 'Retry', openTasks: '{n} in follow-up', allDone: 'Follow-ups done', segments: '{n} contexts', messages: '{n} messages',
+            readonly: 'Read only · {ch} {kind} "{name}". @mention the assistant in {ch} to continue.', back: 'Back to my chats',
+            banner: '{ch} {kind} · {name}', start: 'Conversation start', newContext: 'New conversation context', newContextHint: 'Earlier messages are no longer in context', loadMore: 'Load earlier messages', noMessages: 'No messages in this conversation yet',
+            followTitle: 'Follow-ups & memory', followMeta: '{n} open', noTasks: 'No follow-up tasks yet. Ask the assistant in {ch} to "note this and follow up…".',
+            workspaceTasks: 'Conversation tasks', scheduledTitle: 'Scheduled tasks', scheduledHint: 'Tasks that push results to this conversation', scheduledEmpty: 'No scheduled tasks are available. Select this conversation under “Push to” when creating a task to see it here.',
+            scheduleAll: 'All', scheduleUpcoming: 'Upcoming', scheduleAttention: 'Attention', scheduleHistory: 'Finished', scheduleFilteredEmpty: 'No tasks in this state', scheduleMore: 'Show {n} more', scheduleLimited: 'Showing up to 200 tasks, with upcoming tasks first',
+            scheduled_active: 'Waiting', scheduled_running: 'Running', scheduled_done: 'Completed', scheduled_cancelled: 'Cancelled', scheduled_failed: 'Failed', scheduleNext: 'Next run', scheduleLast: 'Last run', scheduleRuns: 'Ran {n} times', scheduleRule: 'Schedule', scheduleError: 'Latest issue', schedulePushOk: 'Delivered to this conversation', schedulePushFailed: 'Delivery failed', schedulePreviousFailed: 'Last run failed', scheduleReload: 'Reload',
+            stageStart: 'Start', stageActive: 'In progress', stageEnd: 'Done', cancelledEnd: 'Cancelled', details: 'Details',
+            status_open: 'Open', status_paused: 'Paused', status_done: 'Done', status_cancelled: 'Cancelled',
+            urgency_low: 'Low', urgency_normal: 'Normal', urgency_high: 'High', urgency_urgent: 'Urgent',
+            remindWho: 'Remind', everyone: 'Group members', currentWeChat: 'This WeChat contact', relatedPeople: 'People involved', frequency: 'Frequency', urgency: 'Urgency', nextRemind: 'Next reminder', nextNote: 'Ask about', reminded: 'Reminded {n}×', lastReminded: 'last {time}',
+            progress: 'Latest progress', noProgress: 'No update yet', closed: 'Closed', closedBy: '{time} · {who}', due: 'Due', creator: 'Raised by', detail: 'Task details', timeline: 'Follow-up log',
+            done: 'Done', pause: 'Pause', resume: 'Resume', reopen: 'Reopen', cancel: 'Cancel task', remindNow: 'Remind now', confirmRemind: 'Send a reminder in {ch} now?', confirmRemindTitle: 'Remind now',
+            confirmClose: 'Mark "{title}" as {action}?', actionFailed: 'Failed: {error}', updated: 'Updated', timezone: 'Times shown in {zone}',
+            event_created: 'Created', event_updated: 'Edited', event_progress: 'Progress', event_reminded: 'Reminder sent', event_remind_failed: 'Reminder failed', event_paused: 'Paused', event_resumed: 'Resumed',
+            event_done: 'Done', event_cancelled: 'Cancelled', event_reopened: 'Reopened', event_limit: 'Reminder limit reached', chip_created: 'Follow-up recorded', chip_exists: 'Task already exists', chip_updated: 'Follow-up updated', chip_progress: 'Progress recorded', chip_done: 'Follow-up completed', chip_cancelled: 'Follow-up cancelled',
+            readonly_weixin: 'Read only · WeChat {kind} "{name}". Message the assistant in WeChat to continue.',
+            prevTask: 'Previous task', nextTask: 'Next task', system: 'System',
+            push: 'Proactive push', push_ops: 'Ops push', push_test: 'Test push', push_followup: 'Follow-up reminder', push_schedule: 'Scheduled task',
+            viewMode: 'View history', viewInfo: '{ch} {kind} "{name}" · Switch to Bot to send a message.', botMode: 'Send as Bot', botRecipient: 'Send as Bot to {ch} {kind} "{name}"', botHint: 'Messages are sent directly by the connected Bot to this recipient. Enter to send; Shift + Enter for a new line.', botPlaceholder: 'Write a message to send as Bot…', send: 'Send', sending: 'Sending…', sent: 'Sent to "{name}"', sendFailed: 'Send failed: {error}', manualPush: 'Manual operation', roleLabel: 'Role'
+        }
+    };
+
+    // 会话列表按页加载：每页 THREAD_PAGE 条，滚到底部附近再加载下一页（serverCount 为已取到的条数，作翻页偏移）
+    const THREAD_PAGE = 50;
+    const state = {
+        source: 'mine',
+        serverCount: 0,
+        hasMore: false,
+        loadingMore: false,
+        listQuery: '',
+        sourceRevision:0,
+        openLatestSource:null,
+        channels: [], // 已对接的频道：[{ id, label, connected }]
+        channelSummary: null,
+        threads: [],
+        loaded: false,
+        failed: false,
+        allThreads: [],
+        listIdentity: '',
+        seq: 0,
+        active: null, // { kind, id, name }
+        items: [],
+        segments: [],
+        hasMore: false,
+        loadingMore: false,
+        tasks: [],
+        tacJobs: [],
+        schedules: [],
+        scheduleLoading: false,
+        scheduleError: false,
+        scheduleTruncated: false,
+        scheduleFilter: 'all',
+        scheduleLimit: 8,
+        scheduleSeq: 0,
+        panelShown: false,
+        calendar: null,
+        canManage: false,
+        canSend: false,
+        botMode: false,
+        sending: '',
+        drafts: new Map(),
+        sendNotice: '',
+        sendError: false,
+        identity: '',
+        focus: 0,
+        api: null,
+        refreshTimer: null,
+        liveTimer: null,
+        liveBusy: false,
+        listTimer: null,
+        openSeq: 0,
+        highlight: ''
+    };
+    const el = {};
+
+    function lang() {
+        return window.ToolsI18n?.getLanguage?.() === 'en-US' ? 'en-US' : 'zh-CN';
+    }
+
+    /** 当前频道：打开的会话所属频道优先，否则为当前侧栏分类。 */
+    function currentChannel() {
+        return state.active?.channel || (state.source !== 'mine' ? state.source : 'welink');
+    }
+
+    // 文案里的 {ch} 自动换成频道名；有「key_频道」的专属文案时优先使用
+    function tx(key, params = {}) {
+        const channel = currentChannel();
+        const table = TEXT[lang()];
+        const template = table[`${key}_${channel}`] ?? table[key] ?? TEXT['zh-CN'][key] ?? key;
+        const ch = table[channel] || channel;
+        // 中文频道名（微信）两侧不留西文间隔：「还没有微信对话」而不是「还没有 微信 对话」
+        const filled = /^[\u4e00-\u9fff]+$/.test(ch) ? template.replace(/ ?\{ch\} ?/g, '{ch}') : template;
+        params = { ch, ...params };
+        return Object.keys(params).reduce((text, name) => text.replaceAll(`{${name}}`, params[name]), filled);
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    }
+
+    function authHeaders() {
+        if (typeof window.getAuthHeaderForNav === 'function') return window.getAuthHeaderForNav();
+        const token = localStorage.getItem('tools_token') || sessionStorage.getItem('tools_token');
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    }
+
+    async function request(method, url, body) {
+        const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) });
+        let data = {};
+        try { data = await res.json(); } catch { data = {}; }
+        if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
+        return data;
+    }
+
+    function toast(text) {
+        if (window.DragonClawText?.toast) window.DragonClawText.toast(text);
+        else window.showToast?.(text);
+    }
+
+    async function confirmDialog(options) {
+        if (typeof window.showNavbarConfirm === 'function') return window.showNavbarConfirm(options);
+        return window.confirm(options.message);
+    }
+
+    function storeGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+    function storeSet(key, value) { try { localStorage.setItem(key, value); } catch { /* 隐私模式 */ } }
+
+    const threadKey = thread => thread ? `${thread.channel}|${thread.kind}|${thread.id}` : '';
+    const identity = () => ['tools_user', 'tools_tenant_id', 'tools_token'].map(key => storeGet(key) || '').join('|');
+
+    function notifyThread(ready = true) {
+        window.dispatchEvent(new CustomEvent('home:channel-thread', { detail: { thread: state.active ? { ...state.active } : null, ready } }));
+    }
+
+    function kindText(kind) {
+        return tx(kind === 'group' ? 'group' : 'person');
+    }
+
+    // 任务相关时间按工作日历的时区（默认开罗）显示，与提醒实际发送时间一致
+    function formatTime(value, withWeekday = false, timezone = state.calendar?.timezone) {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        const options = { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, ...(withWeekday ? { weekday: 'short' } : {}) };
+        try {
+            return date.toLocaleString(lang(), { ...options, timeZone: timezone || undefined });
+        } catch {
+            return date.toLocaleString(lang(), options);
+        }
+    }
+
+    function shortTime(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        const sameDay = new Date().toDateString() === date.toDateString();
+        return sameDay ? date.toLocaleTimeString(lang(), { hour: '2-digit', minute: '2-digit', hour12: false }) : date.toLocaleDateString(lang(), { month: 'short', day: 'numeric' });
+    }
+
+    const ICONS = {
+        group: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.2" cy="6.6" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M2 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10.4 9.6c1.7 0 3 1.1 3.4 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+        user: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3 13.4c.5-2.6 2.5-4 5-4s4.5 1.4 5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+    };
+
+    // ── 侧栏：我的对话 / WeLink 切换 ─────────────────────
+    function mountTabs() {
+        el.chatList = document.getElementById('homeChatList');
+        el.search = document.getElementById('homeChatSearch');
+        if (!el.chatList || el.tabs) return false;
+        el.tabs = document.createElement('div');
+        el.tabs.className = 'home-chat-tabs';
+        el.tabs.setAttribute('role', 'tablist');
+        el.tabs.hidden = true; // 没有对接任何频道时只有「我的对话」，不显示分类
+        el.chatList.before(el.tabs);
+        el.list = document.createElement('div');
+        el.list.className = 'home-chat-list wl-list';
+        el.list.id = 'homeWelinkList';
+        el.list.setAttribute('role', 'list');
+        el.list.hidden = true;
+        el.chatList.after(el.list);
+        el.tabs.addEventListener('click', event => {
+            const button = event.target.closest('[data-chat-source]');
+            if (button) { if(el.search)el.search.value='';setSource(button.dataset.chatSource,{openLatest:true}); }
+        });
+        el.list.addEventListener('click', event => {
+            if (event.target.closest('[data-wl-retry]')) return loadThreads();
+            const item = event.target.closest('[data-wl-thread]');
+            if (item) openThread(state.threads[Number(item.dataset.wlThread)]);
+        });
+        el.search?.addEventListener('input', () => {
+            if (state.source === 'mine') return;
+            if (state.source === 'agents') return window.HomeDesktopAgents?.search?.();
+            clearTimeout(state.listTimer);
+            state.listTimer = setTimeout(loadThreads, 220);
+        });
+        return true;
+    }
+
+    function sources() {
+        return ['mine', ...state.channels.map(item => item.id), ...(window.HomeDesktopAgents?.available?.() ? ['agents'] : [])];
+    }
+
+    function renderTabs() {
+        if (!el.tabs) return;
+        const list = sources();
+        if (el.tabs.dataset.sources !== list.join(',')) {
+            el.tabs.dataset.sources = list.join(',');
+            el.tabs.innerHTML = `${list.map(source => `<button type="button" role="tab" data-chat-source="${source}"></button>`).join('')}<i class="home-chat-tabs-ink" aria-hidden="true"></i>`;
+        }
+        el.tabs.hidden = list.length < 2;
+        el.tabs.style.setProperty('--tab-count', String(list.length));
+        el.tabs.style.setProperty('--tab-index', String(Math.max(0, list.indexOf(state.source))));
+        el.tabs.querySelectorAll('[data-chat-source]').forEach(button => {
+            const selected = button.dataset.chatSource === state.source;
+            button.textContent = button.dataset.chatSource === 'agents' ? (lang() === 'en-US' ? 'Agents' : '桌面 Agent') : TEXT[lang()][button.dataset.chatSource] || button.dataset.chatSource;
+            const channel=state.channels.find(item=>item.id===button.dataset.chatSource);
+            if(channel)button.insertAdjacentHTML('beforeend',window.HomeConversationList?.healthDot(channel.health||{level:channel.connected===true?'ok':channel.connected===false?'error':'warning',reason:channel.connected===true?'connected':channel.connected===false?'offline':'checking'})||'');
+            if(button.dataset.chatSource==='agents')button.title=lang()==='en-US'?'Desktop agents':'桌面 Agent';
+            button.setAttribute('aria-selected', String(selected));
+            button.classList.toggle('is-active', selected);
+        });
+        el.tabs.dataset.active = state.source;
+    }
+
+    function setSource(source, { remember = true, openLatest=false } = {}) {
+        const next = sources().includes(source) ? source : 'mine';
+        const changed = next !== state.source;
+        if(changed)window.HomeConversationList?.close();
+        state.source = next;
+        if (remember) storeSet(SOURCE_KEY, state.source);
+        if (changed) { state.seq++;state.sourceRevision++;state.openLatestSource=null;Object.assign(state, { threads: [], loaded: false, failed: false }); }
+        if(openLatest){state.sourceRevision++;state.openLatestSource=CHANNEL_IDS.includes(next)?next:null;}
+        renderTabs();
+        el.chatList.hidden = state.source !== 'mine';
+        el.list.hidden = state.source === 'mine' || state.source === 'agents';
+        window.HomeDesktopAgents?.show?.(state.source === 'agents');
+        if(openLatest&&next==='mine'){
+            const revision=state.sourceRevision;
+            window.DragonClaw?.openLatest?.({isCurrent:()=>state.source==='mine'&&state.sourceRevision===revision});
+        }
+        if (CHANNEL_IDS.includes(state.source)) loadThreads();
+    }
+
+    /** 读取已对接的频道，刷新分类；当前分类的频道被停用时回到「我的对话」。 */
+    async function loadChannels() {
+        try {
+            const data = await request('GET', `${API_BASE}/available`);
+            state.channels = (Array.isArray(data.items) ? data.items : []).filter(item => CHANNEL_IDS.includes(item.id));
+            state.channelSummary = data.summary || null;
+            window.dispatchEvent(new CustomEvent('tools:channels-updated', { detail: { items: state.channels, summary: data.summary } }));
+        } catch {
+            state.channels=state.channels.map(item=>({...item,health:{level:'error',reason:'offline'}}));
+            renderTabs();
+            window.dispatchEvent(new CustomEvent('tools:channels-updated', { detail: { items: state.channels, summary: state.channelSummary || null } }));
+            return; // 读取失败保持现状
+        }
+        const isV2 = document.documentElement.dataset.ui === 'v2';
+        const hashChannel = ['#channels', '#welink', '#weixin'].includes(location.hash);
+        const stored = storeGet(SOURCE_KEY);
+        if (isV2) {
+            if (hashChannel && sources().includes('welink')) setSource('welink');
+            else if (location.hash === '#weixin' && sources().includes('weixin')) setSource('weixin');
+            else setSource('mine', { remember: false });
+        } else {
+            if (state.source === 'mine' && stored && stored !== 'mine' && sources().includes(stored)) setSource(stored);
+            else if (!sources().includes(state.source)) setSource('mine', { remember: false });
+            else renderTabs();
+        }
+        loadAllChannelThreads();
+    }
+
+    async function loadAllChannelThreads() {
+        const results = [];
+        for (const ch of CHANNEL_IDS) {
+            try {
+                if (state.channels.length && !state.channels.some(item => item.id === ch)) continue;
+            const data = await request('GET', `${API_BASE}/${ch}/threads?limit=100`);
+                if (data && Array.isArray(data.items)) {
+                    data.items.forEach(item => { item.channel = ch; });
+                    results.push(...data.items);
+                }
+            } catch {}
+        }
+        state.allChannelThreads = results;
+        // 15 秒轮询时列表没变（含「正在回复」状态）就不重绘侧栏，避免打断悬停和菜单
+        const signature = JSON.stringify(results.map(item => [item.channel, item.kind, item.id, item.name, item.lastActiveAt, item.updatedAt, Boolean(item.busy)]));
+        if (signature === state.allChannelSignature) return results;
+        state.allChannelSignature = signature;
+        window.dispatchEvent(new CustomEvent('home:channel-threads-updated', { detail: { threads: results } }));
+        return results;
+    }
+
+    async function loadThreads() {
+        const seq = ++state.seq;
+        const source=state.source,account=identity();
+        if (!state.loaded) renderThreads();
+        try {
+            const query = el.search?.value.trim() || '';
+            const cacheKey=identity()+':'+state.source;
+            // 刷新时取回已经加载过的条数，列表不会一刷新就缩回第一页
+            const same=state.listIdentity===cacheKey&&query===state.listQuery;
+            const limit=Math.min(500,Math.max(THREAD_PAGE,same?state.serverCount:0));
+            const data = await request('GET', `${API_BASE}/${state.source}/threads?limit=${limit}&q=${encodeURIComponent(query)}`);
+            if (seq !== state.seq||source!==state.source||account!==identity()) return;
+            if(state.listIdentity!==cacheKey){state.allThreads=[];state.listIdentity=cacheKey;}
+            const fetched=Array.isArray(data.items)?data.items:[];
+            state.serverCount=fetched.length;
+            state.hasMore=Boolean(data.hasMore);
+            state.listQuery=query;
+            if(!query)state.allThreads=fetched;
+            const aliases=query?state.allThreads.filter(t=>window.HomeConversationList?.get(state.source,t.kind+':'+t.id).title?.toLowerCase().includes(query.toLowerCase())):[];
+            state.threads=[...fetched,...aliases.filter(t=>!fetched.some(f=>f.kind===t.kind&&f.id===t.id))];
+            state.failed = false;
+        } catch {
+            if (seq !== state.seq) return;
+            state.failed = !state.threads.length;
+        }
+        state.loaded = true;
+        renderThreads();
+        if(state.openLatestSource===state.source&&!state.failed){
+            state.openLatestSource=null;
+            const config={source:state.source,id:t=>t.kind+':'+t.id,date:t=>t.lastActiveAt};
+            const stamp=val=>window.HomeConversationList?.stamp?.(val)||(Date.parse(/Z$|[+-]\d{2}:?\d{2}$/.test(String(val||''))?String(val||''):`${String(val||'').replace(' ','T')}Z`)||0);
+            const latest=window.HomeConversationList?.latest(state.threads,config)||state.threads.filter(t=>!window.HomeConversationList?.get(state.source,t.kind+':'+t.id).hidden&&!window.HomeConversationList?.get(state.source,t.kind+':'+t.id).archived).sort((a,b)=>stamp(b.lastActiveAt)-stamp(a.lastActiveAt))[0];
+            if(latest)openThread(latest);
+        }
+    }
+
+    function renderThreads() {
+        if (!el.list) return;
+        const config={source:state.source,items:state.threads,id:t=>t.kind+':'+t.id,title:t=>t.name,date:t=>t.lastActiveAt,selector:'[data-wl-thread]',index:'wlThread'};
+        if (!state.loaded) {
+            el.list.innerHTML = '<div class="home-chat-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>';
+            return;
+        }
+        if (state.failed) {
+            el.list.innerHTML = `<div class="home-chat-empty">${escapeHtml(tx('loadFailed'))}<button type="button" class="home-chat-retry" data-wl-retry>${escapeHtml(tx('retry'))}</button></div>`;
+            return;
+        }
+        if (!state.threads.length) {
+            el.list.innerHTML = `<div class="home-chat-empty">${escapeHtml(tx(el.search?.value.trim() ? 'noMatch' : 'empty'))}</div>`;
+            window.HomeConversationList?.enhance(el.list,config);
+            return;
+        }
+        const sections=window.HomeConversationList?.sections(state.threads,config)||[{label:'',entries:state.threads.map((item,index)=>({item,index,title:item.name}))}];
+        el.list.innerHTML = sections.map(section=>(section.label?`<div class="home-chat-group">${escapeHtml(section.label)}</div>`:'')+section.entries.map(({item:thread,index,title}) => {
+            const active = state.active && state.active.channel === state.source && state.active.kind === thread.kind && state.active.id === thread.id;
+            const open = thread.tasks?.open || 0;
+            const finished = (thread.tasks?.done || 0) + (thread.tasks?.cancelled || 0);
+            const badge = open
+                ? `<span class="wl-badge is-open" title="${escapeHtml(tx('openTasks', { n: open }))}"><i></i>${open}</span>`
+                : finished ? `<span class="wl-badge is-done" title="${escapeHtml(tx('allDone'))}">✓</span>` : '';
+            const subtitle = thread.lastMessage || `${kindText(thread.kind)} · ${tx('messages', { n: thread.messageCount })}`;
+            return `<button type="button" class="home-chat-item wl-item${active ? ' is-active' : ''}" role="listitem" data-wl-thread="${index}" title="${escapeHtml(title)}"${active ? ' aria-current="true"' : ''}>
+                <span class="wl-avatar wl-avatar--${thread.kind}">${ICONS[thread.kind] || ICONS.user}</span>
+                <span class="wl-item-text"><span class="home-chat-title">${escapeHtml(title)}</span><span class="wl-item-sub">${escapeHtml(subtitle)}</span></span>
+                <span class="wl-item-side"><span class="home-chat-meta">${escapeHtml(shortTime(thread.lastActiveAt))}</span>${badge}</span>
+            </button>`;
+        }).join('')).join('') || `<div class="home-chat-empty">${escapeHtml(tx('noMatch'))}</div>`;
+        window.HomeConversationList?.enhance(el.list,config);
+        window.HomeConversationList?.pager(el.list,{hasMore:state.hasMore,loading:state.loadingMore,onMore:loadMoreThreads});
+    }
+
+    // 滚到列表底部附近：按偏移量取下一页，接在后面
+    async function loadMoreThreads() {
+        if (state.loadingMore || !state.hasMore) return;
+        const seq = state.seq, source = state.source, query = state.listQuery;
+        state.loadingMore = true;
+        renderThreads();
+        try {
+            const data = await request('GET', `${API_BASE}/${source}/threads?limit=${THREAD_PAGE}&offset=${state.serverCount}&q=${encodeURIComponent(query)}`);
+            if (seq !== state.seq || source !== state.source || query !== state.listQuery) return;
+            const page = Array.isArray(data.items) ? data.items : [];
+            const seen = new Set(state.threads.map(thread => `${thread.kind}:${thread.id}`));
+            state.threads.push(...page.filter(thread => !seen.has(`${thread.kind}:${thread.id}`)));
+            state.serverCount += page.length;
+            state.hasMore = Boolean(data.hasMore);
+            if (!query) state.allThreads = state.threads.slice();
+        } catch {
+            // 加载失败：保留「加载更多」，滚动或点击可以再试
+        } finally {
+            state.loadingMore = false;
+            renderThreads();
+        }
+    }
+
+    // ── 打开会话：真实频道时间线与手动运营 ────────────────
+    async function openThread(thread) {
+        if (!thread) return false;
+        state.openLatestSource=null;
+        const channel = CHANNEL_IDS.includes(thread.channel) ? thread.channel : (state.source !== 'mine' ? state.source : 'welink');
+        const api = window.DragonClaw?.enterExternal?.({ onExit: ({ switching } = {}) => leaveThread(switching) });
+        if (!api) return false;
+        window.HomeAgentDiscussion?.bindExternal?.(channel);
+        const seq = ++state.openSeq;
+        state.api = api;
+        state.active = { channel, kind: thread.kind, id: thread.id, name: thread.name };
+        if (state.identity && state.identity !== identity()) state.drafts.clear();
+        state.identity = identity();
+        state.canSend = false;
+        state.botMode = false;
+        state.sendNotice = '';
+        state.sendError = false;
+        window.HomeMode?.set?.('chat', { updateHash: false });
+        if (sources().includes(channel)) setSource(channel);
+        state.items = [];
+        state.segments = [];
+        state.tasks = [];
+        state.tacJobs = [];
+        state.schedules = [];
+        state.scheduleError = false;
+        state.scheduleTruncated = false;
+        state.scheduleFilter = 'all';
+        state.scheduleLimit = 8;
+        state.panelShown = false;
+        state.focus = 0;
+        state.highlight = '';
+        renderThreads();
+        mountChrome();
+        api.beginLoading();
+        notifyThread(false);
+        renderStage();
+        // 跟进卡片独立加载，不让较慢的侧栏请求挡住对话正文。
+        loadTasks(seq);
+        try {
+            const page = await request('GET', `${API_BASE}/${state.active.channel}/threads/${thread.kind}/${encodeURIComponent(thread.id)}/messages?limit=${PAGE_SIZE}`);
+            if (seq !== state.openSeq) return;
+            state.active.name = page.thread?.name || thread.name;
+            state.items = page.items || [];
+            state.segments = page.segments || [];
+            state.hasMore = Boolean(page.hasMore);
+            state.canSend = page.canSend === true;
+            renderReadonly();
+            renderTimeline({ scroll: 'bottom' });
+            api.finishLoading();
+            notifyThread();
+        } catch (error) {
+            if (seq !== state.openSeq) return;
+            api.finishLoading(false);
+            api.thread.innerHTML = `<div class="wl-thread-loading is-error">${escapeHtml(tx('loadFailed'))}：${escapeHtml(error.message)}</div>`;
+            notifyThread();
+        }
+        clearInterval(state.refreshTimer);
+        state.refreshTimer = setInterval(() => {
+            if (document.visibilityState === 'visible' && state.active) loadTasks(state.openSeq);
+        }, REFRESH_MS);
+        clearInterval(state.liveTimer);
+        state.liveTimer = setInterval(pollNewMessages, LIVE_MS);
+        return true;
+    }
+
+    // A channel needs an explicit recipient; choosing a connector never opens the latest thread.
+    let draftPicker = null;
+    async function composeNew(channel, text) {
+        if (!CHANNEL_IDS.includes(channel) || draftPicker) return;
+        const account = identity();
+        const dialog = document.createElement('dialog');
+        draftPicker = dialog;dialog.className = 'dc-channel-recipient';
+        dialog.innerHTML = `<header><strong>${escapeHtml(lang() === 'en-US' ? 'Choose a recipient' : '选择接收方')}</strong><button type="button" data-recipient-close aria-label="${escapeHtml(lang() === 'en-US' ? 'Cancel' : '取消')}">×</button></header><p>${escapeHtml(lang() === 'en-US' ? 'Your message will be sent only to the recipient you choose.' : '选择接收方后发送这条消息。')}</p><input type="search" data-recipient-search placeholder="${escapeHtml(lang() === 'en-US' ? 'Search contacts or groups' : '搜索联系人或群聊')}" aria-label="${escapeHtml(lang() === 'en-US' ? 'Search recipients' : '搜索接收方')}"><div data-recipient-list role="list"><p role="status">${escapeHtml(tx('loading'))}</p></div>`;
+        const close = () => { dialog.close();dialog.remove();if (draftPicker === dialog) draftPicker = null; };
+        dialog.querySelector('[data-recipient-close]').onclick = close;
+        dialog.addEventListener('cancel', event => { event.preventDefault();close(); });
+        document.body.append(dialog);dialog.showModal();
+        try {
+            const data = await request('GET', `${API_BASE}/${channel}/targets?pushable=1&limit=500`);
+            if (draftPicker !== dialog || account !== identity()) { close();return; }
+            const targets = (data.items || []).filter(item => item.canPush !== false && !(channel === 'weixin' && item.kind === 'group'));
+            const list = dialog.querySelector('[data-recipient-list]');
+            const render = () => {
+                const query = dialog.querySelector('[data-recipient-search]').value.trim().toLowerCase();
+                const rows = targets.map((item,index) => ({item,index})).filter(({item}) => (item.name || item.id).toLowerCase().includes(query));
+                list.innerHTML = rows.length ? rows.map(({item,index}) => `<button type="button" data-recipient="${index}">${escapeHtml((lang() === 'en-US' ? 'Send to ' : '发送给 ') + (item.name || item.id))}</button>`).join('') : `<p role="status">${escapeHtml(lang() === 'en-US' ? 'No available recipients. Check channel permissions and contacts.' : '暂无可发送的接收方，请检查渠道权限和联系人。')}</p>`;
+            };
+            render();dialog.querySelector('[data-recipient-search]').addEventListener('input', render);
+            list.addEventListener('click', async event => {
+                const button = event.target.closest('[data-recipient]');if (!button || button.disabled) return;
+                if (account !== identity() || window.HomeAgentDiscussion?.getSelectedConnector?.() !== channel || window.HomeAgentDiscussion?.isLocked?.()) { close();return; }
+                const target = targets[Number(button.dataset.recipient)];
+                list.querySelectorAll('button').forEach(item => item.disabled = true);
+                close();
+                await openThread({...target,channel});
+                if (account !== identity() || state.active?.id !== target.id || state.active?.channel !== channel) return;
+                state.drafts.set(threadKey(state.active), text);
+                state.botMode = state.canSend;renderReadonly();
+                if (state.canSend) await sendManual();
+            });
+        } catch (error) {
+            if (draftPicker === dialog) dialog.querySelector('[data-recipient-list]').textContent = error.message;
+        }
+    }
+
+    /** 频道里有新对话时追加到打开的时间线：停在底部则跟随到最新，往上翻看时保持位置。 */
+    async function pollNewMessages() {
+        if (!state.active || !state.api || state.liveBusy || state.loadingMore || document.visibilityState !== 'visible') return;
+        if (state.api.thread.hasAttribute('aria-busy')) return; // 首屏还在加载
+        const seq = state.openSeq;
+        state.liveBusy = true;
+        try {
+            const page = await request('GET', `${API_BASE}/${state.active.channel}/threads/${state.active.kind}/${encodeURIComponent(state.active.id)}/messages?limit=${PAGE_SIZE}`);
+            if (seq !== state.openSeq) return;
+            if (state.canSend !== (page.canSend === true)) {
+                state.canSend = page.canSend === true;
+                if (!state.canSend) state.botMode = false;
+                renderReadonly();
+            }
+            const known = new Set(state.items.map(item => item.id));
+            const fresh = (page.items || []).filter(item => !known.has(item.id));
+            const updates = new Map((page.items || []).map(item => [item.id,item]));
+            const changed = state.items.some(item => updates.has(item.id) && JSON.stringify(item) !== JSON.stringify(updates.get(item.id)));
+            if (!fresh.length && !changed) return;
+            const thread = state.api.thread;
+            const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+            if (!state.items.length) state.hasMore = Boolean(page.hasMore);
+            state.items = [...state.items.map(item => updates.get(item.id) || item), ...fresh];
+            state.segments = page.segments || state.segments;
+            renderTimeline({ scroll: atBottom ? 'bottom' : 'stay' });
+            if (state.source === state.active.channel) loadThreads(); // 侧栏的最后一条消息与时间一起更新
+        } catch {
+            /* 轮询失败等下一轮 */
+        } finally {
+            state.liveBusy = false;
+        }
+    }
+
+    function leaveThread(switching) {
+        clearInterval(state.refreshTimer);
+        state.refreshTimer = null;
+        clearInterval(state.liveTimer);
+        state.liveTimer = null;
+        state.openSeq += 1;
+        state.canSend = false;
+        state.botMode = false;
+        notifyThread(false);
+        if (switching) return; // 切换到另一个 WeLink 会话：保留界面骨架
+        state.active = null;
+        state.api = null;
+        notifyThread(false);
+        el.stage?.remove();
+        el.stage = null;
+        el.anchor?.dispose();
+        el.anchor = null;
+        el.readonly?.remove();
+        el.readonly = null;
+        window.DragonClawWorkspace?.hideExternal?.();
+        renderThreads();
+    }
+
+    // 底部面板高度变化（切换身份、拖动输入框、发送提示）会挤压时间线：保持时间线离底部的距离不变，最新消息不被遮挡
+    function anchorThreadBottom(thread, panel) {
+        const gapOf = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+        const anchor = { gap: gapOf(), smooth: false, moving: false };
+        const onScroll = () => { if (!anchor.moving) anchor.gap = gapOf(); };
+        let lastHeight = 0;
+        let timer = 0;
+        const observer = new ResizeObserver(() => {
+            const height = panel.offsetHeight;
+            if (!height || height === lastHeight) { lastHeight = height; return; }
+            lastHeight = height;
+            const top = Math.max(0, thread.scrollHeight - thread.clientHeight - anchor.gap);
+            const smooth = anchor.smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+            anchor.smooth = false;
+            anchor.moving = smooth && Math.abs(top - thread.scrollTop) > 1;
+            // 平滑滚动期间不记录中间位置，结束后以最终位置为准（不依赖 scrollend，兼容旧版 Safari）
+            clearTimeout(timer);
+            if (anchor.moving) timer = setTimeout(() => { anchor.moving = false; anchor.gap = gapOf(); }, 500);
+            thread.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+        });
+        thread.addEventListener('scroll', onScroll, { passive: true });
+        observer.observe(panel);
+        anchor.dispose = () => { clearTimeout(timer); observer.disconnect(); thread.removeEventListener('scroll', onScroll); };
+        return anchor;
+    }
+
+    function mountChrome() {
+        const thread = document.getElementById('dcThread');
+        if (!el.stage) {
+            el.stage = document.createElement('div');
+            el.stage.className = 'wl-stage';
+            el.stage.addEventListener('click', onStageClick);
+            thread.before(el.stage);
+        }
+        if (!el.readonly) {
+            el.readonly = document.createElement('div');
+            el.readonly.className = 'wl-readonly';
+            el.readonly.addEventListener('click', event => {
+                if (event.target.closest('[data-wl-back]')) window.DragonClaw?.newChat?.();
+                const role = event.target.closest('[data-wl-role]')?.dataset.wlRole;
+                if (role && state.canSend && state.botMode !== (role === 'bot')) { el.anchor.smooth = true; state.botMode = role === 'bot'; renderReadonly(); }
+            });
+            el.anchor = anchorThreadBottom(thread, el.readonly);
+            el.readonly.addEventListener('input', event => {
+                if (!event.target.matches('[data-wl-compose]')) return;
+                state.drafts.set(threadKey(state.active), event.target.value);
+                el.readonly.querySelector('[data-wl-send]').disabled = Boolean(state.sending) || !event.target.value.trim();
+            });
+            el.readonly.addEventListener('submit', event => { event.preventDefault(); sendManual(); });
+            el.readonly.addEventListener('keydown', event => {
+                if (event.target.matches('[data-wl-compose]') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendManual(); }
+            });
+            document.getElementById('dcComposer')?.after(el.readonly);
+        }
+        renderReadonly();
+    }
+
+    function renderReadonly() {
+        if (!el.readonly || !state.active) return;
+        const key = threadKey(state.active);
+        const text = state.drafts.get(key) || '';
+        const sending = Boolean(state.sending);
+        el.readonly.classList.toggle('is-bot-mode', state.botMode);
+        el.readonly.innerHTML = `<div class="wl-conversation-controls">${state.canSend ? `<div class="wl-role-switch" role="group" aria-label="${escapeHtml(tx('roleLabel'))}"><button type="button" data-wl-role="view" aria-pressed="${!state.botMode}">${escapeHtml(tx('viewMode'))}</button><button type="button" data-wl-role="bot" aria-pressed="${state.botMode}">${escapeHtml(tx('botMode'))}</button></div>` : `<span class="wl-readonly-icon" aria-hidden="true">🔒</span>`}<span class="wl-readonly-text">${escapeHtml(tx(state.botMode ? 'botRecipient' : state.canSend ? 'viewInfo' : 'readonly', { kind: kindText(state.active.kind), name: state.active.name }))}</span><button type="button" class="dc-ghost-btn" data-wl-back>${escapeHtml(tx('back'))}</button></div>
+            ${state.botMode ? `<form class="wl-manual-form"><textarea data-wl-compose rows="3" aria-label="${escapeHtml(tx('botPlaceholder'))}" placeholder="${escapeHtml(tx('botPlaceholder'))}" ${state.sending === key ? 'disabled' : ''}>${escapeHtml(text)}</textarea><div class="wl-manual-actions"><small>${escapeHtml(tx('botHint'))}</small><button type="submit" data-wl-send ${sending || !text.trim() ? 'disabled' : ''}>${escapeHtml(tx(sending ? 'sending' : 'send'))}</button></div></form>` : ''}
+            ${state.sendNotice ? `<div class="wl-send-feedback ${state.sendError ? 'is-error' : ''}" role="status">${escapeHtml(state.sendNotice)}</div>` : ''}`;
+    }
+
+    async function sendManual() {
+        if (!state.active || !state.botMode || !state.canSend || state.sending) return;
+        if (identity() !== state.identity) { state.drafts.clear(); window.DragonClaw?.newChat?.(); return; }
+        const target = { ...state.active };
+        const key = threadKey(target);
+        const text = (state.drafts.get(key) || '').trim();
+        if (!text) return;
+        const seq = state.openSeq;
+        state.sending = key;
+        state.sendNotice = '';
+        renderReadonly();
+        try {
+            const result = await request('POST', `${API_BASE}/${target.channel}/push`, { text, targets: [{ kind: target.kind, id: target.id }], source: 'manual-bot' });
+            const delivery = result.results?.find(item => item.kind === target.kind && item.id === target.id);
+            if (!delivery?.ok) throw new Error(delivery?.error || result.error || tx('loadFailed'));
+            if ((state.drafts.get(key) || '').trim() === text) state.drafts.delete(key);
+            if (seq !== state.openSeq || identity() !== state.identity) return;
+            state.sendNotice = tx('sent', { name: target.name });
+            state.sendError = false;
+            await pollNewMessages();
+            loadThreads();
+        } catch (error) {
+            if (seq !== state.openSeq || identity() !== state.identity) return;
+            state.sendNotice = tx('sendFailed', { error: error.message });
+            state.sendError = true;
+        } finally {
+            state.sending = '';
+            renderReadonly();
+        }
+    }
+
+    function segmentIndex(sessionId) {
+        return state.segments.findIndex(item => item.aiSessionId === sessionId);
+    }
+
+    function dividerHtml(segment, index) {
+        const time = formatTime(segment?.startedAt);
+        if (index <= 0) return `<div class="wl-divider is-start"><span>${escapeHtml(tx('start'))}${time ? ` · ${escapeHtml(time)}` : ''}</span></div>`;
+        return `<div class="wl-divider is-context" title="${escapeHtml(tx('newContextHint'))}"><span><b>✦</b> ${escapeHtml(tx('newContext'))}${time ? ` · ${escapeHtml(time)}` : ''}</span></div>`;
+    }
+
+    function renderTimeline({ scroll } = {}) {
+        const api = state.api;
+        if (!api) return;
+        const thread = api.thread;
+        const previousHeight = thread.scrollHeight;
+        const previousTop = thread.scrollTop;
+        const addons = [...thread.querySelectorAll(':scope > [data-channel-thread-addon]')];
+        const focused = addons.some(node => node.contains(document.activeElement)) ? document.activeElement : null;
+        const selection = focused?.tagName === 'TEXTAREA' ? [focused.selectionStart, focused.selectionEnd] : null;
+        addons.forEach(node => node.remove());
+        thread.innerHTML = `<div class="wl-banner"><span class="wl-avatar wl-avatar--${state.active.kind}">${ICONS[state.active.kind] || ICONS.user}</span><span><b>${escapeHtml(tx('banner', { kind: kindText(state.active.kind), name: state.active.name }))}</b><small>${escapeHtml(tx('segments', { n: state.segments.length }))} · ${escapeHtml(tx('messages', { n: state.items.length }))}${state.hasMore ? '+' : ''}</small></span></div>`;
+        if (state.hasMore) thread.insertAdjacentHTML('beforeend', `<button type="button" class="dc-history-more" data-wl-more>${escapeHtml(tx(state.loadingMore ? 'loading' : 'loadMore'))}</button>`);
+        if (!state.items.length) thread.insertAdjacentHTML('beforeend', `<div class="wl-thread-loading">${escapeHtml(tx('noMessages'))}</div>`);
+        let currentSession = null;
+        api.batchMessages(() => state.items.forEach((item, position) => {
+            if (item.sessionId !== currentSession) {
+                const index = segmentIndex(item.sessionId);
+                // 更早的消息还没加载完时，首条消息可能在段落中间，分隔线等加载到段首再显示
+                if (!(position === 0 && state.hasMore)) {
+                    const divider = document.createElement('div');
+                    divider.innerHTML = dividerHtml(state.segments[index], position === 0 ? 0 : index);
+                    // 分隔线随消息一起进入同一个片段，保留时间线顺序。
+                    api.appendToBatch(divider.firstElementChild);
+                }
+                currentSession = item.sessionId;
+            }
+            renderMessage(item);
+        }));
+        addons.forEach(node => thread.append(node));
+        notifyThread(!thread.hasAttribute('aria-busy'));
+        if (focused?.isConnected) { focused.focus({ preventScroll: true }); if (selection) focused.setSelectionRange(...selection); }
+        thread.querySelector('[data-wl-more]')?.addEventListener('click', loadOlder);
+        if (scroll === 'bottom') thread.scrollTop = thread.scrollHeight;
+        else if (scroll === 'keep') thread.scrollTop = thread.scrollHeight - previousHeight + previousTop;
+        else if (scroll === 'stay') thread.scrollTop = previousTop;
+    }
+
+    function renderMessage(item) {
+        const api = state.api;
+        const message = api.addMessage(item.role === 'model' ? 'ai' : 'user', item.role === 'model' ? '' : item.content, {});
+        message.classList.add('dc-msg--history', 'wl-msg');
+        const main = message.querySelector('.dc-msg-main');
+        if (item.role === 'model') {
+            message.querySelector('.dc-msg-body').innerHTML = api.renderMarkdown(item.content);
+            if (item.followups?.length) {
+                const chips = document.createElement('div');
+                chips.className = 'wl-chips';
+                chips.innerHTML = item.followups.map(chip => `<button type="button" class="wl-chip is-${escapeHtml(chip.action)}" data-wl-task="${escapeHtml(chip.id)}"><span aria-hidden="true">📌</span>${escapeHtml(tx(`chip_${chip.action}`))}：${escapeHtml(chip.title || '')}</button>`).join('');
+                chips.addEventListener('click', event => {
+                    const button = event.target.closest('[data-wl-task]');
+                    if (button) focusTask(button.dataset.wlTask, { openPanel: true });
+                });
+                main.appendChild(chips);
+            }
+            api.addCopy(message, item.content, { modelName: item.modelName || '', usage: item.usage || null, rounds: item.rounds || [] });
+        }
+        const meta = document.createElement('div');
+        meta.className = 'wl-msg-meta';
+        meta.textContent = [item.role === 'user' && state.active.kind === 'group' ? item.sender : '', pushLabel(item.push), api.formatTime(item.createdAt)].filter(Boolean).join(' · ');
+        main.prepend(meta);
+    }
+
+    /** 主动推送的来源标签：运营计划 / 测试推送 / 跟进提醒 / 其他主动推送。 */
+    function pushLabel(push) {
+        if (!push) return '';
+        const source = String(push.source || '');
+        if (source.startsWith('manual-bot:')) return `✎ ${tx('manualPush')} · ${source.slice('manual-bot:'.length)}`;
+        const ops = /^(ops|ops-test):([^@]+)/.exec(source);
+        if (source.startsWith('followup:')) return `📣 ${tx('push_followup')}`;
+        if (source.startsWith('dragon-claw-schedule:')) return `⏰ ${tx('push_schedule')}`;
+        if (source.startsWith('dragon-tac:')) return '⚡ DragonTAC';
+        if (ops) return `📣 ${tx(ops[1] === 'ops-test' ? 'push_test' : 'push_ops')}「${ops[2].trim()}」`;
+        return `📣 ${tx('push')}`;
+    }
+
+    async function loadOlder() {
+        if (state.loadingMore || !state.hasMore || !state.items.length) return;
+        state.loadingMore = true;
+        const seq = state.openSeq;
+        renderTimeline({ scroll: 'keep' });
+        try {
+            const page = await request('GET', `${API_BASE}/${state.active.channel}/threads/${state.active.kind}/${encodeURIComponent(state.active.id)}/messages?limit=${PAGE_SIZE}&before=${encodeURIComponent(state.items[0].id)}`);
+            if (seq !== state.openSeq) return;
+            state.items = [...(page.items || []), ...state.items];
+            state.hasMore = Boolean(page.hasMore);
+        } catch (error) {
+            toast(tx('actionFailed', { error: error.message }));
+        } finally {
+            state.loadingMore = false;
+        }
+        if (seq === state.openSeq) renderTimeline({ scroll: 'keep' });
+    }
+
+    // ── 跟进任务：进度条 + 右侧卡片 ─────────────────────
+    async function loadTasks(seq) {
+        loadSchedules(seq);
+        loadTac(seq);
+        try {
+            const data = await request('GET', `${API_BASE}/${state.active.channel}/threads/${state.active.kind}/${encodeURIComponent(state.active.id)}/followups`);
+            if (seq !== state.openSeq) return;
+            const focusedId = state.tasks[state.focus]?.id;
+            state.tasks = Array.isArray(data.items) ? data.items : [];
+            state.calendar = data.calendar || null;
+            state.canManage = Boolean(data.canManage);
+            const kept = state.tasks.findIndex(task => task.id === focusedId);
+            state.focus = kept >= 0 ? kept : 0;
+            renderStage();
+            renderPanel();
+            refreshThreadBadge();
+        } catch {
+            /* 任务读取失败不影响查看对话 */
+        }
+    }
+
+    async function loadTac(seq) {
+        if (!state.active) return;
+        const { channel, kind, id } = state.active;
+        try {
+            const data = await request('GET', `${API_BASE}/${channel}/threads/${kind}/${encodeURIComponent(id)}/tac`);
+            if (seq !== state.openSeq) return;
+            state.tacJobs = Array.isArray(data.items) ? data.items : [];
+            renderPanel();
+        } catch { /* 较旧服务端不影响会话和已有任务。 */ }
+    }
+
+    function renderTac() {
+        if (!state.tacJobs.length) return '';
+        return `<section class="wl-tac"><header class="wl-section-head"><b>⚡ DragonTAC</b><span>${state.tacJobs.length}</span></header>${state.tacJobs.map(job => `<details class="wl-task" data-tac-job="${escapeHtml(job.id)}"><summary><span class="wl-task-title">${escapeHtml(job.instruction)}</span><span class="wl-status">${escapeHtml(tx(`tac_${job.status}`))}</span></summary><p class="wl-note">${escapeHtml(job.id)} · ${escapeHtml(job.url)}</p>${job.status === 'awaiting_approval' ? `<p class="wl-note">${escapeHtml(tx('tacHint'))}</p>` : ''}${job.result || job.error ? `<pre class="wl-tac-result">${escapeHtml(job.result || job.error)}</pre>` : ''}${job.deliveryError ? `<p class="wl-note">${escapeHtml(tx('tacDelivery'))}：${escapeHtml(job.deliveryError)}</p>` : ''}<details class="wl-sub"><summary>${escapeHtml(tx('tacReports'))}</summary>${(job.reports || []).map(report => `<p>${escapeHtml(report.agent)} · ${escapeHtml(report.status)}</p><pre class="wl-tac-result">${escapeHtml(report.text || report.error || '')}</pre>`).join('')}</details></details>`).join('')}</section>`;
+    }
+
+    async function loadSchedules(seq) {
+        if (!state.active) return;
+        const requestSeq = ++state.scheduleSeq;
+        state.scheduleLoading = true;
+        renderPanel();
+        const { channel, kind, id } = state.active;
+        try {
+            const data = await request('GET', `${API_BASE}/${channel}/threads/${kind}/${encodeURIComponent(id)}/schedules`);
+            if (seq !== state.openSeq || requestSeq !== state.scheduleSeq) return;
+            state.schedules = Array.isArray(data.items) ? data.items : [];
+            state.scheduleTruncated = Boolean(data.truncated);
+            state.scheduleError = false;
+        } catch {
+            if (seq !== state.openSeq || requestSeq !== state.scheduleSeq) return;
+            state.scheduleError = true;
+        } finally {
+            if (seq === state.openSeq && requestSeq === state.scheduleSeq) {
+                state.scheduleLoading = false;
+                renderPanel();
+            }
+        }
+    }
+
+    function scheduleBucket(task) {
+        if (task.status === 'cancelled') return 'history';
+        if (task.status === 'failed' || task.lastStatus === 'failed' || task.lastPush?.ok === false) return 'attention';
+        return ['active', 'running'].includes(task.status) ? 'upcoming' : 'history';
+    }
+
+    function scheduleCard(task) {
+        const status = ['active', 'running', 'done', 'cancelled', 'failed'].includes(task.status) ? task.status : 'active';
+        const next = task.nextRunAt && ['active', 'running'].includes(status);
+        const error = task.lastError || (task.lastPush?.ok === false ? task.lastPush.error || tx('schedulePushFailed') : '');
+        const row = (label, value) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`;
+        const time = value => formatTime(value, false, task.timezone);
+        const issue = task.lastPush?.ok === false ? tx('schedulePushFailed') : task.lastStatus === 'failed' && status !== 'failed' ? tx('schedulePreviousFailed') : '';
+        return `<details class="wl-scheduled is-${status}${scheduleBucket(task) === 'attention' ? ' needs-attention' : ''}" data-wl-schedule="${escapeHtml(task.id)}">
+            <summary><span class="wl-scheduled-copy"><b>${escapeHtml(task.instruction)}</b><small>${escapeHtml(next ? tx('scheduleNext') : tx('scheduleLast'))} · ${escapeHtml(time(next ? task.nextRunAt : task.lastRunAt) || '—')}</small>${issue ? `<small class="wl-scheduled-issue">${escapeHtml(issue)}</small>` : ''}</span><span class="wl-scheduled-status is-${status}">${escapeHtml(tx(`scheduled_${status}`))}</span></summary>
+            <div class="wl-scheduled-detail"><dl class="wl-rows">${row(tx('scheduleRule'), task.description || '—')}${row(tx('scheduleRuns', { n: Number(task.runCount) || 0 }), task.lastRunAt ? time(task.lastRunAt) : '—')}</dl>${task.timezone ? `<p class="wl-scheduled-hint">${escapeHtml(tx('timezone', { zone: task.timezone }))}</p>` : ''}
+            ${task.lastStatus === 'failed' ? `<p class="wl-scheduled-error">${escapeHtml(tx('schedulePreviousFailed'))}</p>` : ''}
+            ${error ? `<p class="wl-scheduled-error">${escapeHtml(tx('scheduleError'))}：${escapeHtml(error)}</p>` : ''}
+            ${task.lastPush ? `<p class="wl-scheduled-delivery${task.lastPush.ok ? '' : ' is-failed'}">${escapeHtml(tx(task.lastPush.ok ? 'schedulePushOk' : 'schedulePushFailed'))}</p>` : ''}</div>
+        </details>`;
+    }
+
+    function renderSchedules() {
+        const counts = { all: state.schedules.length, upcoming: 0, attention: 0, history: 0 };
+        state.schedules.forEach(task => { counts[scheduleBucket(task)]++; });
+        const filters = [['all', 'scheduleAll'], ['upcoming', 'scheduleUpcoming'], ['attention', 'scheduleAttention'], ['history', 'scheduleHistory']];
+        const rank = { attention: 0, upcoming: 1, history: 2 };
+        const items = state.schedules.filter(task => state.scheduleFilter === 'all' || scheduleBucket(task) === state.scheduleFilter).slice().sort((a, b) => {
+            const group = rank[scheduleBucket(a)] - rank[scheduleBucket(b)];
+            if (group) return group;
+            if (a.status === 'running' || b.status === 'running') return a.status === b.status ? 0 : a.status === 'running' ? -1 : 1;
+            return scheduleBucket(a) === 'history' ? String(b.lastRunAt || b.updatedAt).localeCompare(String(a.lastRunAt || a.updatedAt)) : String(a.nextRunAt || '').localeCompare(String(b.nextRunAt || ''));
+        });
+        return `<section class="wl-schedules" aria-busy="${state.scheduleLoading}" aria-label="${escapeHtml(tx('scheduledTitle'))}"><header class="wl-section-head"><b>${escapeHtml(tx('scheduledTitle'))}</b><span>${counts.all}</span></header><p class="wl-scheduled-hint">${escapeHtml(tx('scheduledHint'))}</p>
+            ${counts.all ? `<div class="wl-schedule-filters" role="group" aria-label="${escapeHtml(tx('scheduledTitle'))}">${filters.map(([key, label]) => `<button type="button" data-wl-schedule-filter="${key}" aria-pressed="${state.scheduleFilter === key}">${escapeHtml(tx(label))}<span>${counts[key]}</span></button>`).join('')}</div>` : ''}
+            ${state.scheduleError ? `<div class="wl-scheduled-notice" role="status">${escapeHtml(tx('loadFailed'))}<button type="button" data-wl-schedule-retry>${escapeHtml(tx('scheduleReload'))}</button></div>` : ''}
+            <div class="wl-scheduled-list">${items.slice(0, state.scheduleLimit).map(scheduleCard).join('') || (state.scheduleError ? '' : `<p class="wl-scheduled-empty">${escapeHtml(tx(state.scheduleLoading ? 'loading' : counts.all ? 'scheduleFilteredEmpty' : 'scheduledEmpty'))}</p>`)}</div>
+            ${items.length > state.scheduleLimit ? `<button type="button" class="wl-schedule-more" data-wl-schedule-more>${escapeHtml(tx('scheduleMore', { n: Math.min(8, items.length - state.scheduleLimit) }))}</button>` : ''}
+            ${state.scheduleTruncated ? `<p class="wl-scheduled-hint">${escapeHtml(tx('scheduleLimited'))}</p>` : ''}</section>`;
+    }
+
+    function refreshThreadBadge() {
+        const thread = state.threads.find(item => state.active && item.kind === state.active.kind && item.id === state.active.id);
+        if (!thread) return;
+        const count = status => state.tasks.filter(task => task.status === status).length;
+        thread.tasks = { open: count('open'), paused: count('paused'), done: count('done'), cancelled: count('cancelled') };
+        renderThreads();
+    }
+
+    function stageOf(task) {
+        if (task.status === 'done' || task.status === 'cancelled') return 2;
+        return task.remindCount > 0 || task.progress ? 1 : 0;
+    }
+
+    function renderStage() {
+        if (!el.stage) return;
+        const task = state.tasks[state.focus];
+        el.stage.hidden = !task;
+        if (!task) {
+            el.stage.innerHTML = '';
+            return;
+        }
+        const stage = stageOf(task);
+        const cancelled = task.status === 'cancelled';
+        const paused = task.status === 'paused';
+        const steps = [
+            { label: tx('stageStart'), sub: formatTime(task.createdAt) },
+            { label: tx('stageActive'), sub: task.remindCount ? tx('reminded', { n: task.remindCount }) : (task.progress ? tx('progress') : (task.nextRemindAt ? formatTime(task.nextRemindAt) : '')) },
+            { label: cancelled ? tx('cancelledEnd') : tx('stageEnd'), sub: task.closedAt ? formatTime(task.closedAt) : '' }
+        ];
+        const fill = stage === 0 ? 0 : stage === 1 ? 50 : 100;
+        el.stage.className = `wl-stage is-stage-${stage}${cancelled ? ' is-cancelled' : ''}${paused ? ' is-paused' : ''}`;
+        el.stage.innerHTML = `
+            <div class="wl-stage-info">
+                <span class="wl-status is-${task.status}">${escapeHtml(tx(`status_${task.status}`))}</span>
+                <b class="wl-stage-title" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</b>
+            </div>
+            <div class="wl-track" role="progressbar" aria-valuemin="0" aria-valuemax="2" aria-valuenow="${stage}" aria-valuetext="${escapeHtml(steps[stage].label)}" style="--wl-fill:${fill}%">
+                <span class="wl-track-line"><i class="wl-track-fill"></i></span>
+                ${steps.map((step, index) => `<span class="wl-node ${['is-first', 'is-middle', 'is-last'][index]}${index < stage ? ' is-past' : ''}${index === stage ? ' is-current' : ''}">
+                    <i class="wl-dot">${index === 2 && stage === 2 ? (cancelled ? '✕' : '✓') : ''}</i>
+                    <span class="wl-node-label">${escapeHtml(step.label)}</span>
+                    ${step.sub ? `<small>${escapeHtml(step.sub)}</small>` : ''}
+                </span>`).join('')}
+            </div>
+            <div class="wl-stage-actions">
+                ${state.tasks.length > 1 ? `<span class="wl-stage-pager"><button type="button" data-wl-stage="prev" aria-label="${escapeHtml(tx('prevTask'))}">‹</button><span>${state.focus + 1}/${state.tasks.length}</span><button type="button" data-wl-stage="next" aria-label="${escapeHtml(tx('nextTask'))}">›</button></span>` : ''}
+                <button type="button" class="wl-stage-detail" data-wl-stage="detail">${escapeHtml(tx('details'))}</button>
+            </div>`;
+    }
+
+    function onStageClick(event) {
+        const button = event.target.closest('[data-wl-stage]');
+        if (!button || !state.tasks.length) return;
+        const action = button.dataset.wlStage;
+        if (action === 'prev' || action === 'next') {
+            state.focus = (state.focus + (action === 'next' ? 1 : -1) + state.tasks.length) % state.tasks.length;
+            renderStage();
+            highlightCard(state.tasks[state.focus].id);
+        } else {
+            focusTask(state.tasks[state.focus].id, { openPanel: true });
+        }
+    }
+
+    function focusTask(id, { openPanel = false } = {}) {
+        const index = state.tasks.findIndex(task => task.id === id);
+        if (index >= 0) {
+            state.focus = index;
+            renderStage();
+        }
+        if (openPanel) window.DragonClawWorkspace?.openPanel?.();
+        highlightCard(id);
+    }
+
+    function highlightCard(id) {
+        state.highlight = id;
+        const card = el.panelBody?.querySelector(`[data-wl-card="${CSS.escape(id)}"]`);
+        if (!card) return;
+        el.panelBody.querySelectorAll('.wl-task.is-highlight').forEach(node => node.classList.remove('is-highlight'));
+        card.classList.add('is-highlight');
+        card.open = true;
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function assignees(task) {
+        const prefix = state.active?.channel === 'weixin' ? '' : '@';
+        const list = (task.assignees || []).map(item => `<span class="wl-person" title="${escapeHtml(item.account || '')}">${prefix}${escapeHtml(item.name || item.account)}</span>`);
+        return list.length ? list.join('') : `<span class="wl-muted">${escapeHtml(tx('everyone'))}</span>`;
+    }
+
+    function eventLabel(event) {
+        return tx(`event_${event.type}`);
+    }
+
+    function actorText(actor) {
+        if (!actor) return '';
+        if (actor === 'system') return tx('system');
+        return actor.replace(/^platform:/, '');
+    }
+
+    function taskCard(task) {
+        const stage = stageOf(task);
+        const closed = task.status === 'done' || task.status === 'cancelled';
+        const actions = state.canManage ? [
+            task.status === 'open' ? `<button type="button" class="wl-act is-primary" data-wl-act="done">${escapeHtml(tx('done'))}</button>` : '',
+            task.status === 'open' ? `<button type="button" class="wl-act" data-wl-act="remind">${escapeHtml(tx('remindNow'))}</button>` : '',
+            task.status === 'open' ? `<button type="button" class="wl-act" data-wl-act="pause">${escapeHtml(tx('pause'))}</button>` : '',
+            task.status === 'paused' ? `<button type="button" class="wl-act is-primary" data-wl-act="resume">${escapeHtml(tx('resume'))}</button>` : '',
+            !closed ? `<button type="button" class="wl-act is-quiet" data-wl-act="cancel">${escapeHtml(tx('cancel'))}</button>` : '',
+            closed ? `<button type="button" class="wl-act" data-wl-act="reopen">${escapeHtml(tx('reopen'))}</button>` : '',
+            !closed ? `<select class="wl-urgency" data-wl-urgency aria-label="${escapeHtml(tx('urgency'))}">${['low', 'normal', 'high', 'urgent'].map(level => `<option value="${level}"${task.urgency === level ? ' selected' : ''}>${escapeHtml(tx('urgency'))} · ${escapeHtml(tx(`urgency_${level}`))}</option>`).join('')}</select>` : ''
+        ].join('') : '';
+        const rows = [
+            [tx('remindWho'), state.active.channel === 'weixin' ? escapeHtml(tx('currentWeChat')) : assignees(task)],
+            state.active.channel === 'weixin' && task.assignees?.length ? [tx('relatedPeople'), assignees(task)] : null,
+            [tx('frequency'), `${escapeHtml(task.frequency)}<span class="wl-urgency-tag is-${task.urgency}">${escapeHtml(tx(`urgency_${task.urgency}`))}</span>`],
+            task.status === 'open' && task.nextRemindAt ? [tx('nextRemind'), `<b>${escapeHtml(formatTime(task.nextRemindAt, true))}</b>${task.nextRemindNote ? `<span class="wl-note">${escapeHtml(task.nextRemindNote)}</span>` : ''}`] : null,
+            task.remindCount ? ['', `<span class="wl-muted">${escapeHtml(tx('reminded', { n: task.remindCount }))}${task.lastRemindedAt ? ` · ${escapeHtml(tx('lastReminded', { time: formatTime(task.lastRemindedAt) }))}` : ''}</span>`] : null,
+            task.dueAt ? [tx('due'), escapeHtml(formatTime(task.dueAt, true))] : null,
+            [tx('progress'), task.progress ? escapeHtml(task.progress) : `<span class="wl-muted">${escapeHtml(tx('noProgress'))}</span>`],
+            closed ? [tx('closed'), `${escapeHtml(tx('closedBy', { time: formatTime(task.closedAt), who: actorText(task.closedBy) || '—' }))}${task.closeNote ? `<span class="wl-note">${escapeHtml(task.closeNote)}</span>` : ''}`] : null,
+            task.creator ? [tx('creator'), escapeHtml(actorText(task.creator))] : null
+        ].filter(Boolean);
+        const events = (task.events || []).slice().reverse();
+        return `<details class="wl-task is-${task.status}${state.highlight === task.id ? ' is-highlight' : ''}" data-wl-card="${escapeHtml(task.id)}"${task.status === 'open' || state.highlight === task.id ? ' open' : ''}>
+            <summary>
+                <span class="wl-mini" aria-hidden="true">${[0, 1, 2].map(index => `<i class="${index <= stage ? 'is-on' : ''}"></i>`).join('')}</span>
+                <span class="wl-task-title">${escapeHtml(task.title)}</span>
+                <span class="wl-status is-${task.status}">${escapeHtml(tx(`status_${task.status}`))}</span>
+            </summary>
+            <dl class="wl-rows">${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join('')}</dl>
+            ${task.detail ? `<details class="wl-sub"><summary>${escapeHtml(tx('detail'))}</summary><div class="wl-detail">${state.api ? state.api.renderMarkdown(task.detail) : escapeHtml(task.detail)}</div></details>` : ''}
+            ${events.length ? `<details class="wl-sub"${closed ? ' open' : ''}><summary>${escapeHtml(tx('timeline'))} · ${events.length}</summary><ol class="wl-timeline">${events.map(event => `<li class="is-${escapeHtml(event.type)}"><i></i><div><b>${escapeHtml(eventLabel(event))}</b><time>${escapeHtml(formatTime(event.createdAt))}</time>${event.actor ? `<span class="wl-muted"> · ${escapeHtml(actorText(event.actor))}</span>` : ''}${event.note && event.type !== 'created' ? `<p>${escapeHtml(event.note)}</p>` : ''}</div></li>`).join('')}</ol></details>` : ''}
+            ${actions ? `<div class="wl-actions" data-wl-task-id="${escapeHtml(task.id)}">${actions}</div>` : ''}
+        </details>`;
+    }
+
+    function renderPanel() {
+        if (!state.active) return;
+        const open = state.tasks.filter(task => task.status === 'open').length;
+        const hasTasks = state.tasks.length || state.schedules.length || state.tacJobs.length;
+        const body = window.DragonClawWorkspace?.showExternal?.({ title: tx('workspaceTasks'), meta: state.tasks.length ? tx('followMeta', { n: open }) : '', open: hasTasks && !state.panelShown ? undefined : false });
+        if (!body) return;
+        if (hasTasks) state.panelShown = true;
+        el.panelBody = body;
+        // 保留各卡片的展开状态，定时刷新时不打断查看
+        const openIds = new Set([...body.querySelectorAll('[data-wl-card][open]')].map(node => node.dataset.wlCard));
+        const hadCards = body.querySelector('[data-wl-card]');
+        const scheduleOpen = new Set([...body.querySelectorAll('[data-wl-schedule][open]')].map(node => node.dataset.wlSchedule));
+        const focused = body.contains(document.activeElement) ? document.activeElement : null;
+        const focusedSchedule = focused?.matches('summary') ? focused.parentElement.dataset.wlSchedule : null;
+        const focusedFilter = focused?.dataset.wlScheduleFilter;
+        const scrollContainer = body.closest('.home-workspace-panel') || body;
+        const scrollTop = scrollContainer.scrollTop;
+        const followups = state.tasks.length
+            ? `<div class="wl-tasks">${state.tasks.map(taskCard).join('')}</div><p class="wl-zone">${escapeHtml(tx('timezone', { zone: state.calendar?.timezone || 'Africa/Cairo' }))}</p>`
+            : `<div class="wsp-empty">${escapeHtml(tx('noTasks'))}</div>`;
+        const tacOpen = new Set([...body.querySelectorAll('[data-tac-job][open]')].map(node => node.dataset.tacJob));
+        body.innerHTML = renderTac() + renderSchedules() + `<section class="wl-followups"><header class="wl-section-head"><b>${escapeHtml(tx('followTitle'))}</b><span>${state.tasks.length}</span></header>${followups}</section>`;
+        body.querySelectorAll('[data-tac-job]').forEach(node => { node.open = tacOpen.has(node.dataset.tacJob); });
+        body.querySelectorAll('[data-wl-schedule]').forEach(node => { node.open = scheduleOpen.has(node.dataset.wlSchedule); });
+        const focusTarget = focusedSchedule
+            ? body.querySelector(`[data-wl-schedule="${CSS.escape(focusedSchedule)}"] > summary`)
+            : focusedFilter ? body.querySelector(`[data-wl-schedule-filter="${CSS.escape(focusedFilter)}"]`) : null;
+        focusTarget?.focus({ preventScroll: true });
+        scrollContainer.scrollTop = scrollTop;
+        if (hadCards) body.querySelectorAll('[data-wl-card]').forEach(node => { node.open = openIds.has(node.dataset.wlCard) || state.highlight === node.dataset.wlCard; });
+        if (!body.dataset.wlBound) {
+            body.dataset.wlBound = '1';
+            body.addEventListener('click', onPanelAction);
+            body.addEventListener('change', onUrgencyChange);
+        }
+    }
+
+    async function onPanelAction(event) {
+        const filter = event.target.closest('[data-wl-schedule-filter]');
+        if (filter) {
+            state.scheduleFilter = filter.dataset.wlScheduleFilter;
+            state.scheduleLimit = 8;
+            renderPanel();
+            el.panelBody?.querySelector(`[data-wl-schedule-filter="${state.scheduleFilter}"]`)?.focus({ preventScroll: true });
+            return;
+        }
+        if (event.target.closest('[data-wl-schedule-more]')) { state.scheduleLimit += 8; renderPanel(); return; }
+        if (event.target.closest('[data-wl-schedule-retry]')) return loadSchedules(state.openSeq);
+        const button = event.target.closest('[data-wl-act]');
+        if (!button || !el.panelBody?.contains(button)) return;
+        const id = button.closest('[data-wl-task-id]')?.dataset.wlTaskId;
+        const task = state.tasks.find(item => item.id === id);
+        if (!task) return;
+        const action = button.dataset.wlAct;
+        if (action === 'remind') {
+            if (!(await confirmDialog({ title: tx('confirmRemindTitle'), message: tx('confirmRemind'), confirmText: tx('remindNow'), tone: 'info' }))) return;
+        } else if (action === 'done' || action === 'cancel') {
+            if (!(await confirmDialog({ title: task.title, message: tx('confirmClose', { title: task.title, action: tx(action === 'done' ? 'status_done' : 'status_cancelled') }), confirmText: tx(action), tone: action === 'cancel' ? 'danger' : 'info' }))) return;
+        }
+        button.disabled = true;
+        try {
+            const data = action === 'remind'
+                ? await request('POST', `${API_BASE}/${state.active.channel}/followups/${encodeURIComponent(id)}/remind`)
+                : await request('PATCH', `${API_BASE}/${state.active.channel}/followups/${encodeURIComponent(id)}`, { action });
+            replaceTask(data.item);
+            toast(tx('updated'));
+        } catch (error) {
+            toast(tx('actionFailed', { error: error.message }));
+            button.disabled = false;
+        }
+    }
+
+    async function onUrgencyChange(event) {
+        const select = event.target.closest('[data-wl-urgency]');
+        if (!select) return;
+        const id = select.closest('[data-wl-task-id]')?.dataset.wlTaskId;
+        try {
+            const data = await request('PATCH', `${API_BASE}/${state.active.channel}/followups/${encodeURIComponent(id)}`, { urgency: select.value, scheduleMode: 'auto' });
+            replaceTask(data.item);
+            toast(tx('updated'));
+        } catch (error) {
+            toast(tx('actionFailed', { error: error.message }));
+        }
+    }
+
+    function replaceTask(item) {
+        if (!item) return;
+        const index = state.tasks.findIndex(task => task.id === item.id);
+        if (index >= 0) state.tasks[index] = item;
+        state.highlight = item.id;
+        renderStage();
+        renderPanel();
+        refreshThreadBadge();
+    }
+
+    function applyTexts() {
+        renderTabs();
+        if (CHANNEL_IDS.includes(state.source)) renderThreads();
+        if (state.active) {
+            renderReadonly();
+            renderStage();
+            renderPanel();
+            if (state.api?.thread.hasAttribute('aria-busy')) state.api.beginLoading();
+            else renderTimeline();
+        }
+    }
+
+    function init() {
+        if (!mountTabs()) return;
+        setSource('mine', { remember: false });
+        loadChannels();
+        window.dispatchEvent(new Event('home:channel-threads-ready'));
+        window.addEventListener('tools:languagechange', applyTexts);
+        window.addEventListener('home:conversation-list-changed',()=>renderThreads());
+        window.addEventListener('home:desktop-agents-ready', () => setSource(storeGet(SOURCE_KEY) || state.source, { remember:false }));
+        window.addEventListener('storage', event => {
+            if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(event.key) && state.active && state.identity !== identity()) { state.drafts.clear(); window.DragonClaw?.newChat?.(); }
+        });
+        // 侧栏对话里的频道会话转圈：已连接频道时每 15 秒刷新一次会话列表（busy = Dragon Claw 正在回复）
+        setInterval(() => {
+            if (document.visibilityState === 'visible' && state.channels.length) loadAllChannelThreads();
+        }, 15000);
+        setInterval(() => {
+            if (document.visibilityState !== 'visible') return;
+            loadChannels();
+            if (CHANNEL_IDS.includes(state.source) && !el.list.hidden) loadThreads();
+        }, 60000);
+    }
+
+    window.HomeWelinkThreads = {
+        setSource,
+        composeNew,
+        source: () => state.source,
+        channels: () => (state.channels || []).slice(),
+        summary: () => state.channelSummary ? { ...state.channelSummary } : null,
+        open: openThread,
+        reload: loadThreads,
+        active: () => state.active ? { ...state.active } : null,
+        activeId: () => state.active ? `${state.active.channel}:${state.active.kind}:${state.active.id}` : null,
+        getAllThreads: () => (state.allChannelThreads || state.allThreads || state.threads || []).slice(),
+        loadAllChannelThreads,
+        refresh: pollNewMessages
+    };
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+    else init();
+})();

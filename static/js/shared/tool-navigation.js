@@ -1,0 +1,151 @@
+/* Shared app navigation and mobile viewport behavior. */
+(function () {
+    'use strict';
+    if (window.ToolsNavigation?.installed) return;
+    configureMobileViewport();
+
+    function configureMobileViewport() {
+        const { userAgent = '', platform = '', maxTouchPoints = 0 } = window.navigator || {};
+        const ios = /iPhone|iPad|iPod/i.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1);
+        if (/Electron/i.test(userAgent) || (!ios && !/Android/i.test(userAgent) &&
+            !window.matchMedia?.('(hover: none) and (pointer: coarse)').matches)) return;
+
+        function lockViewport() {
+            let viewport = document.querySelector('meta[name="viewport"]');
+            if (!viewport) {
+                viewport = document.createElement('meta');
+                viewport.name = 'viewport';
+                document.head.prepend(viewport);
+            }
+            const settings = viewport.content.split(',').map(value => value.trim()).filter(value =>
+                value && !/^(?:width|initial-scale|minimum-scale|maximum-scale|user-scalable)\s*=/i.test(value));
+            viewport.content = ['width=device-width', 'initial-scale=1', 'minimum-scale=1', 'maximum-scale=1',
+                'user-scalable=no', ...settings].join(', ');
+        }
+        // Some routes inject this script before the page's own viewport tag.
+        if (document.readyState === 'loading' && !document.querySelector('meta[name="viewport"]')) {
+            document.addEventListener('DOMContentLoaded', lockViewport, { once: true });
+        } else {
+            lockViewport();
+        }
+
+        const style = document.createElement('style');
+        style.textContent = `
+            :where(html, body, body *) { touch-action: manipulation; touch-action: pan-x pan-y; }
+            ${ios ? `:is(textarea, select, input:not([type]), input:is([type="text"], [type="search"],
+                [type="password"], [type="email"], [type="tel"], [type="url"], [type="number"]),
+                [contenteditable="true"], [contenteditable="plaintext-only"], [contenteditable=""]) {
+                font-size: 16px !important;
+            }` : ''}
+        `;
+        document.head.append(style);
+
+        if (ios) {
+            // Safari can ignore the viewport's scale limits for pinch gestures.
+            const preventZoom = event => event.preventDefault();
+            for (const type of ['gesturestart', 'gesturechange']) {
+                document.addEventListener(type, preventZoom, { capture: true, passive: false });
+            }
+        }
+    }
+
+    const toolPath = /^\/(?:uivf12|sla|report|expedite|monthly|ai-report|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|cinema|cinama|project-evolution|python-updater|desktop-license-admin)(?:\/|\.html$|$)|^\/(?:tools|apps)\/[^/]+(?:\/|$)|^\/pages\/(?:uivf12|sla|report|expedite|ai-report|monthly|monthly-designer|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|project-evolution|python-updater|desktop-license-admin)\.html$/;
+    const originals = new WeakMap();
+    function resolveTool(href) {
+        if (!href || String(href).startsWith('#')) return null;
+        try {
+            const resolvedHref = typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl(String(href)) : String(href);
+            let url = new URL(resolvedHref, location.href);
+            if (url.origin !== location.origin) return null;
+            const strip = (p) => (typeof window.dhStripBase === 'function' ? window.dhStripBase(p) : p);
+            let strippedPath = strip(url.pathname);
+            if (strippedPath === '/' && url.searchParams.has('app')) {
+                const inner = url.searchParams.get('app');
+                url = new URL(typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl(inner) : inner, location.origin);
+                if (url.origin !== location.origin) return null;
+                strippedPath = strip(url.pathname);
+            }
+            const raw = strippedPath.match(/^\/custom-tools\/([^/]+)\/(?:index\.html)?$/);
+            if (raw) strippedPath = '/tools/' + raw[1];
+            if (!toolPath.test(strippedPath)) return null;
+            if (['/ai-report', '/pages/monthly-designer.html'].includes(strippedPath)) strippedPath = '/monthly';
+            const prefix = window.DH_BASE || '';
+            url.pathname = prefix + strippedPath;
+            url.searchParams.delete('_t');
+            return url;
+        } catch { return null; }
+    }
+    function toolUrl(href) {
+        const url = resolveTool(href);
+        if (!url) return href;
+        url.searchParams.set('standalone', '1');
+        return url.pathname + url.search + url.hash;
+    }
+    function shellUrl(href) {
+        const url = resolveTool(href);
+        if (!url) return href;
+        url.searchParams.delete('standalone');
+        const strippedPath = (typeof window.dhStripBase === 'function' ? window.dhStripBase(url.pathname) : url.pathname) + url.search + url.hash;
+        const prefix = window.DH_BASE || '';
+        return prefix + '/?app=' + encodeURIComponent(strippedPath);
+    }
+    function update(link) {
+        if (!link?.matches('a[href]') || link.hasAttribute('download')) return;
+        const href = link.getAttribute('href'), next = toolUrl(href);
+        if (next !== href) { originals.set(link, href); link.setAttribute('href', next); }
+    }
+    function scan(root) {
+        if (root.nodeType !== 1 && root.nodeType !== 9) return;
+        if (root.matches?.('a[target="_blank"][href]')) update(root);
+        root.querySelectorAll('a[target="_blank"][href]').forEach(update);
+    }
+    document.addEventListener('pointerdown', event => {
+        if (event.button === 1 || event.metaKey || event.ctrlKey || event.shiftKey) update(event.target.closest?.('a[href]'));
+    }, true);
+    document.addEventListener('contextmenu', event => update(event.target.closest?.('a[href]')), true);
+    document.addEventListener('click', event => {
+        // Card controls handle their own clicks after the document capture phase.
+        if (event.target.closest?.('button, input, select, textarea, label, [role="button"], [data-tool-card-actions]')) return;
+        const link = event.target.closest?.('a[href]');
+        if (!link || link.hasAttribute('download')) return;
+        if (link.target === '_blank' || event.metaKey || event.ctrlKey || event.shiftKey) { update(link); return; }
+        if (event.defaultPrevented || event.button > 0 || (link.target && link.target !== '_self')) return;
+        if (window.top !== window) return;
+        const href = originals.get(link) || link.getAttribute('href'), url = resolveTool(href);
+        if (!url || url.searchParams.get('standalone') === '1') return;
+        event.preventDefault(); event.stopPropagation();
+        window.HomeV2?.closePop?.();
+        const path = url.pathname + url.search + url.hash;
+        if (document.documentElement.classList.contains('is-clean-tool')) { location.assign(toolUrl(path)); return; }
+        if (!window.HomeToolFrame?.open?.(path)) location.assign(shellUrl(path));
+    }, true);
+    new MutationObserver(records => {
+        for (const record of records) {
+            if (record.type === 'childList') record.addedNodes.forEach(scan);
+            else if (record.target.matches?.('a[target="_blank"][href]')) update(record.target);
+        }
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'target'] });
+    const open = window.open;
+    window.open = function (url, ...args) { return open.call(this, typeof url === 'string' || url instanceof URL ? toolUrl(String(url)) : url, ...args); };
+    window.ToolsNavigation = { ...window.ToolsNavigation, toolUrl, shellUrl, installed: true };
+    const strippedLocPath = typeof window.dhStripBase === 'function' ? window.dhStripBase(location.pathname) : location.pathname;
+    const publicPath = /^\/(?:cinema|cinama|project-evolution|privacy|terms)(?:\/|\.html$|$)|^\/pages\/(?:cinema|cinama|project-evolution|privacy|terms)\.html$/i;
+    const isPublic = publicPath.test(strippedLocPath);
+    const current = strippedLocPath !== '/' ? resolveTool(location.href) : null;
+    let clean = current?.searchParams.get('standalone') === '1' || (isPublic && window.top === window);
+    try { if (window.top !== window) clean ||= window.top.document.documentElement.classList.contains('is-clean-tool'); } catch { /* Cross-origin host. */ }
+    if (current || clean) {
+        if (!isPublic || window.top !== window) {
+            document.documentElement.classList.add('is-embedded-tool');
+        }
+        if (clean && !window.DragonToolSurface) {
+            if (!isPublic) document.documentElement.classList.add('is-clean-tool');
+        } else if (!clean && window.top === window && !window.__TP_STATIC_BASE__ && !isPublic) {
+            location.replace(shellUrl(location.href));
+        }
+        const style = document.createElement('style');
+        style.textContent = 'html.is-embedded-tool{--navbar-h:0px}html.is-embedded-tool #app-navbar,html.is-embedded-tool #navbar-container{display:none!important}html.is-clean-tool :is(.ai-fab,.ai-panel,.ai-proactive-alert,.ops-inbox-banner,.ops-home-inbox,.custom-tool-head){display:none!important}html.is-clean-tool .custom-tool-shell{grid-template-rows:1fr}';
+        document.head.append(style);
+    }
+    scan(document);
+})();

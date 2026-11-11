@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <script src="js/shared/dh-runtime.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>专业报表看板 - Dragon Claw</title>
+    <link rel="stylesheet" href="css/shared.css">
+    <style>
+        body {
+            background: #f4f6f8;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #333;
+        }
+
+        .page-container {
+            padding-top: calc(var(--navbar-h) + 20px);
+            max-width: 98%;
+            margin: 0 auto;
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-bottom: 40px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .controls h2 {
+            margin: 0;
+            color: #2c3e50;
+            font-size: 24px;
+        }
+
+        .controls select {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #fff;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+        }
+
+        #snapshot-select {
+            min-width: 250px;
+        }
+
+        .data-source-panel {
+            margin-bottom: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .data-source-controls {
+            margin-bottom: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .data-source-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background: rgba(59, 130, 246, 0.12);
+            border: 1px solid rgba(59, 130, 246, 0.24);
+            color: #1d4ed8;
+        }
+
+        .data-source-note {
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .data-source-select {
+            height: 34px;
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+            background: #fff;
+            color: #334155;
+            font-size: 12px;
+            padding: 0 10px;
+            outline: none;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+        }
+
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+            padding: 24px;
+            overflow: hidden;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #1a237e;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 2px solid #e8eaf6;
+            padding-bottom: 12px;
+        }
+
+        .ranking-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .ranking-table th,
+        .ranking-table td {
+            padding: 8px 6px;
+            text-align: center;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .ranking-table th {
+            background: #fafafa;
+            font-weight: 600;
+            color: #555;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            font-size: 14px;
+        }
+
+        .ranking-table tr:hover td {
+            background: #f8f9fa;
+        }
+
+        .ranking-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .cat-name {
+            font-weight: 700;
+            color: #2c3e50;
+            font-size: 16px;
+        }
+
+        .rank-medal {
+            font-size: 20px;
+        }
+
+        .metric-trend-link {
+            border: 0;
+            border-bottom: 1px dashed rgba(2, 119, 189, .42);
+            background: transparent;
+            color: #243447;
+            cursor: pointer;
+            padding: 0 1px 2px;
+            margin: 0;
+            font: inherit;
+            font-weight: 700;
+            text-align: left;
+            line-height: 1.35;
+            transition: color .18s ease, border-color .18s ease, background .18s ease;
+        }
+
+        .metric-trend-link:hover {
+            color: #0277bd;
+            border-bottom-color: #0277bd;
+            background: rgba(2, 119, 189, .06);
+        }
+
+        .metric-trend-link.manual {
+            color: #9a3412;
+            border-bottom-color: rgba(234, 88, 12, .42);
+        }
+
+        .metric-trend-link.manual:hover {
+            color: #ea580c;
+            border-bottom-color: #ea580c;
+            background: rgba(249, 115, 22, .08);
+        }
+
+        .ranking-count-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #3730a3;
+        }
+
+        .ranking-count-pill.sub {
+            background: #ecfdf5;
+            color: #047857;
+        }
+
+        .ranking-count-delta {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: #f1f5f9;
+            color: #64748b;
+        }
+
+        .ranking-count-delta.changed {
+            background: #fff7ed;
+            color: #c2410c;
+            box-shadow: 0 0 0 0 rgba(249, 115, 22, .35);
+            animation: countPulse 1.8s ease-in-out infinite;
+        }
+
+        @keyframes countPulse {
+            0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, .28); }
+            70% { box-shadow: 0 0 0 8px rgba(249, 115, 22, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+        }
+
+        .metric-trend-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100000;
+            background: rgba(15, 23, 42, .58);
+            align-items: center;
+            justify-content: center;
+            padding: 28px;
+        }
+
+        .metric-trend-modal.open {
+            display: flex;
+        }
+
+        .metric-trend-dialog {
+            width: min(1120px, 96vw);
+            max-height: 88vh;
+            overflow: hidden;
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 30px 90px rgba(15, 23, 42, .34);
+            display: flex;
+            flex-direction: column;
+            animation: modalRise .22s ease-out;
+        }
+
+        @keyframes modalRise {
+            from { opacity: 0; transform: translateY(16px) scale(.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .metric-trend-head {
+            padding: 20px 24px;
+            color: #fff;
+            background: linear-gradient(135deg, #0f172a, #1d4ed8);
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        .metric-trend-head h3 {
+            margin: 0;
+            font-size: 20px;
+            letter-spacing: 0;
+        }
+
+        .metric-trend-head p {
+            margin: 6px 0 0;
+            color: rgba(255,255,255,.76);
+            font-size: 12px;
+        }
+
+        .metric-trend-close {
+            border: 0;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            color: #fff;
+            background: rgba(255,255,255,.16);
+            cursor: pointer;
+            font-size: 22px;
+        }
+
+        .metric-trend-body {
+            overflow-y: auto;
+            padding: 20px 24px 24px;
+            background: #f8fafc;
+        }
+
+        .metric-trend-kpis {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .metric-trend-kpi {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 14px;
+        }
+
+        .metric-trend-kpi .label {
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        .metric-trend-kpi .value {
+            margin-top: 6px;
+            font-size: 26px;
+            font-weight: 800;
+            color: #0f172a;
+        }
+
+        .metric-trend-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
+            gap: 16px;
+        }
+
+        .metric-chart-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            min-width: 0;
+        }
+
+        .metric-chart-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .metric-chart-title strong {
+            color: #0f172a;
+            font-size: 15px;
+        }
+
+        .metric-chart-title span {
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .metric-target-summary {
+            display: inline-flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 5px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+
+        .metric-target-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: 1px solid rgba(100, 116, 139, .24);
+            background: #f8fafc;
+            color: #475569;
+            font-size: 10px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .metric-target-chip.previous {
+            border-color: rgba(180, 83, 9, .22);
+            background: #fff7ed;
+            color: #92400e;
+        }
+
+        .metric-target-chip.merged {
+            border-color: rgba(71, 85, 105, .24);
+            background: #f8fafc;
+            color: #334155;
+        }
+
+        .metric-chart-svg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .category-change-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .metric-monthly-detail-card {
+            margin-top: 16px;
+        }
+
+        .metric-monthly-table-wrap {
+            overflow-x: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+        }
+
+        .metric-monthly-table {
+            width: 100%;
+            min-width: 720px;
+            border-collapse: collapse;
+            font-size: 12px;
+            color: #334155;
+        }
+
+        .metric-monthly-table th,
+        .metric-monthly-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .metric-monthly-table th {
+            position: sticky;
+            top: 0;
+            background: #f1f5f9;
+            color: #475569;
+            font-weight: 800;
+        }
+
+        .metric-monthly-table tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .metric-monthly-table tbody tr:hover td {
+            background: #f8fafc;
+        }
+
+        .metric-month-cell {
+            font-weight: 800;
+            color: #1d4ed8;
+        }
+
+        .category-change-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 12px;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+        }
+
+        .category-change-item.major {
+            border-color: #fdba74;
+            background: linear-gradient(135deg, #fff7ed, #ffffff);
+        }
+
+        .category-change-name {
+            font-weight: 700;
+            color: #334155;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .category-change-bar {
+            height: 6px;
+            margin-top: 7px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .category-change-bar span {
+            display: block;
+            height: 100%;
+            background: linear-gradient(90deg, #38bdf8, #2563eb);
+            border-radius: inherit;
+            transition: width .5s ease;
+        }
+
+        .category-change-item.major .category-change-bar span {
+            background: linear-gradient(90deg, #fb923c, #ef4444);
+        }
+
+        .category-change-delta {
+            font-weight: 800;
+            color: #334155;
+        }
+
+        .category-change-delta.changed {
+            color: #c2410c;
+        }
+
+        @media (max-width: 860px) {
+            .metric-trend-grid,
+            .metric-trend-kpis {
+                grid-template-columns: 1fr;
+            }
+            .metric-trend-modal {
+                padding: 12px;
+            }
+        }
+
+        .score-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 18px;
+            font-weight: 800;
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .score-badge.danger {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .score-badge.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .matrix-container {
+            overflow: auto;
+            min-height: 400px;
+            max-height: 65vh;
+            margin-top: 10px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+
+        .matrix-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            white-space: nowrap;
+        }
+
+        .matrix-table th,
+        .matrix-table td {
+            padding: 14px 12px;
+            border-bottom: 1px solid #eee;
+            border-right: 1px solid #eee;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .matrix-table th {
+            background: #f8f9fa;
+            color: #444;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            border-top: 1px solid #eee;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+        }
+
+        .matrix-table th:first-child,
+        .matrix-table td:first-child {
+            border-left: 1px solid #eee;
+        }
+
+        .matrix-group-cell {
+            background: linear-gradient(135deg, #e8eaf6, #c5cae9);
+            color: #283593;
+            font-weight: 700;
+            font-size: 13px;
+            text-align: center;
+            vertical-align: middle;
+            min-width: 40px;
+            max-width: 60px;
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.3;
+            border-right: 3px solid #9fa8da !important;
+        }
+
+        .matrix-ungrouped-cell {
+            background: #f5f5f5;
+            color: #888;
+            font-style: italic;
+            font-size: 12px;
+            text-align: center;
+            vertical-align: middle;
+            min-width: 40px;
+            max-width: 60px;
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.3;
+            border-right: 3px solid #e0e0e0 !important;
+        }
+
+        .val-good {
+            color: #2e7d32;
+            font-weight: 600;
+        }
+
+        .val-warn {
+            color: #d32f2f;
+            font-weight: 700;
+            background: #ffebee;
+            padding: 4px 8px;
+            border-radius: 6px;
+            display: inline-block;
+            cursor: help;
+        }
+
+        .val-none {
+            color: #aaa;
+        }
+
+        .metric-trend {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            margin-left: 4px;
+            border-radius: 50%;
+            font-size: 10px;
+            line-height: 1;
+            font-weight: 800;
+            vertical-align: 1px;
+            border: 1px solid transparent;
+        }
+
+        .metric-trend.up {
+            color: #047857;
+            background: #ecfdf5;
+            border-color: #a7f3d0;
+        }
+
+        .metric-trend.down {
+            color: #b45309;
+            background: #fffbeb;
+            border-color: #fde68a;
+        }
+
+        .ratio-score-toggle {
+            padding: 1px 5px;
+            border-radius: 999px;
+            border: 1px solid #d8dee8;
+            background: #fbfcfe;
+            color: #7b8798;
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.35;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .ratio-score-toggle:hover {
+            border-color: #b8d7ea;
+            color: #47718a;
+            background: #f7fbfd;
+        }
+
+        .ratio-score-toggle.active {
+            border-color: #b7dfe7;
+            color: #377782;
+            background: #f4fbfc;
+        }
+
+        .manual-score {
+            width: 60px;
+            padding: 6px;
+            text-align: center;
+            border: 1px dashed #bbb;
+            border-radius: 6px;
+            background: #fafafa;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        .manual-score:focus {
+            border-color: #4a90e2;
+            outline: none;
+            background: #fff;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+        }
+
+        .empty-state h3 {
+            color: #455a64;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            color: #888;
+        }
+
+        /* Group Config Modal Styles */
+        .group-item {
+            background: #f5f8fa;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+
+        .group-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .group-name-input {
+            flex: 1;
+            padding: 4px 6px;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #2c3e50;
+            background: transparent;
+            cursor: pointer;
+            outline: none;
+            min-width: 0;
+        }
+
+        .group-name-input:hover {
+            border-color: #9fa8da;
+            background: #f3f4ff;
+        }
+
+        .group-name-input:focus {
+            border-color: #3949ab;
+            background: #eef0fb;
+            cursor: text;
+        }
+
+        .group-drag-handle {
+            cursor: grab;
+            color: #aaa;
+            font-size: 18px;
+            user-select: none;
+            padding: 0 4px;
+        }
+
+        .group-metrics-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-height: 30px;
+            border: 1px dashed #ccc;
+            border-radius: 6px;
+            padding: 8px;
+            background: #fff;
+        }
+
+        .group-metric-tag {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #e3f2fd;
+            border: 1px solid #bbdefb;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 13px;
+            cursor: grab;
+        }
+
+        .group-metric-tag:active {
+            cursor: grabbing;
+        }
+
+        .group-metric-remove {
+            cursor: pointer;
+            color: #e53935;
+            font-weight: bold;
+            margin-left: auto;
+            padding: 0 2px;
+        }
+
+        .unassigned-pool {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            min-height: 36px;
+            border: 1px dashed #ccc;
+            border-radius: 6px;
+            padding: 8px;
+            background: #fffde7;
+        }
+
+        .unassigned-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #fff9c4;
+            border: 1px solid #f9a825;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .unassigned-tag:hover {
+            background: #fff176;
+        }
+
+        .btn-add-group {
+            width: 100%;
+            padding: 10px;
+            border: 2px dashed #9fa8da;
+            border-radius: 8px;
+            background: #f3f4ff;
+            color: #3949ab;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .btn-add-group:hover {
+            background: #e8eaf6;
+        }
+        .report-snapshot-filter-setting{display:inline-flex;align-items:center;gap:7px;margin:0;padding:5px 9px;min-height:34px;box-sizing:border-box;border:1px solid #ccd9e6;border-radius:8px;background:#f5f8fc;color:#49627c;font-size:12px;position:relative}
+        .report-snapshot-filter-setting input{width:54px;min-width:54px;box-sizing:border-box;padding:3px 5px;border:1px solid #c4d4e5;border-radius:5px;background:#fff;color:#233f5a;font:inherit}
+        .report-snapshot-filter-info{color:#8499ae}.report-snapshot-filter-help{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+        [data-theme=dark] .report-snapshot-filter-setting{background:#26394f;color:#ccdcee;border-color:#4f6984}[data-theme=dark] .report-snapshot-filter-setting input{background:#203246;color:#e1edfa;border-color:#5c7690}
+    </style>
+    <link rel="stylesheet" href="css/startup-screen.css">
+    <link rel="stylesheet" href="css/report-layout.css">
+</head>
+
+<body class="report-page">
+    <script src="js/shared/startup-screen.js" data-startup-page="report"></script>
+    <div class="page-container">
+        <div class="report-header">
+            <div class="report-header-main">
+                <div class="report-header-card">
+                    <div class="report-top-bar">
+                        <div class="report-title-group">
+                            <h2 class="report-title">
+                                <span id="reportPageTitle">📈 报表看板</span>
+                                <span id="reportFrontendVersion" class="report-version-badge">v加载中</span>
+                            </h2>
+                        </div>
+                    </div>
+
+                    <div class="report-query-bar">
+                        <div class="report-control-field">
+                            <span class="control-label">考核月份：</span>
+                            <select id="target-month-select" class="report-select" onchange="renderCurrentSnapshot()"></select>
+                        </div>
+                        <div class="report-control-field">
+                            <span class="control-label">历史快照：</span>
+                            <select id="snapshot-select" class="report-select" onchange="loadSelectedSnapshot()"></select>
+                        </div>
+                        <label id="report-snapshot-filter-setting" class="report-snapshot-filter-setting">
+                            <span id="report-snapshot-filter-label">最少表源</span>
+                            <input type="number" id="report-min-source-tables" min="0" max="10000" step="1" value="20" required onchange="updateReportSnapshotFilter()" aria-label="最少表源">
+                            <span class="report-snapshot-filter-info" aria-hidden="true" title="表源数量下限过滤">ⓘ</span>
+                            <span id="report-snapshot-filter-help" class="report-snapshot-filter-help"></span>
+                        </label>
+                        <div class="report-score-control">
+                            <label class="score-calc-label">
+                                <input type="checkbox" id="auto-std-score-cb" onchange="toggleAutoStdScore()" checked> 自动计算总分
+                            </label>
+                            <input type="number" id="custom-std-score-input" value="100" disabled onchange="updateCustomStdScore()">
+                        </div>
+                    </div>
+
+                    <div class="report-toolbar-actions">
+                        <button type="button" class="btn-report-action btn-report-primary" onclick="saveDashboardToDB()" title="保存数据到数据库">
+                            <span class="btn-icon">💾</span>
+                            <span class="btn-text">入库</span>
+                        </button>
+                        <button type="button" class="btn-report-action btn-report-export" onclick="exportYuxiangExcel()" title="一键导出赛马考核Excel表">
+                            <span class="btn-icon">🐴</span>
+                            <span class="btn-text">一键导出“于祥”的赛马表</span>
+                        </button>
+                        <div class="report-action-separator"></div>
+                        <button type="button" class="btn-report-action btn-report-ghost" onclick="openTemplateMappingModal()" title="配置Excel模板映射">
+                            <span class="btn-icon">⚙️</span>
+                            <span class="btn-text">模板映射</span>
+                        </button>
+                        <button type="button" class="btn-report-action btn-report-ghost" onclick="openGroupModal()" title="配置指标分组与顺序">
+                            <span class="btn-icon">📂</span>
+                            <span class="btn-text">指标分组配置</span>
+                        </button>
+                        <button type="button" class="btn-report-action btn-report-ghost" onclick="openWeightModal()" title="配置指标考核权重">
+                            <span class="btn-icon">⚖️</span>
+                            <span class="btn-text">权重配置</span>
+                        </button>
+                        <button type="button" class="btn-report-action btn-report-ghost" onclick="openAddMetricModal()" title="手动新增自定义指标">
+                            <span class="btn-icon">➕</span>
+                            <span class="btn-text">手动增加指标</span>
+                        </button>
+                        <button type="button" class="btn-report-action btn-report-ghost" onclick="openI18nModal()" title="配置中英文双语字典">
+                            <span class="btn-icon">🌐</span>
+                            <span class="btn-text">中英翻译配置</span>
+                        </button>
+                    </div>
+
+                    <div class="report-sub-bar print-hide" data-html2canvas-ignore="true">
+                        <div id="report-deficiency-summary" class="report-deficiency-summary"></div>
+                        <div id="reportSourcePanel" class="data-source-panel" style="display:none !important;"></div>
+                        <select id="reportSourceMode" class="data-source-select" style="display:none !important;">
+                            <option value="auto">自动模式</option>
+                            <option value="sqlite">强制 SQLite</option>
+                        </select>
+                        <div id="report-ranking-insights" class="ranking-insights"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="report-ranking-summary"></div>
+        </div>
+
+        <!-- Weight Config Modal -->
+        <div id="weight-modal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+            <div
+                style="background:#fff; border-radius:12px; width:500px; max-width:90%; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+                <h3 style="margin-top:0; border-bottom:1px solid #eee; padding-bottom:12px; margin-bottom:16px;">⚖️
+                    配置指标权重</h3>
+                <div id="weight-modal-list"
+                    style="max-height:60vh; overflow-y:auto; margin-bottom:16px; display:flex; flex-direction:column; gap:10px;">
+                    <!-- populated by js -->
+                </div>
+                <div style="text-align:right; border-top:1px solid #eee; padding-top:16px;">
+                    <button onclick="closeWeightModal()"
+                        style="padding:8px 16px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; margin-right:10px;">取消</button>
+                    <button onclick="saveWeights()"
+                        style="padding:8px 16px; border:none; background:#0277bd; color:#fff; border-radius:6px; cursor:pointer; font-weight:bold;">保存并重新计算</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Manual Metric Modal -->
+        <div id="add-metric-modal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+            <div
+                style="background:#fff; border-radius:12px; width:600px; max-width:90%; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+                <h3
+                    style="margin-top:0; border-bottom:1px solid #eee; padding-bottom:12px; margin-bottom:16px; color:#2e7d32;">
+                    ➕ 手动增加指标</h3>
+                <div style="max-height:60vh; overflow-y:auto; margin-bottom:16px; padding-right:10px;"
+                    id="add-metric-form">
+                    <!-- populated by js -->
+                </div>
+                <div style="text-align:right; border-top:1px solid #eee; padding-top:16px;">
+                    <button onclick="closeAddMetricModal()"
+                        style="padding:8px 16px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; margin-right:10px;">取消</button>
+                    <button onclick="saveManualMetric()"
+                        style="padding:8px 16px; border:none; background:#2e7d32; color:#fff; border-radius:6px; cursor:pointer; font-weight:bold;">保存指标到快照</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Group Config Modal -->
+        <div id="group-modal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+            <div
+                style="background:#fff; border-radius:12px; width:720px; max-width:95vw; max-height:90vh; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.25);">
+                <div
+                    style="padding:20px 24px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; color:#283593;">📂 指标分组配置</h3>
+                    <span style="font-size:12px; color:#888;">拖拽调整分组及指标顺序，点击指标标签分配到分组</span>
+                </div>
+                <div style="flex:1; overflow-y:auto; padding:20px 24px; display:flex; gap:20px;">
+                    <!-- Left: groups -->
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:13px; font-weight:600; color:#555; margin-bottom:10px;">分组列表（可拖拽排序）</div>
+                        <div id="group-list-container"></div>
+                        <button class="btn-add-group" onclick="addNewGroup()">＋ 新增分组</button>
+                    </div>
+                    <!-- Right: unassigned pool -->
+                    <div style="width:200px; flex-shrink:0;">
+                        <div style="font-size:13px; font-weight:600; color:#555; margin-bottom:10px;">未分组指标 <span
+                                style="color:#999;font-weight:normal;">(点击分配)</span></div>
+                        <div id="unassigned-pool" class="unassigned-pool"></div>
+                    </div>
+                </div>
+                <div
+                    style="padding:16px 24px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:10px;">
+                    <button onclick="closeGroupModal()"
+                        style="padding:8px 18px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer;">取消</button>
+                    <button onclick="saveGroups()"
+                        style="padding:8px 18px; border:none; background:#3949ab; color:#fff; border-radius:6px; cursor:pointer; font-weight:bold;">保存分组配置</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- I18n Config Modal -->
+        <div id="i18n-modal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+            <div
+                style="background:#fff; border-radius:12px; width:700px; max-width:95vw; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,0.25);">
+                <div
+                    style="padding:20px 24px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; color:#e65100;">🌐 中英文翻译字典配置</h3>
+                    <span style="font-size:12px; color:#888;">可覆盖或新增中文对应的英文翻译（对所有用户生效）</span>
+                </div>
+                <div style="padding:20px 24px; display:flex; gap:10px; border-bottom:1px solid #f0f0f0;">
+                    <input type="text" id="i18n-new-zh" placeholder="中文原词 (如：新指标)"
+                        style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:13px;">
+                    <input type="text" id="i18n-new-en" placeholder="英文翻译 (如：New Metric)"
+                        style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:13px;">
+                    <button onclick="addI18nEntry()"
+                        style="padding:8px 16px; background:#e65100; color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">添加
+                        / 修改</button>
+                </div>
+                <div style="padding:12px 24px 0 24px;">
+                    <input type="text" id="i18n-search" placeholder="🔍 搜索指标 (搜索中文或英文)..." oninput="renderI18nList()"
+                        style="width:100%; padding:8px 12px; border:1px solid #e0e0e0; border-radius:6px; font-size:13px; background:#fafafa; outline:none;">
+                </div>
+                <div style="flex:1; max-height:50vh; overflow-y:auto; padding:0 24px;">
+                    <table style="width:100%; border-collapse:collapse; margin-top:10px;">
+                        <thead>
+                            <tr>
+                                <th
+                                    style="text-align:left; padding:10px 8px; border-bottom:2px solid #eee; position:sticky; top:0; background:#fff; z-index:1;">
+                                    中文原文</th>
+                                <th
+                                    style="text-align:left; padding:10px 8px; border-bottom:2px solid #eee; position:sticky; top:0; background:#fff; z-index:1;">
+                                    英文翻译</th>
+                                <th
+                                    style="text-align:center; padding:10px 8px; border-bottom:2px solid #eee; position:sticky; top:0; background:#fff; z-index:1; width:60px;">
+                                    操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="i18n-list-container">
+                            <!-- populated by js -->
+                        </tbody>
+                    </table>
+                </div>
+                <div
+                    style="padding:16px 24px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:10px;">
+                    <button onclick="closeI18nModal()"
+                        style="padding:8px 18px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer;">取消</button>
+                    <button onclick="saveI18nMap()"
+                        style="padding:8px 18px; border:none; background:#e65100; color:#fff; border-radius:6px; cursor:pointer; font-weight:bold;">保存字典并刷新</button>
+                </div>
+            </div>
+        </div>
+
+
+        <div id="report-content" class="dashboard-grid">
+            <div class="empty-state">
+                <h3>⏳ 正在加载快照数据...</h3>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/shared/api.js"></script>
+    <script src="js/shared/toast.js"></script>
+    <script src="js/shared/i18n.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/navbar.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <script src="js/report/i18n.js"></script>
+    <script src="js/shared/exceljs.min.js"></script>
+    <script>
+        function formatReportSourceLabel(source) {
+            if (source === 'sqlite') return 'SQLite';
+            if (source === 'json') return 'JSON';
+            if (source === 'auto') return window.ReportI18n ? window.ReportI18n.sourceLabel(source) : '自动模式';
+            return source || '-';
+        }
+
+        async function renderReportFrontendVersion() {
+            const versionEl = document.getElementById('reportFrontendVersion');
+            if (!versionEl) return;
+            const version = await window.ToolsAppVersion?.get();
+            const t = window.REPORT_T || ((key, params) => {
+                const fallback = {
+                    'report.version.unmarked': 'v未标记',
+                    'report.version.title': '平台版本：{version}',
+                    'report.version.missing': '未能获取平台版本'
+                }[key] || key;
+                return Object.keys(params || {}).reduce((acc, name) => acc.replaceAll(`{${name}}`, params[name]), fallback);
+            });
+            versionEl.textContent = version ? `v${version}` : t('report.version.unmarked');
+            versionEl.title = version ? t('report.version.title', { version }) : t('report.version.missing');
+        }
+
+        function renderReportSourcePanel() {
+            const panel = document.getElementById('reportSourcePanel');
+            if (!panel) return;
+            const mode = API.getSourceMode('report_sla_data');
+            const query = mode === 'auto' ? '' : `?mode=${encodeURIComponent(mode)}`;
+            const snapshotMeta = API.getLastDataSourceMeta(`/api/sla/snapshots${query}`) || API.getLastDataSourceMeta('/api/sla/snapshots') || {};
+            const categoryMeta = API.getLastDataSourceMeta(`/api/sla/categories${query}`) || API.getLastDataSourceMeta('/api/sla/categories') || {};
+            const groupsMeta = API.getLastDataSourceMeta(`/api/sla/groups${query}`) || API.getLastDataSourceMeta('/api/sla/groups') || {};
+            const configMeta = API.getLastDataSourceMeta(`/api/sla/config${query}`) || API.getLastDataSourceMeta('/api/sla/config') || {};
+            const t = window.REPORT_T || ((key) => key);
+            panel.innerHTML = `
+                <span class="data-source-badge">${t('report.source.snapshot')}: ${formatReportSourceLabel(snapshotMeta.primary)}</span>
+                <span class="data-source-badge">${t('report.source.category')}: ${formatReportSourceLabel(categoryMeta.primary)}</span>
+                <span class="data-source-badge">${t('report.source.group')}: ${formatReportSourceLabel(groupsMeta.primary)}</span>
+                <span class="data-source-badge">${t('report.source.config')}: ${formatReportSourceLabel(configMeta.primary)}</span>
+                <span class="data-source-badge">${t('report.source.target')}: ${formatReportSourceLabel((configMeta.extras || {}).targets)}</span>
+                <span class="data-source-note">${t('report.source.currentMode')}: ${formatReportSourceLabel(mode)} · ${t('report.source.currentNote')}</span>
+            `;
+        }
+
+        window.renderReportSourcePanel = renderReportSourcePanel;
+        document.addEventListener('DOMContentLoaded', renderReportFrontendVersion);
+        window.addEventListener('tools:languagechange', () => {
+            renderReportFrontendVersion();
+            renderReportSourcePanel();
+        });
+    </script>
+
+    <!-- Template Mapping Modal -->
+    <div id="template-mapping-modal" class="modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="template-mapping-title"
+            style="background:#fff; width:90%; max-width:1000px; margin:50px auto; padding:20px; border-radius:8px; max-height:80vh; display:flex; flex-direction:column;">
+            <h2 id="template-mapping-title">⚙️ 配置 Excel 模板映射</h2>
+            <p>将系统指标与 Excel 模板的具体行建立映射关系，以应对模板的动态变化。C 列文本会保存至 Excel 中。</p>
+            <div style="flex:1; overflow-y:auto; margin:15px 0;">
+                <table class="matrix-table" style="width:100%;">
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">行号</th>
+                            <th style="width:40%;">Excel 模板 C 列文本 (可编辑)</th>
+                            <th>映射到系统指标</th>
+                            <th style="width:120px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mapping-tbody">
+                        <tr>
+                            <td colspan="4" style="text-align:center;">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div style="margin-top: 10px; text-align: center;">
+                    <button type="button" onclick="addNewMappingRow()"
+                        style="font-size: 13px; padding: 6px 12px; cursor: pointer; border-radius: 4px; border: 1px dashed #ccc; background: #f9f9f9; color: #666;">+
+                        手动增加新空行</button>
+                </div>
+            </div>
+            <div style="text-align:right;">
+                <button class="btn btn-secondary"
+                    onclick="document.getElementById('template-mapping-modal').style.display='none'">取消</button>
+                <button class="btn btn-info" onclick="autoFillSequentialMapping()" style="margin-right:10px;">✨
+                    一键按顺序自动预填</button>
+                <button class="btn btn-primary" onclick="saveTemplateMapping()">保存并修改模板</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Yuxiang Export Preview Modal -->
+    <div id="yuxiang-preview-modal" class="modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:10000;">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="yuxiang-preview-title"
+            style="background:#fff; width:95%; max-width:1400px; margin:40px auto; padding:20px; border-radius:8px; height:calc(100vh - 80px); display:flex; flex-direction:column; box-shadow: 0 10px 40px rgba(0,0,0,0.25);">
+            <div
+                style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px;">
+                <h2 id="yuxiang-preview-title" style="margin:0; color:#ad1457;">🐴 于祥赛马表 - 导出前数据预览与编辑</h2>
+                <span style="color:#666; font-size:13px;">这里展示的是真实 Excel 的完整形态。直接点击虚线框的单元格进行修改，修改后点击右下角确认导出。</span>
+            </div>
+            <div style="flex:1; overflow:auto; margin:15px 0; background:#f5f6fa; border:1px solid #ddd;">
+                <table class="matrix-table"
+                    style="width:max-content; min-width:100%; font-size:8px; table-layout:fixed; border-collapse:collapse; background:#fff;"
+                    id="yuxiang-preview-table">
+                    <tbody id="yuxiang-preview-tbody">
+                        <tr>
+                            <td style="text-align:center; padding: 20px;">正在生成真实 Excel 快照...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="text-align:right; border-top:1px solid #eee; padding-top:15px;">
+                <button class="btn btn-secondary"
+                    onclick="document.getElementById('yuxiang-preview-modal').style.display='none'">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-yuxiang-export" onclick="confirmYuxiangExport()"
+                    style="background:#ad1457; border-color:#ad1457; margin-left:10px;">✅ 确认并导出 Excel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/report/target-auto-fill.js"></script>
+    <script src="js/report/manual-adjust-autofill.js"></script>
+    <script src="js/report/snapshot-target-month.js"></script>
+    <script src="js/report/export-filenames.js"></script>
+    <script src="js/report/snapshot-filter.js"></script>
+    <script src="js/report/report.js"></script>
+</body>
+
+</html>

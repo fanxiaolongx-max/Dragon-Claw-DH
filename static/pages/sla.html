@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <script src="js/shared/dh-runtime.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task SLA 风险监控台 - Dragon Claw</title>
+    <meta name="description" content="Task SLA & 风险监控全局中台，整改/常规/专项三表合一，SLA预警呼吸灯">
+    <link rel="icon" type="image/x-icon" href="favicon.ico?v=20261006">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icon.png">
+    <link rel="apple-touch-icon" href="assets/icon-mac.png">
+    <script defer src="js/shared/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/sla.css">
+    <style>
+        .sla-source-wrapper {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .sla-source-panel {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .sla-source-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .sla-source-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background: rgba(59,130,246,0.14);
+            border: 1px solid rgba(59,130,246,0.3);
+            color: #93c5fd;
+        }
+        .sla-source-note {
+            font-size: 11px;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+        .sla-source-select {
+            height: 32px;
+            border-radius: 8px;
+            border: 1px solid rgba(59,130,246,0.28);
+            background: rgba(15,23,42,0.65);
+            color: #e2e8f0;
+            font-size: 12px;
+            padding: 0 10px;
+            outline: none;
+        }
+        .sla-source-select option {
+            color: #0f172a;
+        }
+    </style>
+    <link rel="stylesheet" href="css/startup-screen.css">
+</head>
+<body class="sla-page">
+    <script src="js/shared/startup-screen.js" data-startup-page="sla"></script>
+
+    <div id="metric-rule-mapping-modal" class="modal-overlay" style="display: none; z-index: 100000;">
+        <div class="modal-content metric-rule-mapping-modal-content">
+            <div class="modal-header metric-rule-template-header">
+                <div>
+                    <h3>快速映射模板编辑</h3>
+                    <p>固定两列填写；从 Excel 复制两列后粘贴到任意单元格即可自动填充。</p>
+                </div>
+                <button class="modal-close" onclick="closeMetricRuleMappingModal()">✖</button>
+            </div>
+            <div class="modal-body metric-rule-template-body">
+                <div class="metric-rule-template-toolbar">
+                    <span>分类来自全局分类；从 Excel 粘贴一列条件值会按当前行向下填充，粘贴两列会按分类名匹配填充。</span>
+                </div>
+                <div class="metric-rule-template-table-wrap">
+                    <table class="metric-rule-template-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>子指标分类</th>
+                                <th>条件值</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metric-rule-mapping-rows" onpaste="handleMetricRuleMappingPaste(event)"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer metric-rule-template-footer">
+                <button class="metric-rule-mapping-btn secondary" onclick="closeMetricRuleMappingModal()">取消</button>
+                <button class="metric-rule-mapping-btn" onclick="saveAndApplyMetricRuleMapping()">保存并应用</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部固定容器 -->
+    <div id="global-sticky-bar">
+        <div class="sticky-bar-title">⚡ 核心数据舱：</div>
+        <div id="sticky-bar-content">
+            <span style="color:#888;">(当前未配置指标，请在下方独立表格中点击"🎯 指标"添加)</span>
+        </div>
+        <div class="sticky-actions">
+            <button id="btn-target-config" class="top-btn btn-target" style="display:none;" onclick="openTargetModal()">🎯 预警配置</button>
+            <button id="btn-expand-metrics" class="top-btn btn-expand" style="display:none;">🔽 展开多行</button>
+        </div>
+    </div>
+
+    <!-- 预警配置弹窗 -->
+    <div id="target-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🎯 配置分月目标与预警方向</h3>
+                <div class="target-modal-header-actions">
+                    <button id="target-view-toggle" class="target-view-toggle" onclick="toggleTargetViewMode()">切换表格模式</button>
+                    <button class="modal-close" onclick="closeTargetModal()">✖</button>
+                </div>
+            </div>
+            <div class="modal-body" id="target-modal-list"></div>
+            <div class="modal-footer">
+                <button class="btn-save" onclick="saveTargets()">保存全网预警配置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全量指标规则展示弹窗 -->
+    <div id="metric-rules-modal" class="modal-overlay">
+        <div class="modal-content metric-rules-modal-content">
+            <div class="modal-header metric-rules-modal-header">
+                <h3>📚 全量指标规则总览</h3>
+                <button class="modal-close" onclick="closeMetricRulesModal()">✖</button>
+            </div>
+            <div class="modal-body metric-rules-modal-body">
+                <div class="metric-rules-toolbar">
+                    <input type="text" id="metric-rules-search" class="picker-search" placeholder="搜索表名、指标名、字段、关键字、分类..." oninput="renderAllMetricRules()">
+                    <label class="metric-rules-check"><input type="checkbox" id="metric-rules-cross-only" onchange="renderAllMetricRules()"> 只看跨表规则</label>
+                    <label class="metric-rules-check"><input type="checkbox" id="metric-rules-monthly-only" onchange="renderAllMetricRules()"> 月报编辑器创建</label>
+                </div>
+                <div id="metric-rules-modal-list" class="metric-rules-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 指标规则批量复制弹窗 -->
+    <div id="metric-rule-copy-modal" class="modal-overlay">
+        <div class="modal-content metric-rule-copy-modal-content">
+            <div class="modal-header metric-rule-edit-header">
+                <div>
+                    <h3>📋 复制指标规则</h3>
+                    <p id="metric-rule-copy-subtitle">批量复制后逐行修改字段并保存</p>
+                </div>
+                <button class="modal-close" onclick="closeMetricRuleCopyModal()">✖</button>
+            </div>
+            <div class="modal-body metric-rule-copy-body">
+                <input type="hidden" id="metric-rule-copy-index">
+                <div id="metric-rule-copy-original" class="metric-rule-copy-original"></div>
+                <div class="metric-rule-copy-controls">
+                    <label class="metric-rule-edit-field metric-rule-copy-count-field">
+                        <span>复制数量</span>
+                        <input id="metric-rule-copy-count" type="number" min="1" max="50" value="1" onchange="renderMetricRuleCopyRows()" oninput="renderMetricRuleCopyRows()">
+                    </label>
+                    <button id="metric-rule-fast-apply-btn" class="metric-rule-mapping-btn" onclick="directApplyMetricRuleMapping()">⚡ 快速映射填写</button>
+                    <button id="metric-rule-fast-template-btn" class="metric-rule-mapping-btn secondary" onclick="openMetricRuleMappingModal()">快速映射模板</button>
+                    <div class="metric-rule-copy-hint">每一行都会创建一条新规则，保存前可以横向修改名称、模式、字段和挂载关系。</div>
+                </div>
+                <div class="metric-rule-copy-table-wrap">
+                    <table class="metric-rule-copy-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>指标名称</th>
+                                <th>模式</th>
+                                <th>子指标分类/归属</th>
+                                <th>挂载到主指标</th>
+                                <th>条件列 X</th>
+                                <th>条件值 Y</th>
+                                <th>展示/统计列 Z</th>
+                                <th>统计值 K</th>
+                                <th>高级多重过滤</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metric-rule-copy-rows"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer metric-rule-edit-footer">
+                <button class="metric-rule-edit-cancel" onclick="closeMetricRuleCopyModal()">取消</button>
+                <button class="metric-rule-edit-save" onclick="saveMetricRuleCopies()">保存复制</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 复制规则：逐行高级条件编辑弹窗 -->
+    <div id="metric-rule-copy-conditions-modal" class="modal-overlay" style="z-index:100002;">
+        <div class="modal-content metric-rule-copy-conditions-modal-content">
+            <div class="modal-header metric-rule-edit-header">
+                <div>
+                    <h3>⚙️ 高级多重过滤</h3>
+                    <p id="metric-rule-copy-conditions-subtitle">配置当前复制规则的附加列条件</p>
+                </div>
+                <button class="modal-close" onclick="closeMetricRuleCopyConditionsEditor()">✖</button>
+            </div>
+            <div class="modal-body metric-rule-edit-body">
+                <input type="hidden" id="metric-rule-copy-conditions-row-index">
+                <div class="metric-rule-copy-conditions-note">以下条件与主条件 X/Y 同时满足（AND）。修改只应用到当前这一条复制规则。</div>
+                <div id="metric-rule-copy-conditions-list"></div>
+                <button type="button" class="metric-condition-add" onclick="addMetricRuleCopyCondition()">＋ 增加列条件</button>
+            </div>
+            <div class="modal-footer metric-rule-edit-footer">
+                <button class="metric-rule-edit-cancel" onclick="closeMetricRuleCopyConditionsEditor()">取消</button>
+                <button class="metric-rule-edit-save" onclick="applyMetricRuleCopyConditionsEditor()">应用到当前复制规则</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 指标规则编辑弹窗 -->
+    <div id="metric-rule-edit-modal" class="modal-overlay">
+        <div class="modal-content metric-rule-edit-modal-content">
+            <div class="modal-header metric-rule-edit-header">
+                <div>
+                    <h3>✏️ 编辑指标规则</h3>
+                    <p id="metric-rule-edit-subtitle">修改模式、条件、展示统计和挂载关系</p>
+                </div>
+                <button class="modal-close" onclick="closeMetricRuleEditor()">✖</button>
+            </div>
+            <div class="modal-body metric-rule-edit-body">
+                <input type="hidden" id="metric-rule-edit-index">
+                <div class="metric-rule-edit-grid">
+                    <label class="metric-rule-edit-field">
+                        <span>指标名称</span>
+                        <input id="metric-rule-edit-label" type="text" placeholder="例如：业务比对回传率">
+                    </label>
+                    <label class="metric-rule-edit-field">
+                        <span>模式</span>
+                        <select id="metric-rule-edit-type" onchange="refreshMetricRuleEditorMode()">
+                            <option value="extract">提取 SHOW</option>
+                            <option value="extract_multi">提取多行 AGGREGATE</option>
+                            <option value="count">统计 COUNT</option>
+                            <option value="ratio">占比 RATIO</option>
+                        </select>
+                    </label>
+                    <label class="metric-rule-edit-field">
+                        <span>数据范围</span>
+                        <select id="metric-rule-edit-scope">
+                            <option value="current">仅当前独立表（默认）</option>
+                            <option value="all">🌐 跨所有独立表联合提取</option>
+                        </select>
+                    </label>
+                    <label class="metric-rule-edit-field metric-rule-edit-sub-only">
+                        <span>子指标分类/归属</span>
+                        <select id="metric-rule-edit-category"></select>
+                    </label>
+                    <label class="metric-rule-edit-field metric-rule-edit-sub-only">
+                        <span>挂载到主指标</span>
+                        <select id="metric-rule-edit-parent"></select>
+                    </label>
+                    <label class="metric-rule-edit-field">
+                        <span id="metric-rule-edit-colx-label">条件列 X</span>
+                        <select id="metric-rule-edit-colx" style="cursor:pointer;"></select>
+                    </label>
+                    <label class="metric-rule-edit-field">
+                        <span id="metric-rule-edit-valy-label">条件值 Y</span>
+                        <input id="metric-rule-edit-valy" type="text" placeholder="包含的关键字，可为空">
+                    </label>
+                    <label class="metric-rule-edit-field">
+                        <span id="metric-rule-edit-colz-label">展示/统计列 Z</span>
+                        <select id="metric-rule-edit-colz" style="cursor:pointer;"></select>
+                    </label>
+                    <label class="metric-rule-edit-field metric-rule-edit-stat-only">
+                        <span id="metric-rule-edit-valk-label">统计值 K</span>
+                        <input id="metric-rule-edit-valk" type="text" placeholder="统计/占比分子关键字">
+                    </label>
+                    <label class="metric-rule-edit-field metric-rule-edit-multi-only">
+                        <span>多行计算方法</span>
+                        <select id="metric-rule-edit-aggregation">
+                            <option value="first">取原表首条（保留文本）</option>
+                            <option value="sum">求和（默认）</option>
+                            <option value="avg">平均值</option>
+                            <option value="max">最大值</option>
+                            <option value="min">最小值</option>
+                            <option value="count">有效数值个数</option>
+                        </select>
+                    </label>
+                    <label class="metric-rule-edit-field metric-rule-edit-multi-only">
+                        <span>全部过滤条件关系</span>
+                        <select id="metric-rule-edit-filter-logic">
+                            <option value="and">AND：主条件和附加条件全部满足</option>
+                            <option value="or">OR：主条件或任一附加条件满足</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="metric-rule-edit-conditions">
+                    <div class="metric-rule-edit-conditions-head">
+                        <div><b>高级多重过滤</b><span id="metric-rule-edit-conditions-help">所有条件同时满足（AND），可继续增加新的列条件。</span></div>
+                        <button type="button" onclick="addMetricRuleEditorCondition()">＋ 增加列条件</button>
+                    </div>
+                    <div id="metric-rule-edit-conditions-list"></div>
+                </div>
+                <div id="metric-rule-edit-preview" class="metric-rule-edit-preview"></div>
+            </div>
+            <div class="modal-footer metric-rule-edit-footer">
+                <button class="metric-rule-edit-cancel" onclick="closeMetricRuleEditor()">取消</button>
+                <button class="metric-rule-edit-save" onclick="saveMetricRuleEditor()">保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局分类管理弹窗 -->
+    <div id="category-modal" class="modal-overlay">
+        <div class="modal-content" style="width: 400px; min-width: 300px;">
+            <div class="modal-header">
+                <h3 style="margin: 0; color: #1976d2;">🏷️ 指标维度分类管理（客户群/代表处/地区部）</h3>
+                <button class="modal-close" onclick="closeCategoryModal()">✖</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <div style="display:flex; gap: 10px; margin-bottom: 15px;">
+                    <input type="text" id="new-category-input" placeholder="输入新分类名称..." style="flex:1; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+                    <button class="action-btn" onclick="addCategory()" style="background: #2e7d32; color: white; border: none;">➕ 添加</button>
+                </div>
+                <div id="category-list" style="display:flex; flex-wrap: wrap; gap: 8px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-save" onclick="saveCategories()">保存全部分类</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史导入看板弹窗 -->
+    <div id="history-modal" class="modal-overlay">
+        <div class="modal-content history-modal-content">
+            <div class="modal-header" style="flex-shrink: 0; padding-bottom: 10px;">
+                <h3 style="margin: 0; color: #1976d2;">📈 历史导入预警快照</h3>
+                <button class="modal-close" onclick="closeHistoryModal()">✖</button>
+            </div>
+            <div class="modal-body" id="history-modal-list">
+                <div class="loading-text">正在加载历史快照...</div>
+            </div>
+            <div id="history-pagination-bar" class="history-pagination-bar" style="display:none;"></div>
+            <div id="history-horizontal-scroll" class="history-horizontal-scroll">
+                <span data-history-scroll-label>横向浏览</span>
+                <button type="button" data-history-scroll-left aria-label="向左滚动" disabled>‹</button>
+                <input type="range" data-history-scroll-range min="0" max="0" value="0" step="1" aria-label="横向滚动历史快照表格" aria-controls="history-table-scroll" disabled>
+                <button type="button" data-history-scroll-right aria-label="向右滚动" disabled>›</button>
+                <small data-history-scroll-position>所有列已展示</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="sla-content">
+        <!-- 页头区域 -->
+        <div class="header-container">
+            <h2>
+                <span>📊 全局数据合控大中台 <span style="font-size:12px;color:#ff9800;font-weight:normal;border:1px solid #ff9800;padding:2px 6px;border-radius:12px;margin-left:10px;">旗舰定制版</span> <span id="slaFrontendVersion" style="font-size:14px;color:#94a3b8;font-weight:normal;margin-left:8px;border:none;background:none;padding:0;">v加载中</span></span>
+            </h2>
+            <div class="system-actions">
+                <button class="sys-btn" style="background:#0277bd; color: white;" onclick="openCategoryModal()">🏷️ 全局分类</button>
+                <button class="sys-btn" style="background:#8e24aa; color: white;" onclick="openHistoryModal()">📈 历史看板</button>
+                <button class="sys-btn" style="background:#6a1b9a; color: white;" onclick="openMetricRulesModal()">📚 全量规则</button>
+                <button class="sys-btn" onclick="SLAConfig.exportConfig()" title="备份所有的列宽、显示状态、顶部指标和预警目标">💾 导出全量配置</button>
+                <label class="sys-btn" title="导入配置文件，一键恢复设置">
+                    📂 导入配置
+                    <input type="file" accept=".json" onchange="SLAConfig.importConfig(event)">
+                </label>
+            </div>
+            <div class="source-info-wrapper" style="display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+                <div class="sla-source-controls">
+                    <span class="sla-source-note">SLA读源模式:</span>
+                    <select id="slaSourceMode" class="sla-source-select">
+                        <option value="auto">自动模式</option>
+                        <option value="sqlite">强制 SQLite</option>
+                    </select>
+                </div>
+                <div class="sla-source-controls">
+                    <span class="sla-source-note">目标月份:</span>
+                    <select id="slaTargetMonthSelect" class="sla-source-select"></select>
+                </div>
+                <div id="slaSourcePanel" class="sla-source-panel">
+                    <span class="sla-source-badge">目标来源: -</span>
+                    <span class="sla-source-badge">偏好来源: -</span>
+                    <span class="sla-source-badge">分类来源: -</span>
+                    <span class="sla-source-badge">分组来源: -</span>
+                    <span class="sla-source-badge">快照来源: -</span>
+                    <span class="sla-source-note">迁移期要求页面直接显示真实读源，便于验证。</span>
+                </div>
+            </div>
+
+            <div class="rule-box">
+                <div class="rule-col">
+                    <strong style="color:#1976d2;">🔧【整改】</strong>
+                    <ul>
+                        <li><b>文件：</b>PBI_自动抓取-整改详单_整改_Latest 前缀</li>
+                        <li><b>状态：</b>task_status</li>
+                        <li><b>Checking：</b>task_create_time +30天；剩余 ≤10天红，&lt;30天黄</li>
+                        <li><b>Rectification Implementation：</b>rectify_plan_end_time；剩余 ≤10天红，&lt;82天黄</li>
+                    </ul>
+                </div>
+                <div class="rule-col rule-col-border">
+                    <strong style="color:#7b1fa2;">⚠️【常规风险】</strong>
+                    <ul>
+                        <li><b>文件：</b>PBI_自动抓取-风险详单_Latest 前缀</li>
+                        <li><b>状态：</b>风险状态 → risk_status（首个非空）</li>
+                        <li><b>Risk Confirming：</b>创单时间/create_time +30天；剩余 ≤10天红，&lt;30天紫</li>
+                        <li><b>Open / Suspended / Complete Reviewing：</b>ticket_close_due_date；剩余 ≤10天红，&lt;30天紫</li>
+                    </ul>
+                </div>
+                <div class="rule-col rule-col-border">
+                    <strong style="color:#00796b;">🛠️【专项风险】</strong>
+                    <ul>
+                        <li><b>文件：</b>PBI_自动抓取-CPT风险详表_Latest 前缀</li>
+                        <li><b>状态：</b>状态-Status → task_status_en → task_status → task_status_cn（首个非空）</li>
+                        <li><b>待确认/草稿/Confirm：</b>创建日期 +30天；剩余 ≤10天红，&lt;30天青</li>
+                        <li><b>处理中/评审中：</b>要求完成日期；剩余 ≤10天红，&lt;30天青</li>
+                    </ul>
+                </div>
+                <div class="rule-col rule-col-border">
+                    <strong style="color:#d9480f;">📞【SR详单】</strong>
+                    <ul>
+                        <li><b>文件：</b>PBI_自动抓取-详单-SR_Latest 前缀</li>
+                        <li><b>状态：</b>sr_status_name</li>
+                        <li><b>到期：</b>sus_exp_close_date 优先，否则 exp_close_date</li>
+                        <li><b>忽略：</b>Pending / Suspend / Hold / 挂起</li>
+                        <li><b>超期/等级：</b>overdue；hw_sev_name / urgency（Critical 阈值）</li>
+                    </ul>
+                </div>
+                <div class="rule-col rule-col-border">
+                    <strong style="color:#c2410c;">🧯【漏洞预警】</strong>
+                    <ul>
+                        <li><b>文件：</b>PBI_自动抓取-详单漏洞_漏洞预警_Latest 前缀</li>
+                        <li><b>状态：</b>task_status</li>
+                        <li><b>范围：</b>Checking / Communication Dept / Communication Customer</li>
+                        <li><b>时限：</b>create_time 或 task_create_time +30天；剩余 ≤10天红，&lt;30天黄</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="upload-actions">
+                <label class="upload-btn btn-batch-xl">
+                    📦 一键批量导入所有表 (智能分流合并)
+                    <input type="file" id="batch-upload" accept=".xlsx,.xls,.csv" multiple>
+                </label>
+                <span style="color:#ccc;">|</span>
+                <label class="upload-btn btn-rect">指定导入 [整改] <input type="file" id="rect-upload" accept=".xlsx,.xls,.csv" multiple></label>
+                <label class="upload-btn btn-risk">指定导入 [常规] <input type="file" id="risk-upload" accept=".xlsx,.xls,.csv" multiple></label>
+                <label class="upload-btn btn-special">指定导入 [专项] <input type="file" id="special-upload" accept=".xlsx,.xls,.csv" multiple></label>
+                <label class="upload-btn" style="background:#d9480f; color:white;">指定导入 [SR] <input type="file" id="sr-upload" accept=".xlsx,.xls,.csv" multiple></label>
+                <label class="upload-btn" style="background:#c2410c; color:white;">指定导入 [漏洞] <input type="file" id="vuln-upload" accept=".xlsx,.xls,.csv" multiple></label>
+                <button type="button" class="upload-cache-clear" onclick="SLAUpload.clearWorkspaceCache()">清空当前缓存</button>
+                <div id="upload-status-group" class="upload-status-group" style="display:none;">
+                    <div id="sourceArchiveStatus" class="upload-status-item upload-source-archive-status" role="status"></div>
+                    <div id="metricSnapshotSyncStatus" class="upload-status-item upload-metric-sync-status" role="status"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="summary-nav-area"></div>
+
+        <div id="main-wrapper">
+            <div class="sla-empty-workspace">
+                请点击上方 <b>"📦 一键批量导入所有表"</b> 按钮，选择文件夹中需要分析的文件...
+            </div>
+        </div>
+    </div>
+
+    <!-- 共享脚本 -->
+    <script src="js/shared/api.js"></script><script src="js/shared/monthly-metric-updates.js"></script>
+    <script src="js/shared/toast.js"></script>
+    <script src="js/shared/i18n.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/navbar.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <!-- SLA 模块（注意加载顺序）-->
+    <script src="js/sla/i18n.js"></script>
+    <script src="js/sla/config.js"></script>
+    <script src="js/sla/prefs.js"></script>
+    <script src="js/sla/source-archive.js"></script>
+    <script src="js/sla/metric-snapshot-sync.js"></script>
+    <script src="js/sla/upload.js"></script>
+    <script src="js/sla/rule-picker.js"></script>
+    <script src="js/sla/risk-rules.js"></script>
+    <script src="js/sla/other-rules.js"></script>
+    <script src="js/sla/row-detail.js"></script>
+    <script src="js/sla/section.js"></script>
+    <script src="js/sla/table.js"></script>
+    <script src="js/shared/metric-extraction.js"></script>
+    <script src="js/sla/events.js"></script>
+    <script src="js/sla/metrics.js"></script>
+    <script src="js/sla/history.js"></script>
+    <script src="js/sla/categories.js"></script>
+    <script>
+        function formatSLASourceLabel(source) {
+            if (window.SLAI18n && typeof window.SLAI18n.sourceLabel === 'function') return window.SLAI18n.sourceLabel(source);
+            if (source === 'sqlite') return 'SQLite';
+            if (source === 'json') return 'JSON';
+            if (source === 'auto') return '自动模式';
+            return source || '-';
+        }
+
+        async function renderSLAFrontendVersion() {
+            const versionEl = document.getElementById('slaFrontendVersion');
+            if (!versionEl) return;
+            const version = await window.ToolsAppVersion?.get();
+            versionEl.textContent = version ? `v${version}` : SLAT('sla.version.unmarked');
+            versionEl.title = version ? SLAT('sla.version.title', { version }) : SLAT('sla.version.missing');
+        }
+
+        function renderSLASourcePanel() {
+            const panel = document.getElementById('slaSourcePanel');
+            if (!panel) return;
+            const mode = API.getSourceMode('sla_data');
+            const catQuery = mode === 'auto' ? '' : `?mode=${encodeURIComponent(mode)}`;
+            const targetMeta = API.getLastDataSourceMeta(`/api/sla/targets${catQuery}`) || API.getLastDataSourceMeta('/api/sla/targets') || {};
+            const prefsPath = window.__lastSLAPrefsPath || '';
+            const prefsMeta = (prefsPath && API.getLastDataSourceMeta(prefsPath)) || API.getLastDataSourceMeta(`/api/sla/config${catQuery}`) || API.getLastDataSourceMeta('/api/sla/config') || {};
+            const categoryMeta = API.getLastDataSourceMeta(`/api/sla/categories${catQuery}`) || API.getLastDataSourceMeta('/api/sla/categories') || {};
+            const groupsMeta = API.getLastDataSourceMeta(`/api/sla/groups${catQuery}`) || API.getLastDataSourceMeta('/api/sla/groups') || {};
+            const summaryPath = `/api/sla/snapshots?view=summary${mode === 'auto' ? '' : `&mode=${encodeURIComponent(mode)}`}`;
+            const snapshotMeta = API.getLastDataSourceMeta(summaryPath) || API.getLastDataSourceMeta(`/api/sla/snapshots${catQuery}`) || API.getLastDataSourceMeta('/api/sla/snapshots') || {};
+
+            panel.dataset.loaded = '1';
+            panel.innerHTML = `
+                <span class="sla-source-badge">${SLAT('sla.source.targets', { source: formatSLASourceLabel(targetMeta.primary) })}</span>
+                <span class="sla-source-badge">${SLAT('sla.source.prefs', { source: formatSLASourceLabel(prefsMeta.primary) })}</span>
+                <span class="sla-source-badge">${SLAT('sla.source.categories', { source: formatSLASourceLabel(categoryMeta.primary) })}</span>
+                <span class="sla-source-badge">${SLAT('sla.source.groups', { source: formatSLASourceLabel(groupsMeta.primary) })}</span>
+                <span class="sla-source-badge">${SLAT('sla.source.snapshots', { source: formatSLASourceLabel(snapshotMeta.primary) })}</span>
+                <span class="sla-source-note">${SLAT('sla.source.currentNote', { mode: formatSLASourceLabel(mode) })}</span>
+            `;
+        }
+
+        async function initSLASourceMeta() {
+            const mode = API.getSourceMode('sla_data');
+            const query = mode === 'auto' ? '' : `?mode=${encodeURIComponent(mode)}`;
+            try { await API.get(`/api/sla/config${query}`); } catch (e) {window.ToolsPageStartup?.issue('meta',e);}
+            try { await API.get(`/api/sla/targets${query}`); } catch (e) {window.ToolsPageStartup?.issue('meta',e);}
+            try { await API.get(`/api/sla/categories${query}`); } catch (e) {window.ToolsPageStartup?.issue('meta',e);}
+            try { await API.get(`/api/sla/groups${query}`); } catch (e) {window.ToolsPageStartup?.issue('meta',e);}
+            // 只为显示「快照来源」标签：取摘要视图，不下载整份历史快照
+            try { await API.get(`/api/sla/snapshots?view=summary${mode === 'auto' ? '' : `&mode=${encodeURIComponent(mode)}`}`); } catch (e) {window.ToolsPageStartup?.issue('meta',e);}
+            renderSLASourcePanel();
+        }
+
+        window.renderSLASourcePanel = renderSLASourcePanel;
+
+        // 初始化：从服务端加载预警目标和分类
+        document.addEventListener('DOMContentLoaded', async () => {
+            const startup=window.ToolsPageStartup,load=(key,work)=>startup?startup.run(key,work):work();
+            try {
+            if (window.SLAI18n) window.SLAI18n.applyPage();
+            renderSLAFrontendVersion();
+            const modeSelect = document.getElementById('slaSourceMode');
+            if (modeSelect) {
+                modeSelect.value = API.getSourceMode('sla_data');
+                modeSelect.addEventListener('change', async () => {
+                    API.setSourceMode('sla_data', modeSelect.value);
+                    await initSLASourceMeta();
+                    if (window.refreshMetricRulePrefsCache) await window.refreshMetricRulePrefsCache();
+                    if (window.refreshSLAHighlightViews) window.refreshSLAHighlightViews(Object.keys(window.AppState || {}));
+                    if (window.initCategories) await window.initCategories();
+                });
+            }
+            await load('meta',()=>initSLASourceMeta());
+            if (window.refreshMetricRulePrefsCache) await load('rules',()=>window.refreshMetricRulePrefsCache());
+            await load('targets',()=>SLASection.initGlobalTargets());
+            if (window.initCategories) await load('categories',()=>window.initCategories());
+            if (window.SLATargetMonth && window.SLATargetMonth.init) {
+                window.SLATargetMonth.init();
+            }
+            await load('workspace',async()=>{
+            let autoImported = false;
+            if (window.SLAUpload && window.SLAUpload.importUivAutoSession) {
+                autoImported = await window.SLAUpload.importUivAutoSession();
+            }
+            if (!autoImported && window.SLAUpload && window.SLAUpload.restoreCachedWorkspace) {
+                await window.SLAUpload.restoreCachedWorkspace();
+            }
+            });
+            if (window.SLAMetrics && window.SLAMetrics.renderTopStickyBar) {
+                window.SLAMetrics.renderTopStickyBar();
+            }
+            await startup?.finish();
+            } catch(error){startup?.fail(error);console.error(error);}
+        });
+        // 文件上传事件绑定
+        document.getElementById('batch-upload').addEventListener('change', SLAUpload.handleBatchUpload, false);
+        document.getElementById('rect-upload').addEventListener('change', e => SLAUpload.handleSpecificUpload(e, 'rectification'), false);
+        document.getElementById('risk-upload').addEventListener('change', e => SLAUpload.handleSpecificUpload(e, 'risk'), false);
+        document.getElementById('special-upload').addEventListener('change', e => SLAUpload.handleSpecificUpload(e, 'special'), false);
+        document.getElementById('sr-upload').addEventListener('change', e => SLAUpload.handleSpecificUpload(e, 'sr'), false);
+        document.getElementById('vuln-upload').addEventListener('change', e => SLAUpload.handleSpecificUpload(e, 'vulnerability'), false);
+    </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "dragon-claw-dh",
+  "version": "1.0.0",
+  "description": "Dragon Claw Digital Human Web Edition (Node.js 22 + Fastify + Base REST)",
+  "type": "module",
+  "main": "run.js",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "scripts": {
+    "start": "node run.js",
+    "dev": "node scripts/dev.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "check": "node scripts/check.js",
+    "build": "npm run check && node scripts/build.js"
+  },
+  "dependencies": {
+    "@fastify/multipart": "8.3.1",
+    "@fastify/static": "7.0.4",
+    "@tutao/oxmsg": "0.2.3",
+    "acorn": "8.19.0",
+    "exceljs": "4.4.0",
+    "fastify": "4.29.1",
+    "jszip": "3.10.2",
+    "pino": "9.6.0",
+    "undici": "6.21.0",
+    "zod": "3.24.1"
+  }
+}

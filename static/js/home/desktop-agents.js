@@ -1,0 +1,838 @@
+(function () {
+    'use strict';
+    const API = '/api/desktop-agents', names = { codex: 'Codex', claudecode: 'Claude Code', antigravity: 'Antigravity', workbuddy: 'WorkBuddy' };
+    const state = { settings: null, items: [], providers: [], provider: 'codex', active: null, api: null, visible: false, loading: false, error: '', epoch: 0, viewEpoch: 0, identity: '', drafts: new Map(), notices: new Map(), unknown: new Set(), sending: false, lastSync: null, lastRefreshAt: 0, signature: '', timer: null, detail: null, pending: null, pendingCount: 0, tick: null, view: null, dock: null, mode: (() => { try {
+        return localStorage.getItem('desktop_agent_busy_mode') === 'steer' ? 'steer' : 'queue';
+    }
+    catch {
+        return 'queue';
+    } })() };
+    let root, list, poll;
+    let autoSelect = false;
+    let historyLoad = null, historyTimer = null, readingEpoch = null, wsDiagOpen = false, wsMetricsOpen=false;
+    const L = (zh, en) => /^en/.test(window.ToolsI18n?.getLanguage?.() || localStorage.getItem('tools_lang') || '') ? en : zh;
+    const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const identity = () => ['tools_user', 'tools_tenant_id', 'tools_token'].map(k => localStorage.getItem(k) || sessionStorage.getItem(k) || '').join('|');
+    const key = s => s.provider + ':' + s.id;
+    async function request(method, url, body, signal) { const token = localStorage.getItem('tools_token') || sessionStorage.getItem('tools_token'); const response = await fetch(API + url, { method, signal, credentials: 'same-origin', cache: 'no-store', headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }); const data = await response.json().catch(() => ({})); if (!response.ok)
+        throw Object.assign(new Error(data.error || (response.status === 504 ? L('桌面端未及时确认，请先查看原会话，避免重复发送', 'Desktop did not acknowledge in time. Check the desktop session before resending.') : `HTTP ${response.status}`)), { status: response.status, code: data.code }); return data; }
+    // 与后端上限一致：超长时不发请求，直接说明字数（保留输入框里的内容）
+    const MAX_MESSAGE = 20000;
+    function tooLong(text) { if (String(text || '').length > MAX_MESSAGE)
+        throw new Error(L(`消息过长（${String(text).length} 字，上限 ${MAX_MESSAGE} 字），请精简，或把长内容存成文件作为附件发送`, `Message too long (${String(text).length} characters, limit ${MAX_MESSAGE}). Shorten it or attach it as a file.`)); }
+    function reset() { clearInterval(state.timer); state.lastRefreshAt = 0; state.epoch++; state.loading = false; state.sending = false; state.settings = null; state.items = []; state.providers = []; state.drafts.clear(); state.notices.clear(); state.unknown.clear(); state.identity = identity(); if (state.active)
+        window.DragonClaw?.newChat?.(); state.active = null; state.error = ''; render(); }
+    function settings() { window.openNavSettingsModal?.(); window.switchNavSettingsTab?.('desktopAgents'); }
+    async function configure() { const epoch = state.epoch; try {
+        const data = await request('GET', '/settings');
+        if (epoch !== state.epoch || identity() !== state.identity)
+            return;
+        state.settings = data.owned ? data.settings : null;
+        state.lastSync = null;
+        state.lastRefreshAt = 0;
+        scheduleListRefresh();
+        if (!state.settings?.enabled && state.active) {
+            state.drafts.clear();
+            window.DragonClaw?.newChat?.();
+        }
+        state.error = data.owned ? '' : data.reason;
+        window.dispatchEvent(new Event('home:desktop-agents-ready'));
+        render();
+        if (state.settings?.enabled)
+            await sync();
+    }
+    catch (error) {
+        if (epoch === state.epoch) {
+            state.error = error.message;
+            render();
+        }
+    } }
+    function scheduleListRefresh() {
+        clearInterval(state.timer);
+        state.timer = null;
+        if (!state.settings?.enabled || !state.settings.autoSync) return;
+        state.timer = setInterval(() => {
+            if (identity() !== state.identity) { reset(); configure(); return; }
+            if (state.visible && document.visibilityState === 'visible') sync();
+        }, state.settings.syncSeconds * 1000);
+    }
+    async function sync(manual = false) { if (identity() !== state.identity) {
+        reset();
+        return configure();
+    } if (!state.settings?.enabled || state.loading)
+        return; if (!manual && state.lastRefreshAt && Date.now() - state.lastRefreshAt < state.settings.syncSeconds * 1000)
+        return; const epoch = state.epoch; state.loading = true; renderControls(); try {
+        const data = await request(manual ? 'POST' : 'GET', manual ? '/sync' : '/sessions');
+        if (epoch !== state.epoch || identity() !== state.identity)
+            return;
+        state.items = data.items || [];
+        state.providers = data.providers || [];
+        state.lastSync = data.syncedAt;
+        state.lastRefreshAt = Date.now();
+        state.error = '';
+        if(!state.drafting&&(!state.active||!state.items.some(item=>state.active&&key(item)===key(state.active))))autoSelect=true;
+        render();
+        window.dispatchEvent(new CustomEvent('home:desktop-agents-updated', { detail: { items: state.items } }));
+        openFirst();
+    }
+    catch (error) {
+        if (epoch === state.epoch) {
+            state.error = error.message;
+            renderControls();
+        }
+    }
+    finally {
+        if (epoch === state.epoch) {
+            state.loading = false;
+            renderControls();
+            scheduleListRefresh();
+        }
+    } }
+    function providerHealth(id) {
+        const p=state.providers.find(item=>item.id===id);
+        if(state.settings&&!state.settings.enabled)return {level:'error',reason:'disabled'};
+        if(!p)return {level:'warning',reason:'checking'};
+        if(!p.enabled)return {level:'error',reason:'disabled'};
+        if(!p.connected)return {level:'error',reason:'offline'};
+        const stale=p.stale||(state.active?.provider===id&&state.detail?.stale);
+        if(state.error||stale||p.warning||p.latencyMs>3000)return {level:'warning',reason:state.error?'degraded':stale?'stale':p.latencyMs>3000?'delayed':'degraded'};
+        return p.canSend?{level:'ok',reason:'connected'}:{level:'warning',reason:'readonly'};
+    }
+    function renderControls() { if (!root)
+        return; const header = root.querySelector('.desktop-agents-controls'); header.innerHTML = `<div class="desktop-agent-providers" role="group" aria-label="${L('选择第三方 Agent', 'Select an agent')}">${Object.entries(names).map(([id, name]) => `<button type="button" class="desktop-agent-provider" data-desktop-provider="${id}" aria-pressed="${state.provider === id}" aria-label="${name}" title="${name}"><img src="/assets/desktop-agents/${id}.png" width="24" height="24" alt="" draggable="false">${window.HomeConversationList?.healthDot(providerHealth(id))||''}</button>`).join('')}</div><button type="button" data-desktop-sync title="${L('立即重新读取最近对话列表，不必等待自动刷新；对话正文独立更新', 'Reread the recent conversation list now, without waiting. Open conversations update separately.')}" ${state.loading || !state.settings?.enabled ? 'disabled' : ''}>${L(state.loading ? '刷新中…' : '刷新列表', state.loading ? 'Refreshing…' : 'Refresh list')}</button><button type="button" data-desktop-settings title="${L('桌面 Agent 设置', 'Desktop agent settings')}" aria-label="${L('桌面 Agent 设置', 'Desktop agent settings')}">⚙</button>`; const status = state.providers.find(p => p.id === state.provider); root.querySelector('.desktop-agents-status').textContent = state.error || (!state.settings?.enabled ? L('在全局设置连接本机桌面后，最近对话会自动同步。', 'Connect this desktop in global settings to sync recent chats.') : status?.reason || L('正在读取桌面对话…', 'Reading desktop chats…')); }
+    function shortTime(value) {
+        const date = new Date(value), now = new Date(), pad = n => String(n).padStart(2, '0');
+        if (date.toDateString() === now.toDateString())
+            return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        if (date.toDateString() === yesterday.toDateString())
+            return L('昨天', 'Yesterday');
+        return date.getFullYear() === now.getFullYear() ? `${date.getMonth() + 1}/${date.getDate()}` : `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    }
+    function render() {
+        queueMicrotask(()=>window.DragonClaw?.refreshModelPicker?.());
+        if (!root)
+            return;
+        renderControls();
+        const query = (document.getElementById('homeChatSearch')?.value || '').toLowerCase();
+        const config={source:'desktop:'+state.provider,items:state.items,id:s=>s.id,title:s=>s.title,date:s=>s.updatedAt,query,selector:'[data-desktop-session]',index:'desktopIndex'};
+        const sections=window.HomeConversationList?.sections(state.items.filter(s=>s.provider===state.provider),{...config,query})||[{label:'',entries:state.items.filter(s=>s.provider===state.provider&&s.title.toLowerCase().includes(query)).map(item=>({item,title:item.title}))}];
+        const rows=sections.flatMap(section=>section.entries);
+        list.replaceChildren();
+        if (!state.settings?.enabled || !rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'home-chat-empty';
+            empty.textContent = state.settings?.enabled ? L('暂无可读取的最近对话，请打开桌面客户端后同步。', 'No recent chats available. Open the desktop client and sync.') : L('第三方桌面对话尚未连接', 'Desktop chats are not connected');
+            list.append(empty);
+            window.HomeConversationList?.enhance(list,config);
+            return;
+        }
+        for(const section of sections){
+        if(section.entries.length&&section.label){const heading=document.createElement('div');heading.className='home-chat-group';heading.textContent=section.label;list.append(heading);}
+        for (const entry of section.entries) {
+            const row=entry.item;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'home-chat-item desktop-agent-chat' + (state.active && key(row) === key(state.active) ? ' is-active' : '');
+            button.dataset.desktopSession = row.id;
+            button.dataset.desktopIndex = state.items.indexOf(row);
+            const title = document.createElement('b');
+            title.textContent = entry.title;
+            button.title = entry.title;
+            button.append(title);
+            // 时间仅在悬停时显示于右侧，始终保留单行标题。
+            if (row.updatedAt) {
+                const time = document.createElement('time');
+                time.dateTime = row.updatedAt;
+                time.textContent = shortTime(row.updatedAt);
+                time.title = new Date(row.updatedAt).toLocaleString();
+                button.append(time);
+            }
+            button.addEventListener('click', () => open(row));
+            list.append(button);
+        }}
+        window.HomeConversationList?.enhance(list,config);
+    }
+    function current(epoch, session) { return epoch === state.viewEpoch && identity() === state.identity && state.active && key(state.active) === key(session); }
+    function openFirst() {
+        if (!state.visible || !autoSelect || !state.lastSync || state.drafting) return;
+        const stamp=val=>window.HomeConversationList?.stamp?.(val)||(Date.parse(/Z$|[+-]\d{2}:?\d{2}$/.test(String(val||''))?String(val||''):`${String(val||'').replace(' ','T')}Z`)||0);
+        const candidates=state.items.filter(item=>item.provider===state.provider);const first=window.HomeConversationList?.latest(candidates,{source:'desktop:'+state.provider,id:item=>item.id,date:item=>item.updatedAt})||candidates.filter(item=>!window.HomeConversationList?.get('desktop:'+state.provider,item.id).hidden&&!window.HomeConversationList?.get('desktop:'+state.provider,item.id).archived).sort((a,b)=>stamp(b.updatedAt)-stamp(a.updatedAt))[0];
+        if (first) { open(first); return; }
+        const api=window.DragonClaw?.enterExternal?.({owner:'desktop-agent',onExit:exit});
+        if (!api) return;
+        autoSelect=false;
+        const hint=document.createElement('div');hint.className='home-chat-empty';
+        hint.textContent=names[state.provider]+' · '+L('暂无可用对话，请打开客户端后同步。','No available conversations. Open the client and sync.')+' '+(state.providers.find(p=>p.id===state.provider)?.reason||'');
+        api.thread.append(hint);api.finishLoading();
+    }
+    function exit() { clearInterval(historyTimer); historyTimer = null; historyLoad = null; state.viewEpoch++; state.drafting = null; clearInterval(poll); poll = null; clearInterval(state.tick); state.tick = null; wsDiagOpen = false;wsMetricsOpen=false; const body = document.querySelector('[data-wsp-ext-body]'); if (body) {
+        body.onclick = null;
+        delete body.dataset.signature;
+    } if (state.active)
+        window.DragonClawWorkspace?.hideExternal?.(); state.active = null; state.api = null; state.signature = ''; state.detail = null; state.pending = null; state.choosing = null; state.view = null; state.dock?.remove(); state.dock = null; render(); }
+    // 复用「我的对话」的输入框：只读、未确认投递时禁用并在占位文字里说明原因
+    function busyMode() { return state.mode === 'steer' && state.detail?.canSteer ? 'steer' : 'queue'; }
+    function composer(session) { const k = key(session), unknown = state.unknown.has(k), canSend = Boolean(session.canSend) && !unknown, name = names[session.provider], working = state.detail?.busy || state.pending; return { canSend, send, draft: state.drafts.get(k) || '', onInput: value => { if (state.active && key(state.active) === k)
+        state.drafts.set(k, value); }, placeholder: unknown ? L('上次提交结果未确认，请先核对桌面原会话；此处不会自动重发', 'Last delivery is unconfirmed. Check the desktop conversation first.') : canSend && working ? (busyMode() === 'steer' ? L(`引导 ${name}：消息并入当前这一轮`, `Steer ${name}: joins the current turn`) : L(`排队：${name} 本轮结束后自动发送`, `Queue: sends when ${name} finishes this turn`)) : canSend ? L('发送到', 'Send to') + ' ' + names[session.provider] + ' · ' + session.title : L(names[session.provider] + ' 桌面会话当前只读', names[session.provider] + ' desktop session is read-only') }; }
+    // 「新对话」：在当前选中的桌面 Agent 里新建原生会话。第一条消息发出并确认后打开这个新会话。
+    function newChat({provider: chosenProvider, force=false} = {}) {
+        if (chosenProvider && names[chosenProvider]) state.provider = chosenProvider;
+        if ((!force && !state.visible) || !state.settings?.enabled)
+            return false;
+        const draftModel=window.HomeDesktopModels?.forProvider?.(state.provider)||'';
+        window.HomeDesktopModels?.seedDraft?.(state.provider,draftModel);
+        const provider = state.provider, name = names[provider], status = state.providers.find(p => p.id === provider), canSend = Boolean(status?.canSend);
+        if(force&&(!status?.enabled||!status.connected||!canSend||!state.settings.allowSend||!state.settings.providers?.[provider]||provider==='claudecode'&&!state.settings.claudeAutomation))return false;
+        let api;
+        const create = async text => {
+            const epoch = state.viewEpoch, thread = api.thread;
+            tooLong(text);
+            const pending = api.addMessage('user', text), working = api.addMessage('ai', '');
+            working.classList.add('desktop-agent-thinking');
+            working.querySelector('.dc-msg-body').remove();
+            working.querySelector('.dc-msg-main').insertAdjacentHTML('beforeend', `<div class="dc-activity" role="status"><span class="dc-activity-orbit" aria-hidden="true"><i></i><i></i><i></i></span><span class="dc-activity-text">${esc(L(`正在 ${name} 中新建会话…`, `Creating a ${name} session…`))}</span></div>`);
+            api.scrollToBottom();
+            try {
+                const result = await request('POST', `/${provider}/new`, { text, requestId: crypto.randomUUID(), model: window.HomeDesktopModels?.forProvider?.(provider)||'' });
+                if (epoch !== state.viewEpoch)
+                    return true;
+                if (result.status !== 'accepted' || !result.id)
+                    throw Error(result.error || L('桌面尚未确认新会话，请到桌面核对，不会重发', 'The desktop has not confirmed the new session. Check it there; it will not be resent.'));
+                await sync(true);
+                if (epoch !== state.viewEpoch)
+                    return true;
+                const row = state.items.find(item => item.provider === provider && item.id === result.id) || { provider, id: result.id, title: text.slice(0, 40), updatedAt: new Date().toISOString(), source: 'desktop-history' };
+                open(row);
+                return true;
+            }
+            catch (error) {
+                if (epoch === state.viewEpoch && thread.isConnected) {
+                    pending.remove();
+                    working.remove();
+                    api.toast(error.message);
+                }
+                return false;
+            }
+        };
+        api = window.DragonClaw?.enterExternal?.({ onExit: exit, owner: 'desktop-agent', composer: { canSend, send: create, placeholder: canSend ? L(`新建 ${name} 会话：输入第一条消息`, `New ${name} session: type the first message`) : L(`${name} 当前不能从网页新建会话`, `${name} can't start sessions from the Web right now`) } });
+        if (!api) return false;
+        window.HomeAgentDiscussion?.bindExternal?.(provider);
+        state.viewEpoch++;
+        state.active = null;
+        state.drafting = provider; // 新建草稿期间不触发「自动打开第一条」
+        render();
+        const banner = document.createElement('div');
+        banner.className = 'desktop-agent-banner';
+        banner.innerHTML = `<div><b>${esc(L('新建', 'New') + ' ' + name + ' ' + L('会话', 'session'))}</b><small>${esc(canSend ? L('发送第一条消息后，会在桌面上新建这个会话并打开它', 'Sending the first message creates the session on the desktop and opens it here') : (status?.reason || L('当前连接仅支持查看', 'This connection is read-only')))}</small></div><button type="button" data-desktop-back>${esc(L('返回我的对话', 'Back to my chats'))}</button>`;
+        banner.querySelector('[data-desktop-back]').addEventListener('click', back);
+        api.thread.append(banner);
+        api.finishLoading?.();
+        document.getElementById('dcInput')?.focus({ preventScroll: true });
+        return true;
+    }
+    async function open(session) {
+        const api = window.DragonClaw?.enterExternal?.({ onExit: exit, owner: 'desktop-agent', composer: composer({ ...session, canSend: false }),
+            exportSession: { id: `${session.provider}-${session.id}`, url: `${API}/${encodeURIComponent(session.provider)}/sessions/${encodeURIComponent(session.id)}/export` } });
+        if (!api)
+            return;
+        window.HomeAgentDiscussion?.bindExternal?.(session.provider);
+        autoSelect=false;
+        state.drafting = null;
+        state.active = session;
+        state.api = api;
+        state.signature = '';
+        state.detail = null;
+        state.pending = null;
+        state.view = null;
+        const epoch = ++state.viewEpoch;
+        state.identity = identity();
+        window.HomeMode?.set?.('chat');
+        render();
+        api.beginLoading();
+        historyLoad = { since: Date.now(), status: 'loading', error: '' };
+        renderThread({ items: [] }, true);
+        api.finishLoading();
+        renderHistoryLoad();
+        historyTimer = setInterval(renderHistoryLoad, 1000);
+        await refreshMessages(epoch, session, true);
+        schedule(epoch, session);
+    }
+    // 桌面接口没有字节进度：显示不定进度条，不伪造百分比。
+    function renderHistoryLoad() {
+        if (!historyLoad || !state.view || !state.active) return;
+        let panel = state.view.banner.parentNode.querySelector('.desktop-agent-history-load');
+        if (historyLoad.status === 'done') {
+            panel?.remove();
+            clearInterval(historyTimer); historyTimer = null;
+            state.api.thread.removeAttribute('aria-busy');
+            return;
+        }
+        const seconds = Math.floor((Date.now() - historyLoad.since) / 1000);
+        if (historyLoad.status === 'loading' && seconds >= 45) {
+            historyLoad.status = 'empty';
+        }
+        const loading = historyLoad.status === 'loading', failed = historyLoad.status === 'error';
+        state.api.thread.toggleAttribute('aria-busy', loading);
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.className = 'desktop-agent-history-load';
+            state.view.banner.after(panel);
+        }
+        panel.dataset.status = historyLoad.status;
+        const title = loading ? L(`正在加载 ${names[state.active.provider]} 对话…`, `Loading ${names[state.active.provider]} conversation…`) : failed ? L('对话加载失败', 'Conversation failed to load') : L('暂未读取到对话内容', 'No conversation content received yet');
+        const hint = loading ? (seconds >= 10 ? L('桌面会话仍在加载，正在自动检查，请稍候。', 'The desktop conversation is still loading. Checking automatically, please wait.') : L('正在连接桌面并读取消息，请稍候。', 'Connecting to the desktop and reading messages, please wait.')) : failed ? historyLoad.error : L('会话可能为空或桌面尚未加载完成；将继续自动检查，也可重试。', 'The conversation may be empty or still loading on the desktop. Automatic checks continue; you can also retry.');
+        // 只在状态/语言变化时更新播报，秒数单独更新以免读屏每秒重复提示。
+        const signature = JSON.stringify([title, hint, loading]);
+        if (panel.dataset.signature !== signature) {
+            panel.dataset.signature = signature;
+            panel.innerHTML = `<div role="status"><b>${esc(title)}</b><p>${esc(hint)}</p></div>${loading ? `<div class="desktop-agent-history-progress" role="progressbar" aria-label="${esc(title)}"><i></i></div><small data-history-elapsed></small>` : `<button type="button" data-history-retry>${esc(L('重新加载', 'Retry loading'))}</button>`}`;
+            panel.querySelector('[data-history-retry]')?.addEventListener('click', () => open(state.active));
+        }
+        const time = panel.querySelector('[data-history-elapsed]');
+        if (time) time.textContent = L(`已等待 ${seconds} 秒`, `Waiting for ${seconds}s`);
+        if (state.view.hint) { state.view.hint.remove(); state.view.hint = null; }
+        const status = document.querySelector('[data-desktop-status]');
+        if (status) status.textContent = statusText();
+        if (!loading) { clearInterval(historyTimer); historyTimer = null; }
+    }
+    function schedule(epoch, session) { if (!current(epoch, session))
+        return; clearInterval(poll); poll = setInterval(() => { if (document.visibilityState === 'visible')
+        refreshMessages(epoch, session); }, state.detail?.busy || state.pending ? 2500 : 5000); }
+    function elapsed(since) { const ms = Math.max(0, Date.now() - Date.parse(since)), m = Math.floor(ms / 60000), sec = Math.floor(ms / 1000) % 60; return m ? L(`${m}分${sec}秒`, `${m}m ${sec}s`) : L(`${sec}秒`, `${sec}s`); }
+    function busyText() { const d = state.detail, name = names[state.active.provider]; if (d?.interaction) return L('Claude 等待你的选择', 'Claude is waiting for your choice'); if (d?.busy)
+        return d.busySince ? L(`${name} 正在处理 · ${elapsed(d.busySince)}`, `${name} is working · ${elapsed(d.busySince)}`) : L(`${name} 正在处理…`, `${name} is working…`); return L(`已发送，等待 ${name} 响应…`, `Sent. Waiting for ${name}…`); }
+    function tick() { const working = state.detail?.busy || state.pending; document.querySelectorAll('[data-desktop-busy]').forEach(node => { node.textContent = working ? busyText() : ''; }); const status = document.querySelector('[data-desktop-status]'); if (status)
+        status.textContent = statusText(); if (!working) {
+        clearInterval(state.tick);
+        state.tick = null;
+    } }
+    function statusText() { if (historyLoad?.status === 'loading') return L('正在加载对话…', 'Loading conversation…'); if (historyLoad?.status === 'error') return L('对话加载失败 · 可重试', 'Loading failed · retry available'); const d = state.detail; if (!d)
+        return L('读取中…', 'Loading…'); if (d.interaction || d.busy || state.pending)
+        return busyText(); return state.active.canSend ? L('空闲 · 可发送', 'Idle · ready') : L('只读', 'Read-only'); }
+    // 轮询只做增量更新：已显示的消息原地保留，新消息追加（自带淡入），内容有变化的只改正文，避免整屏重绘闪烁
+    const sameItem = (a, b) => a && b && a.role === b.role && a.content === b.content && JSON.stringify(a.attachments || []) === JSON.stringify(b.attachments || []) && JSON.stringify(a.widget || null) === JSON.stringify(b.widget || null) && a.createdAt === b.createdAt;
+    function widgetHtml(widget) {
+        // 尊重事实产出的 HTML（图表库、柱状图、Canvas、内联样式与脚本），在隔离沙箱（无同源权限、无导航权限）中运行
+        const preview = document.createElement('template');
+        preview.innerHTML = widget.html;
+        preview.content.querySelectorAll('iframe,frame,object,embed,meta,base,link[rel=import],template').forEach(node => node.remove());
+        preview.content.querySelectorAll('*').forEach(node => {
+            for (const attr of [...node.attributes]) if (['action', 'formaction', 'srcdoc', 'target'].includes(attr.name)) node.removeAttribute(attr.name);
+        });
+        const doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: http: data: blob:; style-src 'unsafe-inline' https: http:; img-src data: https: http: blob:; font-src data: https: http:; connect-src data: https: http:; base-uri 'none'; form-action 'none'; navigate-to 'none'"><style>
+            :root{color-scheme:light;--font-sans:system-ui,sans-serif;--font-mono:monospace;--color-background-primary:#fff;--color-background-secondary:#f3f4f6;--color-background-info:#e0f2fe;--color-text-primary:#202124;--color-text-secondary:#666;--color-text-tertiary:#888;--color-text-info:#0369a1;--color-border-primary:#aaa;--color-border-secondary:#ccc;--color-border-tertiary:#ddd;--border-radius-lg:12px;--border-radius-md:8px}
+            *{box-sizing:border-box}body{margin:0;padding:16px;font-family:var(--font-sans);color:var(--color-text-primary);background:var(--color-background-primary);overflow-wrap:anywhere}img,svg,canvas{max-width:100%}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}
+            </style></head><body>${preview.innerHTML}</body></html>`;
+        return `<section class="desktop-agent-widget"><div class="desktop-agent-widget-title">${esc(widget.title)} · ${esc(L('可视化预览', 'Visual preview'))}</div><iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(widget.title)}" srcdoc="${esc(doc)}"></iframe></section>`;
+    }
+    // 只替换从第一个变化处开始的段落：前面的段落、代码块和选中的文字保持不动
+    function morph(target, html) { const next = document.createElement('div'); next.innerHTML = html; const before = [...target.childNodes], after = [...next.childNodes]; let i = 0; while (i < before.length && i < after.length && before[i].isEqualNode(after[i]))
+        i++; before.slice(i).forEach(n => n.remove()); target.append(...after.slice(i)); }
+    function fillMessage(node, item) { if (item.role !== 'user') {
+        const avatar=node.querySelector('.dc-msg-avatar');if(avatar){avatar.src=`/assets/desktop-agents/${state.active.provider}.png`;avatar.alt=names[state.active.provider];}
+        node.classList.add('dc-provider-message');
+        morph(node.querySelector('.dc-msg-body'), state.api.renderMarkdown(item.content) + (typeof item.widget?.html === 'string' ? widgetHtml(item.widget) : ''));
+    }
+    else
+        node.querySelector('.dc-msg-body').textContent = item.content; const copy = node.querySelector('[data-dc-copy]'); if (copy)
+        copy.dataset.dcCopy = item.content;
+        const main = node.querySelector('.dc-msg-main');
+        const files = (item.attachments || []).filter(file => window.ChatFiles?.isLocalFile(file.path));
+        let attachments = main.querySelector('[data-desktop-attachments]');
+        if (files.length) {
+            if (!attachments) {
+                attachments = document.createElement('div');
+                attachments.className = 'dc-msg-attachments';
+                attachments.dataset.desktopAttachments = '1';
+            }
+            // 用户长文字的展开/收起按钮属于正文，附件始终排在按钮之后。
+            const anchor = main.querySelector('[data-dc-message-toggle]') || main.querySelector('.dc-msg-body');
+            if (attachments.previousElementSibling !== anchor) anchor.after(attachments);
+            morph(attachments, files.map(file => window.ChatFiles.chipHtml(file.path, file.name)).join(''));
+            window.ChatFiles.hydrate(attachments);
+        } else attachments?.remove();
+    }
+    function thinkingNode() {
+        const message = state.api.addMessage('ai', '');
+        const avatar=message.querySelector('.dc-msg-avatar');if(avatar){avatar.src=`/assets/desktop-agents/${state.active.provider}.png`;avatar.alt=names[state.active.provider];}
+        message.classList.add('desktop-agent-thinking');
+        message.setAttribute('aria-busy', 'true');
+        message.querySelector('.dc-msg-body').remove();
+        const row = document.createElement('div');
+        row.className = 'dc-activity';
+        row.setAttribute('role', 'status');
+        row.innerHTML = '<span class="dc-activity-orbit" aria-hidden="true"><i></i><i></i><i></i></span><span class="dc-activity-text" data-desktop-busy></span>';
+        message.querySelector('.dc-msg-main').append(row);
+        return message;
+    }
+    function renderThread(data, initial) {
+        const api = state.api, session = state.active, thread = api.thread, near = api.isNearBottom(), items = data.items || [];
+        let view = state.view;
+        if (initial || !view || !view.banner.isConnected) {
+            thread.replaceChildren();
+            const banner = document.createElement('div');
+            banner.className = 'desktop-agent-banner';
+            banner.innerHTML = `<div><b>${esc(names[session.provider])} · ${esc(session.title)}</b><small>${esc(L('原生桌面会话 · 消息发送回同一个 Agent', 'Native desktop session · Replies go to this same agent'))}</small></div><button type="button" data-desktop-back>${esc(L('返回我的对话', 'Back to my chats'))}</button>`;
+            banner.querySelector('[data-desktop-back]').addEventListener('click', back);
+            thread.append(banner);
+            view = state.view = { banner, hint: null, rows: [], thinking: null };
+        }
+        if (!items.length && !view.hint) {
+            view.hint = document.createElement('div');
+            view.hint.className = 'home-chat-empty';
+            view.banner.after(view.hint);
+        }
+        if (view.hint) {
+            if (items.length) {
+                view.hint.remove();
+                view.hint = null;
+            }
+            else
+                view.hint.textContent = data.reason || L('这个会话还没有可显示的消息', 'No messages to display');
+        }
+        // 记录只保留最近 200 条：窗口前移时先去掉已滑出的旧消息
+        const shift = items.length ? view.rows.findIndex(row => sameItem(row.item, items[0])) : view.rows.length;
+        if (shift > 0)
+            view.rows.splice(0, shift).forEach(row => row.node.remove());
+        let same = 0;
+        while (same < view.rows.length && same < items.length && sameItem(view.rows[same].item, items[same])) {
+            // 这一问结束后才算出各轮速度：已显示的回复补上 最低/平均/最高 tok/s
+            const rounds = items[same].rounds;
+            if (rounds?.length && JSON.stringify(rounds) !== JSON.stringify(view.rows[same].item.rounds)) {
+                view.rows[same].node.querySelector('.dc-msg-tools')?.remove();
+                api.addCopy(view.rows[same].node, items[same].content, { rounds, modelName: rounds.at(-1)?.model || '' });
+                view.rows[same].item = items[same];
+            }
+            same++;
+        }
+        // 正在生成的最后一条只是正文变长：原地更新，不重新插入
+        while (same < view.rows.length && same < items.length && view.rows[same].item.role === items[same].role && same >= view.rows.length - 2) {
+            fillMessage(view.rows[same].node, items[same]);
+            view.rows[same].item = items[same];
+            same++;
+        }
+        view.rows.splice(same).forEach(row => row.node.remove());
+        // 插到“正在处理”之前或批量追加到末尾：都不强制滚动，用户往上翻看时不被拉回底部
+        const anchor = view.thinking, fresh = [];
+        const add = () => { for (const item of items.slice(same)) {
+            const node = api.addMessage(item.role === 'user' ? 'user' : 'ai', item.role === 'user' ? item.content : '', anchor ? { before: anchor } : undefined);
+            api.addCopy(node, item.content, item.rounds?.length ? { rounds: item.rounds, modelName: item.rounds.at(-1)?.model || '' } : undefined);
+            fillMessage(node, item);
+            fresh.push({ item, node });
+        } };
+        anchor ? add() : api.batchMessages(add);
+        view.rows.push(...fresh);
+        const working = Boolean(data.busy || state.pending) && !data.interaction;
+        if (working && !view.thinking)
+            api.batchMessages(() => { view.thinking = thinkingNode(); });
+        if (!working && view.thinking) {
+            view.thinking.remove();
+            view.thinking = null;
+        }
+        // 同一轮里连续的 Agent 段落合成一组：只保留第一条头像，段落之间紧凑排列
+        const nodes = [...view.rows.map(row => row.node), ...(view.thinking ? [view.thinking] : [])];
+        nodes.forEach((node, i) => { const ai = node.classList.contains('dc-msg--ai'); node.classList.toggle('desktop-agent-cont', ai && Boolean(nodes[i - 1]?.classList.contains('dc-msg--ai'))); node.classList.toggle('is-continued', ai && Boolean(nodes[i + 1]?.classList.contains('dc-msg--ai'))); });
+        if (initial || (near && (fresh.length || working)))
+            api.scrollToBottom();
+    }
+    // 输入框上方的运行中条：选择排队或引导，并列出排队中的消息（可取消）
+    function renderDock() {
+        const session = state.active, d = state.detail;
+        if (!session || !d)
+            return;
+        const interaction = d.interaction;
+        const working = Boolean(d.busy || state.pending), queue = d.queue || [], showMode = working && session.canSend && !interaction;
+        if (!showMode && !queue.length && !interaction) {
+            state.dock?.remove();
+            state.dock = null;
+            return;
+        }
+        if (!state.dock) {
+            state.dock = document.createElement('div');
+            state.dock.className = 'desktop-agent-dock';
+            state.dock.addEventListener('click', e => {
+                const choice = e.target.closest('[data-desktop-choice]');
+                if (choice && !choice.disabled) { chooseInteraction(choice.dataset.desktopChoice); return; }
+                const mode = e.target.closest('[data-desktop-mode]')?.dataset.desktopMode;
+                if (mode) {
+                    state.mode = mode;
+                    try {
+                        localStorage.setItem('desktop_agent_busy_mode', mode);
+                    }
+                    catch { }
+                    renderDock();
+                    renderWorkspace(false, true);
+                    state.api?.setComposer(composer(state.active));
+                }
+                const cancel = e.target.closest('[data-desktop-cancel]')?.dataset.desktopCancel;
+                if (cancel && state.active)
+                    cancelQueued(state.active, cancel);
+            });
+            document.getElementById('dcComposer')?.before(state.dock);
+        }
+        const mode = busyMode(), label = { queued: L('排队中', 'Queued'), sending: L('投递中', 'Sending'), failed: L('未发送', 'Not sent') };
+        const signature = JSON.stringify([showMode, mode, d.canSteer, queue, interaction, Boolean(state.choosing), L('zh', 'en')]);
+        if (state.dock.dataset.signature === signature)
+            return;
+        state.dock.dataset.signature = signature;
+        const choiceHtml = interaction ? `<section class="desktop-agent-choice" aria-label="${esc(L('Claude 等待选择', 'Claude needs a choice'))}"><strong role="status">${esc(L('Claude 等待你的选择', 'Claude is waiting for your choice'))}</strong><p>${esc(interaction.prompt)}</p><div>${interaction.options.map(option => `<button type="button" data-desktop-choice="${esc(option)}" ${state.choosing || !session.canSend ? 'disabled' : ''}>${esc(option)}</button>`).join('')}</div>${!session.canSend ? `<small>${esc(L('当前连接只读，请在电脑上的 Claude 中选择', 'Read-only connection. Choose in Claude on your computer.'))}</small>` : ''}</section>` : '';
+        state.dock.innerHTML = `${choiceHtml}${showMode ? `<div class="desktop-agent-mode"><span>${esc(L(names[session.provider] + ' 运行中，新消息：', names[session.provider] + ' is running. New messages:'))}</span><div role="group"><button type="button" data-desktop-mode="queue" aria-pressed="${mode === 'queue'}" title="${esc(L('本轮结束后自动发送', 'Sent when this turn finishes'))}">${esc(L('排队', 'Queue'))}</button>${d.canSteer ? `<button type="button" data-desktop-mode="steer" aria-pressed="${mode === 'steer'}" title="${esc(L('并入当前这一轮，Agent 会马上看到', 'Joins the running turn right away'))}">${esc(L('引导', 'Steer'))}</button>` : ''}</div></div>` : ''}${queue.map(item => `<div class="desktop-agent-queued" data-status="${esc(item.status)}"><i>${esc(label[item.status] || '')}</i><span>${esc(item.text)}</span>${item.error ? `<small>${esc(item.error)}</small>` : ''}${item.status !== 'sending' ? `<button type="button" data-desktop-cancel="${esc(item.requestId)}">${esc(item.status === 'failed' ? L('移除', 'Remove') : L('取消', 'Cancel'))}</button>` : ''}</div>`).join('')}`;
+    }
+    async function chooseInteraction(option) {
+        if (state.choosing || !state.active || !state.detail?.interaction || !state.active.canSend) return;
+        const session = state.active, epoch = state.viewEpoch, pending = state.detail.interaction;
+        const operation = {}; state.choosing = operation; renderDock();
+        try {
+            await request('POST', `/${session.provider}/sessions/${encodeURIComponent(session.id)}/interaction`, { interactionId: pending.id, option }, AbortSignal.timeout(30000));
+            if (current(epoch, session)) state.api?.toast(L('已在 Claude 中完成选择', 'Choice applied in Claude'));
+        } catch (error) {
+            if (current(epoch, session)) state.api?.toast(error.message);
+        } finally {
+            if (state.choosing === operation) state.choosing = null;
+            if (current(epoch, session)) { renderDock(); await refreshMessages(epoch, session); }
+        }
+    }
+    async function cancelQueued(session, requestId) { try {
+        const data = await request('DELETE', `/${session.provider}/sessions/${encodeURIComponent(session.id)}/queue/${encodeURIComponent(requestId)}`);
+        if (state.active && key(state.active) === key(session) && state.detail) {
+            state.detail.queue = data.queue;
+            renderDock();
+            renderWorkspace();
+        }
+    }
+    catch (error) {
+        state.api?.toast(error.message);
+    } }
+    // 工作区面板指标：messages 接口已在每条回复上带 rounds（模型、token、速度），在这里聚合，不增加后端请求。
+    function wsMetrics(d) {
+        const m = { user:0,agent:0,rounds:0,tokens:0,inputTokens:0,outputTokens:0,model:'',performance:d?.performance||null };
+        for (const item of d?.items || []) {
+            if (item.role === 'user')
+                m.user++;
+            else
+                m.agent++;
+            for (const round of item.rounds || []) {
+                m.rounds++;
+                m.tokens += (Number(round.inputTokens) || 0) + (Number(round.outputTokens) || 0);
+                m.inputTokens+=Number(round.inputTokens)||0;m.outputTokens+=Number(round.outputTokens)||0;
+                if (round.model)
+                    m.model = round.model;
+            }
+        }
+        if(m.performance){m.rounds=m.performance.calls;m.inputTokens=m.performance.inputTokens;m.outputTokens=m.performance.outputTokens;m.tokens=m.inputTokens+m.outputTokens;if(m.performance.latestModel)m.model=m.performance.latestModel;}
+        return m;
+    }
+    function wsTokens(n) { return n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n); }
+    function wsRelative(value) { const ms = Date.now() - Date.parse(value); if (!Number.isFinite(ms) || ms < -5000)
+        return ''; if (ms < 60000)
+        return L('刚刚', 'just now'); if (ms < 3600000)
+        return L(`${Math.floor(ms / 60000)} 分钟前`, `${Math.floor(ms / 60000)}m ago`); if (ms < 86400000)
+        return L(`${Math.floor(ms / 3600000)} 小时前`, `${Math.floor(ms / 3600000)}h ago`); return `${Math.floor(ms / 86400000)}${L(' 天前', 'd ago')}`; }
+    // 诊断：只汇总真实存在的信号，不编造“24h 内 N 次错误”这类没有来源的数字。
+    function wsIssues(d, p) { const issues = []; if (state.error)
+        issues.push(state.error); if (!p)
+        issues.push(L('正在检测桌面连接…', 'Checking the desktop connection…')); else if (!p.connected)
+        issues.push(L('桌面连接不可用，请打开对应客户端后刷新', 'Desktop connection unavailable. Open the client and refresh.')); if (p?.warning)
+        issues.push(p.warning); if (d.stale)
+        issues.push(L('桌面当前在其他会话，正文暂停更新', 'The desktop is showing another chat; text updates pause')); if (historyLoad?.status === 'error')
+        issues.push(historyLoad.error); if (!d.canSend && d.reason)
+        issues.push(d.reason); return issues.filter(Boolean); }
+    function wsDiagnostic(d, p, issues, m) { const session = state.active; return [`Agent: ${names[session.provider] || session.provider} (${session.provider})`, `Session: ${session.title || '—'}`, `Session ID: ${session.id}`, `Can send: ${Boolean(session.canSend)}`, `Busy: ${Boolean(d.busy || state.pending)}`, `Stale: ${Boolean(d.stale)}`, `Messages: ${(d.items || []).length}`, `Model calls: ${m.rounds}`, `Tokens: ${m.tokens}`, `Input tokens: ${m.inputTokens}`, `Output tokens: ${m.outputTokens}`, `Performance scope: ${m.performance?.scope||'unavailable'}`, `Cache read tokens: ${m.performance?.cachedInputTokens??'unavailable'}`, `Cache sample input tokens: ${m.performance?.cacheInputTokens??'unavailable'}`, `Cache sample calls: ${m.performance?.cacheCalls??0}`, `Turn TTFT ms: ${m.performance?.turnTtftMs??'unavailable'}`, `Turn TTFT samples: ${m.performance?.ttftSamples??0}`, `Request TTFT ms: ${m.performance?.requestTtftMs??'unavailable'}`, `Observed first text ms: ${m.performance?.observedFirstTextMs??'unavailable'}`, `Native stream TPS: ${m.performance?.nativeStreamTps??'unavailable'}`, `Decode TPS: ${m.performance?.decodeTps??'unavailable'}`, `Merged run ms: ${m.performance?.wallMs??'unavailable'}`, `Completed turns: ${m.performance?.completedTurns??0}`, `Connected: ${p?.connected ?? 'unknown'}`, `Latency: ${Number.isFinite(p?.latencyMs) ? Math.round(p.latencyMs) + ' ms' : '—'}`, `Can read: ${p?.canRead ?? 'unknown'}`, `Reason: ${d.reason || p?.reason || '—'}`, `Issues: ${issues.length ? issues.join(' | ') : 'none'}`, `Last sync: ${state.lastSync || '—'}`, `App: ${location.host}`, `Time: ${new Date().toISOString()}`].join('\n'); }
+    async function wsCopy(text, done) {
+        let ok = false;
+        if (window.isSecureContext && navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                ok = true;
+            }
+            catch { }
+        }
+        if (!ok) {
+            // 非安全上下文或权限受限：保持在同一个交互手势中执行 execCommand
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+            document.body.append(area);
+            area.select();
+            area.setSelectionRange(0, area.value.length);
+            try {
+                ok = document.execCommand('copy');
+            }
+            catch { }
+            area.remove();
+        }
+        state.api?.toast(ok ? (done || L('已复制', 'Copied')) : L('复制失败，请长按选中后手动复制', 'Copy failed. Select and copy it manually.'));
+        return ok;
+    }
+    function renderWorkspace(first, force = false) {
+        const session = state.active, d = state.detail;
+        if (!session || !d)
+            return;
+        const body = window.DragonClawWorkspace?.showExternal?.({ title: L('Agent 会话', 'Agent session'), meta: names[session.provider], open: first ? undefined : false });
+        if (!body)
+            return;
+        const items = d.items || [], queue = d.queue || [], p = state.providers.find(item => item.id === session.provider) || null;
+        const m = wsMetrics(d), issues = wsIssues(d, p), health = providerHealth(session.provider);
+        const updated = d.items?.at(-1)?.createdAt || session.updatedAt, working = Boolean(d.busy || state.pending);
+        // 分钟粒度进签名：相对时间（刚刚 / 3 分钟前）即使数据没变也能刷新
+        const signature = JSON.stringify([session.id, session.title, session.canSend, state.unknown.has(key(session)), d.reason, d.stale, d.interaction, items.length, updated, working, d.busySince, d.canSteer, queue, d.timingCollection, m, p?.connected, p?.canRead, p?.canSend, p?.latencyMs, p?.reason, p?.warning, state.error, state.lastSync, state.mode, historyLoad?.status, issues, Math.floor(Date.now() / 60000), L('zh', 'en')]);
+        if (!first && !force && body.dataset.signature === signature)
+            return;
+        body.dataset.signature = signature;
+        let subText;
+        if (d.interaction)
+            subText = L('请在输入框上方选择如何继续', 'Choose how to continue above the message box');
+        else if (d.stale)
+            subText = L('桌面当前在其他会话，正文暂停更新；运行状态照常显示', 'The desktop shows another chat; text updates pause, status still updates');
+        else if (working)
+            subText = [m.rounds ? L(`共 ${m.rounds} 次模型调用`, `${m.rounds} model calls`) : '', queue.length ? L(`${queue.length} 条待发送`, `${queue.length} queued`) : ''].filter(Boolean).join(' · ') || L('正在等待桌面写入新消息', 'Waiting for the desktop to write new messages');
+        else if (p && !p.connected)
+            subText = p.reason || L('桌面连接不可用，请打开对应客户端后刷新', 'Desktop connection unavailable. Open the client and refresh.');
+        else if (state.lastSync)
+            subText = L('最近同步', 'Last sync') + ' · ' + (wsRelative(state.lastSync) || new Date(state.lastSync).toLocaleString());
+        else
+            subText = d.reason || L('空闲', 'Idle');
+        const mode = busyMode(), queueLabel = { queued: L('排队中', 'Queued'), sending: L('投递中', 'Sending'), failed: L('未发送', 'Not sent') };
+        const modesHtml = working && session.canSend && !d.interaction ? `<div class="daw-modes" role="group"><span>${esc(L('新消息', 'New message'))}</span><button type="button" data-desktop-ws-mode="queue" aria-pressed="${mode === 'queue'}" title="${esc(L('本轮结束后自动发送', 'Sent when this turn finishes'))}">${esc(L('排队', 'Queue'))}</button><button type="button" data-desktop-ws-mode="steer" aria-pressed="${mode === 'steer'}" title="${esc(d.canSteer ? L('并入当前这一轮，Agent 会马上看到', 'Joins the running turn right away') : L(`${names[session.provider]} 不支持运行中引导`, `${names[session.provider]} can't steer a running turn`))}"${d.canSteer ? '' : ' disabled'}>${esc(L('引导', 'Steer'))}</button></div>` : '';
+        const queueHtml = queue.length ? `<div class="daw-queue">${queue.map(item => `<div class="daw-queue-item" data-status="${esc(item.status)}"><i>${esc(queueLabel[item.status] || '')}</i><span title="${esc(item.text)}">${esc(item.text)}</span>${item.error ? `<small title="${esc(item.error)}">${esc(item.error)}</small>` : ''}${item.status !== 'sending' ? `<button type="button" data-desktop-ws-cancel="${esc(item.requestId)}">${esc(item.status === 'failed' ? L('移除', 'Remove') : L('取消', 'Cancel'))}</button>` : ''}</div>`).join('')}</div>` : '';
+        const statusHtml = `<div class="daw-status" data-level="${esc(health.level)}"><div class="daw-status-head"><i class="daw-dot" aria-hidden="true"></i><b data-desktop-status>${esc(statusText())}</b>${working ? `<span class="daw-live">${esc(L('轮询中', 'Live'))}</span>` : ''}</div><p class="daw-status-sub">${esc(subText)}</p>${modesHtml}${queueHtml}</div>`;
+        const perf=m.performance,known=value=>typeof value==='number'&&Number.isFinite(value),rate=value=>known(value)?value.toLocaleString(undefined,{maximumFractionDigits:1}):'—';
+        const metric=(id,label,value,unit,note,help)=>`<div class="daw-metric" data-metric="${id}" title="${esc(help||note)}" tabindex="0"><div class="daw-metric-label">${esc(label)}</div><div class="daw-metric-value">${esc(value)}${unit?`<em>${esc(unit)}</em>`:''}</div>${note?`<div class="daw-metric-note">${esc(note)}</div>`:''}</div>`;
+        const metricsHtml=`<div class="daw-metrics">`+
+            metric('messages',L('消息','Messages'),String(items.length),'',L(`${m.user} 你 / ${m.agent} Agent`,`${m.user} you / ${m.agent} agent`))+
+            metric('calls',L('模型调用','Model calls'),m.rounds?String(m.rounds):'—','',L('已读取记录','Loaded records'),L('根据日志中的请求记录去重；不据此推断并发数。','Deduplicated logged requests; this is not a concurrency count.'))+
+            metric('tokens',L('Token 用量','Token usage'),m.rounds?wsTokens(m.tokens):'—','',m.rounds?L(`输入 ${wsTokens(m.inputTokens)} · 输出 ${wsTokens(m.outputTokens)}`,`In ${wsTokens(m.inputTokens)} · Out ${wsTokens(m.outputTokens)}`):L('暂未读取到用量','Usage not reported'))+
+            metric('output',L('输出 Token','Output tokens'),m.rounds?wsTokens(m.outputTokens):'—','',perf?.reasoningOutputTokens?L(`含推理 ${wsTokens(perf.reasoningOutputTokens)}`,`Includes ${wsTokens(perf.reasoningOutputTokens)} reasoning`):L('日志上报输出','Reported output'))+
+            metric('ttft',!known(perf?.requestTtftMs)&&!known(perf?.turnTtftMs)&&known(perf?.observedFirstTextMs)?L('首文字响应（观测）','First text (observed)'):L('首 Token 延迟','First-token latency'),known(perf?.requestTtftMs)?rate(perf.requestTtftMs/1000):known(perf?.turnTtftMs)?rate(perf.turnTtftMs/1000):known(perf?.observedFirstTextMs)?rate(perf.observedFirstTextMs/1000):'—',known(perf?.requestTtftMs)||known(perf?.turnTtftMs)||known(perf?.observedFirstTextMs)?'s':'',perf?.requestTtftSamples?L(`请求实报 · ${perf.requestTtftSamples} 次`,`Reported requests · ${perf.requestTtftSamples} calls`):perf?.ttftSamples?L(`轮次实报 · ${perf.ttftSamples} 轮`,`Turn-level · ${perf.ttftSamples} turns`):perf?.observedFirstTextSamples?L(`本机观测 · ${perf.observedFirstTextSamples} 轮`,`Observed locally · ${perf.observedFirstTextSamples} turns`):L('暂无首 Token 计时','No first-token timing'),L('优先显示原生请求首 Token 延迟均值；Codex 仅有轮次计时则明确显示轮次口径。包含网络与排队，不等于纯 Prefill 时间。','Prefers native request TTFT; Codex turn-level timing is labeled separately. Includes networking and queueing, not pure prefill.'))+
+            metric('decode',known(perf?.decodeTps)?L('纯输出流速','Decode TPS'):known(perf?.nativeStreamTps)?(perf.nativeStreamObserved?L('文字流速（观测）','Text stream (observed)'):L('原生流式速率','Native stream rate')):L('纯输出流速','Decode TPS'),rate(perf?.decodeTps??perf?.nativeStreamTps),known(perf?.decodeTps??perf?.nativeStreamTps)?'tok/s':'',perf?.decodeCalls?L(`逐请求实测 · ${perf.decodeCalls} 次`,`Request streams · ${perf.decodeCalls} calls`):perf?.nativeStreamCalls?L(`原生实报 · ${perf.nativeStreamCalls} 次`,`Native metadata · ${perf.nativeStreamCalls} calls`):L('缺少逐请求解码计时','No request decode timing'),known(perf?.decodeTps)?L('匹配的可见输出 Token 与首 Token 后生成耗时；不包含输入和工具时间。','Matching visible output and post-first-token stream time; excludes input and tool time.'):perf?.nativeStreamObserved?L('原生消息起止时间内的可见输出速率，扣除推理，仅接受最终纯文字调用；分块缓冲会影响观测结果。','Visible output over native message start-to-end time, reasoning excluded, for final text-only calls. Chunk buffering affects observations.'):L('原生输出 Token ÷ 原生 streamingDuration，包含推理 Token。分块缓冲可能影响数值，不等同于纯可见文字解码速度。','Native output divided by native streamingDuration, including reasoning tokens. Chunk buffering may affect this rate; it is not pure visible-text decode.'))+
+            metric('throughput',L('会话处理吞吐','Session throughput'),rate(perf?.processingTps),known(perf?.processingTps)?'tok/s':'',perf?.completedTurns?L(`含输入 · ${perf.completedTurns} 个完整轮次`,`Includes input · ${perf.completedTurns} complete turns`):L('暂无完整轮次记录','No complete turn record'),L('完整轮次的输入加输出 Token ÷ 已记录运行窗口的合并时长，含缓存与工具等待；不是吐字速度，不反映模型回答质量。','Input plus output tokens divided by merged recorded run windows. Includes cached input and tool waits; not decode speed or answer quality.'))+
+            metric('cache',L('缓存读取占比','Cache read share'),known(perf?.cacheReadRatio)?rate(perf.cacheReadRatio*100):'—',known(perf?.cacheReadRatio)?'%':'',perf?.cacheCalls?L(`${perf.cacheCalls}/${m.rounds} 次调用上报`,`${perf.cacheCalls}/${m.rounds} calls reported`):L('未上报缓存明细','No cache breakdown'),L('缓存读取 Token ÷ 同一批有缓存记录请求的输入 Token；缓存写入不算命中，缺失值不当作零。','Cached-read tokens divided by input tokens for the same reporting requests. Cache writes are not hits; missing data is not zero.'))+
+            `</div><p class="daw-note">${esc(L('口径：已读取的原生会话、计时或明确标注的本机观测；— 表示未上报。速度与吞吐不代表模型质量。','Scope: loaded native conversations/timings or labeled local observations; — means unavailable. Speed and throughput do not measure model quality.'))}</p>`;
+
+        const timingNotice=d.timingCollection?.listening&&!d.timingCollection?.matched&&['claudecode','codex','workbuddy'].includes(session.provider)?`<p class="daw-note">${esc(L('实时计时采集已就绪，等待此会话上报。已打开的 Agent 进程需在方便时重新启动，才能读取新的计时配置。','Live timing collection is ready; waiting for this conversation. Existing Agent processes need a restart when convenient to load the timing configuration.'))}</p>`:'';
+        const methodsHtml=`<details class="daw-diag" data-daw-methods${wsMetricsOpen?' open':''}><summary><span>${esc(L('统计口径与数据来源','Methods and sources'))}</span><i class="daw-caret" aria-hidden="true">⌄</i></summary><div class="daw-diag-body daw-note">${[
+            L('范围：已读取的会话日志，不含尚未记录或未读取的调用；缺失数据不补零。','Scope: loaded conversation logs. Unrecorded or unread calls are excluded; missing data is not zero.'),
+            L('首 Token：桌面上报的轮次延迟均值，含网络、排队等时间，不是纯 Prefill。Antigravity 使用原生请求计时；WorkBuddy 的本机首文字观测另行标注，不能冒充 API TTFT。','First token: reported request/turn latency including network and queueing. WorkBuddy first-text observation is labeled separately and is not per-API TTFT.'),
+            L('纯输出：仅接受逐请求流式计时，首 Token 后的可见输出 ÷ 纯生成时间；整轮耗时不能替代。','Decode: per-request visible output after the first token / stream generation time. Turn duration is not a substitute.'),
+            L('处理吞吐：完整轮次的输入加输出 ÷ 合并运行窗口时长；包含缓存上下文与工具等待，不是吐字速度。','Throughput: complete-turn input plus output / merged run-window time, including cached context and tool waits; not decode speed.'),
+            L('缓存读取占比：同批已上报请求的缓存读取 Token ÷ 输入 Token；缓存写入不算命中，调用数不代表并发数。','Cache share: cache-read / input tokens for reporting requests. Cache writes are not hits; call count is not concurrency.')
+        ].map(note=>`<p>${esc(note)}</p>`).join('')}</div></details>`;
+        const shortId = session.id.length > 20 ? `${session.id.slice(0, 8)}…${session.id.slice(-6)}` : session.id;
+        const facts = [[L('会话', 'Session'), `<span class="daw-truncate" title="${esc(session.title)}">${esc(session.title)}</span>`], m.model ? [L('模型', 'Model'), `<code>${esc(m.model)}</code>`] : null, updated ? [L('最近活动', 'Last activity'), `<time title="${esc(new Date(updated).toLocaleString())}">${esc(wsRelative(updated) || new Date(updated).toLocaleString())}</time>`] : null, [L('会话 ID', 'Session ID'), `<span class="daw-id"><code title="${esc(session.id)}">${esc(shortId)}</code><button type="button" class="daw-btn daw-btn--tiny" data-desktop-copy="${esc(session.id)}">${esc(L('复制', 'Copy'))}</button></span>`]].filter(Boolean);
+        const factsHtml = `<dl class="desktop-agent-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
+        const unknown = state.unknown.has(key(session)), canSendNow = Boolean(session.canSend) && !unknown;
+        const sendNote = canSendNow ? L('输入框消息直接投递到这个原生会话', 'The composer delivers to this native session') : (unknown ? L('上次提交结果未确认，发送已临时停用', 'Last delivery is unconfirmed; sending is paused for now') : (d.reason || L('当前连接仅支持查看', 'This connection is read-only')));
+        const connHtml = `<section class="daw-section"><h4>${esc(L('连接与权限', 'Connection & access'))}</h4><div class="daw-conn"><i class="daw-dot" data-level="${esc(health.level)}" aria-hidden="true"></i><span>${esc([p?.connected ? L('在线', 'Online') : L('离线', 'Offline'), Number.isFinite(p?.latencyMs) ? `${Math.round(p.latencyMs)}ms` : '', L('桌面原生', 'Native desktop'), L('本机', 'Local machine')].filter(Boolean).join(' · '))}</span></div><div class="daw-chips">${[[L('读取对话', 'Read chats'), Boolean(p?.canRead)], [L('投递消息', 'Send messages'), canSendNow], [L('新建会话', 'New sessions'), Boolean(p?.canSend)], [L('运行中引导', 'Steer'), Boolean(d.canSteer)]].map(([label, on]) => `<span class="daw-chip" data-on="${on}">${esc(label)} ${on ? '✓' : '✕'}</span>`).join('')}</div><p class="daw-note">${esc(sendNote)}</p></section>`;
+        const diagHtml = `<details class="daw-diag" data-daw-diag${wsDiagOpen ? ' open' : ''}><summary><span>${esc(L('诊断', 'Diagnostics'))} · ${issues.length ? esc(L(`${issues.length} 项提示`, `${issues.length} note(s)`)) : esc(L('连接正常', 'All clear'))}</span><i class="daw-caret" aria-hidden="true">⌄</i></summary><div class="daw-diag-body"><dl class="desktop-agent-facts">${[[L('连接', 'Connection'), p?.connected ? L('已连接', 'Connected') : L('未连接', 'Disconnected')], [L('往返延迟', 'Latency'), Number.isFinite(p?.latencyMs) ? `${Math.round(p.latencyMs)} ms` : '—'], [L('最近同步', 'Last sync'), state.lastSync ? (wsRelative(state.lastSync) || new Date(state.lastSync).toLocaleString()) : '—'], [L('队列', 'Queue'), String(queue.length)]].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${issues.length ? `<ul class="daw-issues">${issues.map(issue => `<li>${esc(issue)}</li>`).join('')}</ul>` : ''}<div class="daw-diag-actions"><button type="button" class="daw-btn" data-desktop-ws-diag>${esc(L('复制诊断信息', 'Copy diagnostics'))}</button></div></div></details>`;
+        body.innerHTML = `<div class="desktop-agent-ws">${statusHtml}${metricsHtml}${timingNotice}${methodsHtml}${factsHtml}${connHtml}${diagHtml}<div class="desktop-agent-ws-actions"><button type="button" data-desktop-refresh>${esc(L('刷新', 'Refresh'))}</button><button type="button" data-desktop-settings>${esc(L('连接设置', 'Connection settings'))}</button><button type="button" data-desktop-back>${esc(L('返回我的对话', 'Back to my chats'))}</button></div></div>`;
+        body.querySelector('[data-daw-methods]')?.addEventListener('toggle',e=>{wsMetricsOpen=e.currentTarget.open;});
+        body.querySelector('[data-daw-diag]')?.addEventListener('toggle', e => { wsDiagOpen = e.currentTarget.open; });
+        body.onclick = e => { const modeButton = e.target.closest('[data-desktop-ws-mode]'); if (modeButton && !modeButton.disabled && state.active) {
+            state.mode = modeButton.dataset.desktopWsMode;
+            try {
+                localStorage.setItem('desktop_agent_busy_mode', state.mode);
+            }
+            catch { }
+            renderWorkspace(false, true);
+            renderDock();
+            state.api?.setComposer(composer(state.active));
+            return;
+        }
+            const cancelButton = e.target.closest('[data-desktop-ws-cancel]'); if (cancelButton && state.active) {
+                cancelQueued(state.active, cancelButton.dataset.desktopWsCancel);
+                return;
+            }
+            const copyButton = e.target.closest('[data-desktop-copy]'); if (copyButton) {
+                wsCopy(copyButton.dataset.desktopCopy, L('会话 ID 已复制', 'Session ID copied'));
+                return;
+            }
+            if (e.target.closest('[data-desktop-ws-diag]')) { if (!state.active || !state.detail)
+                return; wsCopy(wsDiagnostic(state.detail, state.providers.find(item => item.id === state.active.provider), wsIssues(state.detail, state.providers.find(item => item.id === state.active.provider)), wsMetrics(state.detail)), L('诊断信息已复制', 'Diagnostics copied')); return; }
+            if (e.target.closest('[data-desktop-back]'))
+                back(); if (e.target.closest('[data-desktop-settings]'))
+                settings(); if (e.target.closest('[data-desktop-refresh]') && state.active)
+                refreshMessages(state.viewEpoch, state.active); };
+    }
+    function back() { window.DragonClaw?.newChat?.(); window.HomeWelinkThreads?.setSource?.('mine'); }
+    async function refreshMessages(epoch, session, initial = false) {
+        if (readingEpoch === epoch) return;
+        readingEpoch = epoch;
+        try {
+            // 轮询只被动读取：Antigravity 桌面在别的会话时不切换它，正文保持上次内容
+            const data = await request('GET', `/${session.provider}/sessions/${encodeURIComponent(session.id)}/messages${initial ? '' : '?passive=1'}`, undefined, AbortSignal.timeout(45000));
+            if (!current(epoch, session))
+                return;
+            const followBottom = initial || state.api.isNearBottom();
+            if(data.stale){data.items=state.detail?.items||[];data.performance=state.detail?.performance;}
+            // 发送后到 Agent 开始处理之间日志可能还没更新：先保持“已发送”状态，最多等一分钟
+            if (state.pending && (data.busy || Date.now() - state.pending > 60000 || (data.items || []).length > state.pendingCount))
+                state.pending = null;
+            const wasBusy = state.detail?.busy;
+            state.detail = data;
+            state.active = { ...state.active, canSend: data.canSend };
+            const signature = JSON.stringify([data.items || [], Boolean(data.busy || state.pending), data.interaction || null]);
+            if (signature !== state.signature || initial) {
+                renderThread(data, initial);
+                state.signature = signature;
+            }
+            if (historyLoad) {
+                if (data.items?.length) historyLoad.status = 'done';
+                else if (data.stale) { historyLoad.status = 'error'; historyLoad.error = L('桌面已切换到其他会话，请重新加载此会话。', 'The desktop switched to another conversation. Reload this conversation.'); }
+                else if (session.provider !== 'antigravity') historyLoad.status = 'empty';
+                else if (historyLoad.status === 'error') historyLoad.status = 'empty';
+                renderHistoryLoad();
+            }
+            state.api.setComposer(composer(state.active));
+            renderDock();
+            renderWorkspace(initial);
+            if ((data.busy || state.pending) && !state.tick)
+                state.tick = setInterval(tick, 1000);
+            tick();
+            window.dispatchEvent(new Event('home:desktop-agents-busy'));
+            if (!initial && Boolean(wasBusy) !== Boolean(data.busy))
+                schedule(epoch, session);
+            if (initial && historyLoad?.status !== 'loading') // 淡入只在首次打开时做；轮询时做会让整个消息区每隔几秒闪一下
+                state.api.finishLoading();
+            // Composer and workspace updates resize/reflow the timeline after
+            // renderThread. Restore the bottom only after the whole layout is ready.
+            if (followBottom) state.api.scrollToBottom();
+        }
+        catch (error) {
+            if (current(epoch, session)) {
+                if (initial)
+                    state.api.finishLoading();
+                if (historyLoad) {
+                    historyLoad.status = 'error';
+                    historyLoad.error = error.name === 'TimeoutError' ? L('读取超时，请确认桌面客户端已打开后重试。', 'Loading timed out. Check that the desktop client is open and retry.') : error.message;
+                    renderHistoryLoad();
+                }
+            }
+        }
+        finally {
+            if (readingEpoch === epoch) readingEpoch = null;
+        }
+    }
+    async function send(text) { const session = state.active; if (!session || !session.canSend || state.sending || state.unknown.has(key(session)))
+        return false; tooLong(text); const epoch = state.viewEpoch, account = state.identity, mode = state.detail?.busy || state.pending ? busyMode() : 'send'; state.sending = true; try {
+        window.HomeDesktopModels?.validate?.();
+        const model=window.HomeDesktopModels?.forProvider?.(session.provider)||'';
+        const result = await request('POST', `/${session.provider}/sessions/${encodeURIComponent(session.id)}/messages`, { text, requestId: crypto.randomUUID(), mode: model&&mode==='steer'?'queue':mode, model });
+        if (account !== state.identity || account !== identity())
+            return false;
+        if (result.status === 'queued') {
+            if ((state.drafts.get(key(session)) || '').trim() === text)
+                state.drafts.delete(key(session));
+            if (current(epoch, session) && state.detail) {
+                state.detail.queue = result.queue;
+                renderDock();
+            }
+            return true;
+        }
+        if (result.status !== 'accepted') {
+            if (['sending', 'unknown'].includes(result.status))
+                state.unknown.add(key(session));
+            throw Error(result.error || L('桌面尚未确认接收', 'Desktop has not acknowledged delivery'));
+        }
+        if ((state.drafts.get(key(session)) || '').trim() === text)
+            state.drafts.delete(key(session));
+        if (!current(epoch, session))
+            return true;
+        state.pending = Date.now();
+        state.pendingCount = (state.detail?.items || []).length;
+        await refreshMessages(epoch, session);
+        schedule(epoch, session);
+        return true;
+    }
+    catch (error) {
+        if (account === state.identity && account === identity() && error.status === 504)
+            state.unknown.add(key(session));
+        if (current(epoch, session)) {
+            state.api.setComposer(composer(state.active));
+            state.api.toast(error.message);
+        }
+        throw error;
+    }
+    finally {
+        state.sending = false;
+    } }
+    function init() {
+        // 桌面 Agent 是超级管理员的私有功能：团队账号看不到入口（tools_super 由导航栏按服务端会话写入）
+        if (localStorage.getItem('tools_role') !== 'admin' || localStorage.getItem('tools_super') === '0')
+            return;
+        const mine = document.getElementById('homeChatList');
+        if (!mine)
+            return;
+        state.identity = identity();
+        root = document.createElement('section');
+        root.className = 'desktop-agents-sidebar';
+        root.hidden = !state.visible;
+        root.innerHTML = '<div class="desktop-agents-controls"></div><div class="desktop-agents-status" role="status"></div><div class="home-chat-list desktop-agent-list"></div>';
+        list = root.querySelector('.desktop-agent-list');
+        mine.after(root);
+        root.addEventListener('click', e => { const provider=e.target.closest('[data-desktop-provider]');
+            if(provider){
+                window.HomeConversationList?.close();
+                state.provider=provider.dataset.desktopProvider;
+                render();autoSelect=true;openFirst();
+                root.querySelector(`[data-desktop-provider="${state.provider}"]`)?.focus({preventScroll:true});
+            }
+            if (e.target.closest('[data-desktop-sync]'))
+            sync(true); if (e.target.closest('[data-desktop-settings]'))
+            settings(); });
+        configure();
+        window.addEventListener('tools:desktop-agent-settings-changed', configure);
+        window.addEventListener('home:conversation-list-changed',()=>render());
+        window.addEventListener('tools:languagechange', () => { render(); if (state.active)
+            refreshMessages(state.viewEpoch, state.active, true); });
+        window.addEventListener('storage', e => { if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(e.key))
+            reset(); });
+        // 侧栏转圈：不打开「桌面 Agent」分类也每 10 秒读一次会话列表的 busy；只有状态变了才通知（列表本身变了才整表重绘）
+        const busyPoll = setInterval(async () => {
+            if (!state.settings?.enabled || state.loading || document.visibilityState !== 'visible' || identity() !== state.identity) return;
+            const epoch = state.epoch;
+            try {
+                const data = await request('GET', '/sessions');
+                if (epoch !== state.epoch || identity() !== state.identity || !Array.isArray(data.items)) return;
+                const shape = list => JSON.stringify(list.map(item => [item.provider, item.id, item.title, item.updatedAt]));
+                const busy = list => list.filter(item => item.busy).map(key).sort().join(',');
+                const listChanged = shape(data.items) !== shape(state.items || []), busyChanged = busy(data.items) !== busy(state.items || []);
+                if (!listChanged && !busyChanged) return;
+                state.items = data.items;
+                if (listChanged) { render(); window.dispatchEvent(new CustomEvent('home:desktop-agents-updated', { detail: { items: state.items } })); }
+                else window.dispatchEvent(new Event('home:desktop-agents-busy'));
+            } catch { /* 下次再试 */ }
+        }, 10000);
+        window.addEventListener('pagehide', () => { clearInterval(poll); clearInterval(busyPoll); clearInterval(state.timer); clearInterval(state.tick); });
+        window.dispatchEvent(new Event('home:desktop-agents-ready'));
+    }
+    // 对话列表的「桌面 Agent」分类：管理员、已连接本机桌面，且至少启用了一个客户端才显示（设置读取完成前不显示，避免闪现）
+    const anyProviderEnabled = () => Boolean(state.settings?.enabled && Object.keys(names).some(id => state.settings.providers?.[id]));
+    window.HomeDesktopAgents = {
+        modelContext: () => state.active ? {key:'native:'+key(state.active),providers:[state.active.provider],models:state.detail&&Object.hasOwn(state.detail,'selectedModel')?{[state.active.provider]:state.detail.selectedModel}:undefined,readonly:!state.active.canSend,save:async values=>{const session=state.active;const result=await request('PUT',`/${session.provider}/sessions/${encodeURIComponent(session.id)}/model`,{model:values[session.provider]||''});if(state.active&&key(state.active)===key(session)&&state.detail)state.detail.selectedModel=result.selectedModel;}} : state.drafting ? {key:'draft',providers:[state.drafting]} : null,
+        available: () => localStorage.getItem('tools_role') === 'admin' && anyProviderEnabled(),
+        getItems: () => (state.items || []).slice(),
+        enabledProviders: () => localStorage.getItem('tools_role') === 'admin' && state.settings?.enabled
+            ? Object.entries(names).filter(([id]) => state.settings.providers?.[id]).map(([id, label]) => ({ id, label })) : [],
+        // 侧栏转圈：打开中的会话用实时详情（含刚发送待响应），其他会话用列表接口的 busy
+        isBusy: (provider, id) => {
+            if (state.active && state.active.provider === provider && state.active.id === id) return Boolean(state.detail?.busy || state.pending);
+            return Boolean((state.items || []).find(item => item.provider === provider && item.id === id)?.busy);
+        },
+        activeSessionId: () => state.active ? key(state.active) : null,
+        activeSession: () => state.active ? { ...state.active } : null,
+        show: visible => { if(visible)autoSelect=true;state.visible = visible; if (root)
+            root.hidden = !visible; if (visible && state.settings?.enabled)
+            {openFirst();sync();} },
+        search: render,
+        refresh: () => sync(true),
+        open,
+        newChat
+    };
+    if (document.readyState === 'loading')
+        document.addEventListener('DOMContentLoaded', init, { once: true });
+    else
+        init();
+})();
