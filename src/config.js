@@ -66,6 +66,15 @@ export const config = {
     openAdmin: bool(process.env.DH_OPEN_ADMIN, false),
     // 落库密钥的加密口令；未配置时退化为按应用 UUID 派生（仅防明文暴露，见 README 安全说明）
     secretKey: String(process.env.DH_SECRET_KEY || '').trim(),
+
+    // 大字段分片阈值（字符数）：超过即切片存入 dh_chunks
+    chunkChars: Math.max(8192, num(process.env.DH_CHUNK_CHARS, 131072)),
+    logLevel: String(process.env.LOG_LEVEL || '').trim(),
+
+    // 模型默认配置：平台用环境变量注入时无需在界面里再填
+    aiApiBaseUrl: String(process.env.AI_API_BASE_URL || '').trim(),
+    aiModel: String(process.env.AI_MODEL || '').trim(),
+    aiApiKey: String(process.env.AI_API_KEY || '').trim(),
 };
 
 function deriveFromQuery(suffix) {

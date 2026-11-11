@@ -187,6 +187,62 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.ok((await (await fetch(`${url}/api/custom-tools`, { headers: as('carol') })).json()).some((t) => t.name === '公共工具'));
         assert.equal((await fetch(`${url}/api/custom-tools/${mine[0].slug}`, { method: 'DELETE', headers: as('bob') })).status, 200);
 
+        // ── 5b. 任务清单、提问、精确计算、长期记忆、抓取脚本 ──
+        mock.aiRequests.length = 0;
+        mock.aiScript.push(
+            { toolCalls: [
+                { name: 'update_plan', args: { items: [{ content: '取数', status: 'in_progress' }, { content: '计算', status: 'pending' }, { content: '汇报', status: 'pending' }] } },
+                { name: 'calculate', args: { expressions: ['change_percent(80,92)', 'workdays_between("2026-10-01","2026-10-31")', 'constructor(1)'] } },
+                { name: 'memory', args: { action: 'add', content: '回答里的百分比保留两位小数' } },
+                { name: 'memory', args: { action: 'add', content: '我的密码是 hunter2abc' } },
+                { name: 'save_uiv_script', args: { name: '工单列表', url: 'https://example.invalid/api/list', method: 'post', code: 'fetch("https://example.invalid/api/list")' } },
+            ] },
+            { toolCalls: [{ name: 'ask_user', args: { question: '按哪个口径统计？', options: ['按网络', '按责任人'] } }] },
+        );
+        const ev5 = await chat('bob', { messages: [{ role: 'user', content: '帮我算一下增幅' }] });
+        assert.equal(ev5.find((e) => e.type === 'plan').items.length, 3);
+        assert.ok(!ev5.some((e) => e.type === 'tool_start' && ['update_plan', 'ask_user'].includes(e.tool)), '清单和提问不占工具行');
+        const calcMsg = mock.aiRequests[1].messages.filter((m) => m.role === 'tool')[1].content;
+        assert.deepEqual(JSON.parse(calcMsg).map((r) => r.result ?? 'ERR'), [15, 22, 'ERR']);
+        const res5 = Object.fromEntries(ev5.filter((e) => e.type === 'tool_result').map((e) => [e.tool + ':' + e.summary, e.ok]));
+        assert.equal(res5['memory:已记住 #1'], true);
+        assert.equal(res5['memory:未保存'], false, '凭据不能进记忆');
+        assert.equal(res5['save_uiv_script:需要管理员权限'], false);
+        const q = ev5.find((e) => e.type === 'question');
+        assert.deepEqual(q.options, ['按网络', '按责任人']);
+        assert.equal(ev5.find((e) => e.type === 'done').reply, '按哪个口径统计？');
+        assert.equal(mock.aiRequests.length, 2, '提问后本轮结束，不再调用模型');
+
+        // 记忆跨对话生效，且只属于本人
+        mock.aiRequests.length = 0;
+        mock.aiScript.push({ text: '好。' }, { text: '好。' });
+        await chat('bob', { messages: [{ role: 'user', content: '你好' }] });
+        assert.match(mock.aiRequests[0].messages[0].content, /百分比保留两位小数/);
+        await chat('alice', { messages: [{ role: 'user', content: '你好' }] });
+        assert.doesNotMatch(mock.aiRequests[1].messages[0].content, /百分比保留两位小数/);
+
+        // 管理员能通过对话保存抓取脚本，随后能列出来；请求头里的凭据不给模型
+        mock.aiRequests.length = 0;
+        mock.aiScript.push(
+            { toolCalls: [{ name: 'save_uiv_script', args: { name: '工单列表', url: 'https://example.invalid/api/list', method: 'post', code: 'fetch("https://example.invalid/api/list")' } }] },
+            { toolCalls: [{ name: 'list_uiv_scripts', args: { keyword: '工单' } }] },
+            { text: '已保存。' },
+        );
+        const ev6 = await chat('alice', { messages: [{ role: 'user', content: '保存这个脚本' }] });
+        assert.deepEqual(ev6.filter((e) => e.type === 'tool_result').map((e) => e.ok), [true, true]);
+        assert.match(mock.aiRequests[2].messages.filter((m) => m.role === 'tool').at(-1).content, /"name":"工单列表"/);
+
+        // 输出被长度上限截断时自动续写
+        mock.aiRequests.length = 0;
+        mock.aiScript.push({ text: '第一段，', finish: 'length' }, { text: '第二段。' });
+        const ev7 = await chat('bob', { messages: [{ role: 'user', content: '写长一点' }] });
+        assert.equal(ev7.find((e) => e.type === 'done').reply, '第一段，第二段。');
+
+        // 增强提示词
+        mock.aiScript.length = 0;
+        const enh = await (await fetch(`${url}/api/ai/enhance-prompt`, { method: 'POST', headers: json(as('bob')), body: JSON.stringify({ prompt: '指标咋样' }) })).json();
+        assert.equal(enh.enhanced, 'OK');
+
         // ── 6. 模型服务报错时，把原因告诉用户而不是“内部错误” ──
         mock.aiScript.length = 0;
         await fetch(`${url}/api/ai-settings/profiles`, {

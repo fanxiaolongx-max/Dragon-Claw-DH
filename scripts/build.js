@@ -18,7 +18,7 @@ const ROOT_FILES = [
     'README.md',
 ];
 
-const INCLUDE_DIRS = ['db', 'src', 'static'];
+const INCLUDE_DIRS = ['db', 'src', 'static', 'tests'];
 // --lite：只带规范白名单内的依赖（fastify / @fastify/static / pino / undici）。
 // 内网源缺少 exceljs、@tutao/oxmsg 等包导致完整包安装失败时，用它先把应用跑起来；对应功能会提示改用完整包。
 const LITE = process.argv.includes('--lite');

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 import { BusinessError } from '../core/errors.js';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { encryptSecret, decryptSecret } from '../core/secrets.js';
@@ -19,10 +20,10 @@ const DEFAULT_MODEL_SETTINGS = {
     name: '默认模型',
     provider: 'openai',
     anthropicAuthType: 'ANTHROPIC_AUTH_TOKEN',
-    apiBaseUrl: process.env.AI_API_BASE_URL || '',
-    model: process.env.AI_MODEL || 'gpt-4o-mini',
-    apiKey: process.env.AI_API_KEY || '',
-    maxOutputTokens: 2048,
+    apiBaseUrl: config.aiApiBaseUrl,
+    model: config.aiModel || 'gpt-4o-mini',
+    apiKey: config.aiApiKey,
+    maxOutputTokens: 4096,
     contextWindowTokens: 64000,
     temperature: 0.7,
     inputCostPerMillionUsd: 0.15,

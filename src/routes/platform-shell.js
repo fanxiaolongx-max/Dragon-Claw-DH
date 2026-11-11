@@ -4,7 +4,7 @@ import path from 'node:path';
 import { config, STATIC_DIR } from '../config.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { pushLog, listLogs } from '../core/log-ring.js';
-import { kvGet, kvSet } from '../dao/scoped.js';
+import { getSetting as kvGet, saveSetting as kvSet } from '../services/system-service.js';
 import { listScripts as listUivScripts } from '../services/uiv-service.js';
 
 const DEFAULT_IDENTITY = {

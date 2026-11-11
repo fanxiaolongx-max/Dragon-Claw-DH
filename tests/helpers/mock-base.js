@@ -205,7 +205,7 @@ export async function startMockBaseServer() {
                     send({ choices: [{ delta: { tool_calls: [{ index, id: `call_${aiRequests.length}_${index}`, type: 'function', function: { name: call.name, arguments: args.slice(0, 7) } }] } }] });
                     send({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: args.slice(7) } }] } }] });
                 });
-                send({ choices: [{ delta: {}, finish_reason: scripted.toolCalls ? 'tool_calls' : 'stop' }] });
+                send({ choices: [{ delta: {}, finish_reason: scripted.finish || (scripted.toolCalls ? 'tool_calls' : 'stop') }] });
                 send({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20 } });
                 res.write('data: [DONE]\n\n');
                 res.end();

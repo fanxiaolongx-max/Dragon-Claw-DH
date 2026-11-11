@@ -18,7 +18,7 @@ async function start() {
         pushLog({
             level: 'INFO',
             category: 'BOOT',
-            message: `Dragon Claw Digital Human listening on http://${config.host}:${config.port}`,
+            message: `server started: Dragon Claw Digital Human listening on http://${config.host}:${config.port}`,
             detail: { memoryMode: config.localDevMemory, appSchema: config.appSchema || null },
         });
     } catch (err) {

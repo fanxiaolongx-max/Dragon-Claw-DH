@@ -1,7 +1,7 @@
 import { config, endpoints } from '../config.js';
 import { resolveRequestIdentity, parseCookies } from '../core/identity.js';
 import { listLogs, clearLogs, subscribeLogs, pushLog } from '../core/log-ring.js';
-import { debugProbeAction, isMemoryMode } from '../dao/scoped.js';
+import { debugProbeAction, isMemoryMode } from '../services/system-service.js';
 import { sendExpediteNotification } from '../services/report-service.js';
 import { getActiveSettings } from '../services/ai-service.js';
 import { secretsAreStrong } from '../core/secrets.js';

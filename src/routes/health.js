@@ -1,4 +1,4 @@
-import { scopedCheckHealth, isMemoryMode } from '../dao/scoped.js';
+import { checkDataHealth as scopedCheckHealth, isMemoryMode } from '../services/system-service.js';
 import { config } from '../config.js';
 import { ok } from '../core/response.js';
 

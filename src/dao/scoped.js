@@ -149,7 +149,7 @@ export async function selectTable(table, options = {}) {
 // 写入时把超过阈值的字段切片存进 dh_chunks，原字段只留一个标记；读取时自动拼回。
 // 对 services 完全透明。标记格式：@@dh-chunk:v1:<ref>:<片数>:<字符数>
 // ============================================================
-const CHUNK_CHARS = Math.max(8_192, Number(process.env.DH_CHUNK_CHARS) || 131_072);
+const CHUNK_CHARS = config.chunkChars;
 const CHUNK_MARK = '@@dh-chunk:v1:';
 const CHUNK_TABLE = 'dh_chunks';
 const CHUNK_READ_BATCH = 4;

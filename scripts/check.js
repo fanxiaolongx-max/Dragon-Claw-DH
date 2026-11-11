@@ -133,6 +133,14 @@ export async function runCheck() {
         if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(src)) {
             errors.push(`R4 违规 (${rel(file)})：疑似硬编码 UUID 字面量`);
         }
+        // 规范 §6.1：环境变量只在 src/config.js 读取一次
+        if (rel(file) !== `src${path.sep}config.js` && /process\.env\b/.test(src)) {
+            errors.push(`§6.1 违规 (${rel(file)})：环境变量只能在 src/config.js 读取`);
+        }
+        // 规范 §5.1：routes 只调 service，不直接引用数据访问层
+        if (rel(file).startsWith(`src${path.sep}routes${path.sep}`) && /dao\/(?:scoped|base|memory-store)/.test(src)) {
+            errors.push(`§5.1 违规 (${rel(file)})：routes 不得直接引用 dao，请通过 services 调用`);
+        }
         if (rel(file).startsWith(`src${path.sep}routes${path.sep}`) || rel(file).startsWith(`src${path.sep}services${path.sep}`)) {
             if (/dao\/base/.test(src) || /\b(?:queryAppSchema|executeAppSchema|queryBusiness|rawBaseGet|rawBasePost|rawBaseDelete)\b/.test(src)) {
                 errors.push(`R5 违规 (${rel(file)})：routes/services 只允许通过 dao/scoped.js 访问数据`);

@@ -75,15 +75,24 @@ function parseArgs(raw) {
     }
 }
 
+// 限流、网关抖动、连接被重置这类瞬时故障：在还没开始输出之前重试一次（间隔 1.2 秒）
+const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504, 529]);
 async function post(url, headers, body, signal) {
-    let resp;
-    try {
-        resp = await undiciFetch(url, { method: 'POST', headers, body: JSON.stringify(body), dispatcher, signal });
-    } catch (error) {
-        if (signal?.aborted) throw error;
-        throw new BusinessError(`连接模型服务失败：${error.cause?.code || error.message}`, 502);
+    for (let attempt = 1; ; attempt += 1) {
+        try {
+            const resp = await undiciFetch(url, { method: 'POST', headers, body: JSON.stringify(body), dispatcher, signal });
+            if (attempt === 1 && TRANSIENT_STATUS.has(resp.status)) {
+                await resp.body?.cancel?.().catch(() => {});
+            } else {
+                return resp;
+            }
+        } catch (error) {
+            if (signal?.aborted) throw error;
+            if (attempt > 1) throw new BusinessError(`连接模型服务失败：${error.cause?.code || error.message}`, 502);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
-    return resp;
 }
 
 /**

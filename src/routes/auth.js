@@ -2,7 +2,7 @@ import { BusinessError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
-import { isMemoryMode } from '../dao/scoped.js';
+import { isMemoryMode } from '../services/system-service.js';
 
 function publicIdentity(id) {
     return {

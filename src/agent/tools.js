@@ -8,6 +8,9 @@ import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, sqlVal,
 import { listSkills, getSkill, saveSkill } from '../services/skill-service.js';
 import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
+import { changeMemory } from '../services/memory-service.js';
+import { listScripts, saveScripts, listCategories } from '../services/uiv-service.js';
+import { evaluate } from './calc.js';
 
 // ── 应用库目录：模型能查的业务表（其余表——对话、密钥、配置、附件——一律不可查）──
 const TABLE_NOTES = {
@@ -308,6 +311,129 @@ export const TOOLS = [
             } catch (error) {
                 return { ok: false, summary: '发布失败', content: `发布失败：${error.message}` };
             }
+        },
+    },
+
+    {
+        name: 'update_plan',
+        description: '任务清单：需要 3 步以上的任务，先列出步骤，之后每完成一步就更新状态（界面会显示进度）。每次传完整清单；同一时间最多一项 in_progress。简单问答不用。',
+        parameters: {
+            type: 'object',
+            properties: { items: { type: 'array', description: '完整清单，最多 20 项', items: { type: 'object', properties: { content: { type: 'string', description: '一句话的步骤' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } }, required: ['content', 'status'] } } },
+            required: ['items'],
+        },
+        silent: true,
+        async run(args, ctx) {
+            const items = (Array.isArray(args.items) ? args.items : []).slice(0, 20)
+                .map((item) => ({ content: String(item?.content || '').trim().slice(0, 200), status: ['pending', 'in_progress', 'completed'].includes(item?.status) ? item.status : 'pending' }))
+                .filter((item) => item.content);
+            if (!items.length) return { ok: false, summary: '清单为空', content: 'items 不能为空' };
+            if (items.filter((item) => item.status === 'in_progress').length > 1) return { ok: false, summary: '清单状态有误', content: '同一时间最多一项 in_progress，请修正后重新提交完整清单' };
+            ctx.emit({ type: 'plan', items });
+            const done = items.filter((item) => item.status === 'completed').length;
+            return { ok: true, summary: `任务清单 ${done}/${items.length}`, content: `任务清单已更新（完成 ${done}/${items.length}）。` };
+        },
+    },
+    {
+        name: 'ask_user',
+        description: '遇到必须由用户决定、无法从上下文或常识判断的问题时，向用户提一个问题并给出 2–6 个选项，本轮随即结束，等用户回复后再继续。能自己查到或有合理默认值的事不要问。',
+        parameters: {
+            type: 'object',
+            properties: { question: { type: 'string', description: '问题，一句话' }, options: { type: 'array', items: { type: 'string' }, description: '2–6 个简短选项，推荐项放第一个' } },
+            required: ['question', 'options'],
+        },
+        silent: true,
+        async run(args, ctx) {
+            const question = String(args.question || '').trim().slice(0, 500);
+            const options = (Array.isArray(args.options) ? args.options : []).map((o) => String(o || '').trim().slice(0, 100)).filter(Boolean).slice(0, 6);
+            if (!question || options.length < 2) return { ok: false, summary: '问题不完整', content: '需要 question 和 2–6 个 options' };
+            ctx.ask({ question, options });
+            return { ok: true, summary: '已向用户提问', content: '问题已发给用户，本轮到此结束，等用户回复后再继续。' };
+        },
+    },
+    {
+        name: 'calculate',
+        description: '精确计算，不要心算：四则运算、乘方 ^、百分比 percent(部分,整体)、增减幅 change_percent(旧,新)、sum/avg/median/min/max、round(x,位数)；日期 days_between(a,b)、add_days(d,n)、add_months(d,n)、workdays_between(a,b)（首尾都算）、add_workdays(d,n)、weekday(d)、today()。日期写 "YYYY-MM-DD"。涉及占比、差距、同比环比时一定用它。',
+        parameters: {
+            type: 'object',
+            properties: { expression: { type: 'string', description: '如 (1250-980)/980*100 或 workdays_between("2026-10-01","2026-10-31")' }, expressions: { type: 'array', items: { type: 'string' }, description: '一次算多个，最多 50 个' } },
+        },
+        async run(args) {
+            const list = [...(args.expression ? [args.expression] : []), ...(Array.isArray(args.expressions) ? args.expressions : [])].map(String).slice(0, 50);
+            if (!list.length) return { ok: false, summary: '缺少表达式', content: '需要 expression 或 expressions' };
+            const results = list.map((expression) => {
+                try { return { expression, result: evaluate(expression) }; } catch (error) { return { expression, error: error.message }; }
+            });
+            const failed = results.filter((r) => r.error).length;
+            return { ok: failed < results.length, summary: results.length === 1 ? String(results[0].result ?? results[0].error).slice(0, 60) : `${results.length - failed}/${results.length} 个算出结果`, content: JSON.stringify(results) };
+        },
+    },
+    {
+        name: 'memory',
+        description: '长期记忆：保存用户明确要求记住、或反复用到的偏好与约定（跨对话有效，已有的记忆列在系统提示里）。action=add 新增、update 修改、delete 删除（按 id）、list 列出。不要保存密码、密钥等凭据，也不要保存一次性的任务细节。',
+        parameters: {
+            type: 'object',
+            properties: { action: { type: 'string', enum: ['add', 'update', 'delete', 'list'] }, id: { type: 'integer', description: 'update / delete 时的记忆编号' }, content: { type: 'string', description: 'add / update 时的内容，一句话' } },
+            required: ['action'],
+        },
+        async run(args, ctx) {
+            if (!ctx.identity.identified) return { ok: false, summary: '未识别用户', content: '当前访问者没有工号，无法保存个人记忆。' };
+            try {
+                const out = await changeMemory(ctx.identity.username, args);
+                const summary = args.action === 'list' ? `${out.items.length} 条记忆` : args.action === 'delete' ? `已删除 #${out.deleted}` : `已记住 #${out.item.id}`;
+                return { ok: true, summary, content: JSON.stringify(out) };
+            } catch (error) {
+                return { ok: false, summary: '未保存', content: error.message };
+            }
+        },
+    },
+    {
+        name: 'list_uiv_scripts',
+        description: '列出「数据抓取」脚本仓库里的脚本（名称、分类、目标地址）。用户问有哪些抓取脚本、某个系统的数据怎么抓时调用。',
+        parameters: { type: 'object', properties: { keyword: { type: 'string', description: '按名称、地址或分类筛选，可选' } } },
+        async run(args) {
+            const q = String(args.keyword || '').toLowerCase();
+            const [scripts, categories] = await Promise.all([listScripts(), listCategories().catch(() => [])]);
+            const hit = scripts.filter((s) => !q || `${s.name} ${s.url} ${s.category}`.toLowerCase().includes(q));
+            return { ok: true, summary: `${hit.length} 个脚本`, content: JSON.stringify({ total: scripts.length, categories, scripts: hit.slice(0, 100).map((s) => ({ id: s.id, name: s.name, category: s.category, url: String(s.url || '').slice(0, 200), method: s.method || '' })) }) };
+        },
+    },
+    {
+        name: 'read_uiv_script',
+        description: '读取某个抓取脚本的完整内容（请求地址、方法、请求头、请求体、fetch 代码）。',
+        parameters: { type: 'object', properties: { id: { type: 'string', description: '脚本 id（先用 list_uiv_scripts 查）' } }, required: ['id'] },
+        async run(args) {
+            const script = (await listScripts()).find((s) => String(s.id) === String(args.id));
+            if (!script) return { ok: false, summary: '脚本不存在', content: `没有 id 为 ${args.id} 的脚本` };
+            // 请求头里的会话凭据不给模型看
+            const safe = JSON.parse(JSON.stringify(script, (k, v) => (/^(cookie|authorization|x-csrf-token|x-auth-token|token)$/i.test(k) && typeof v === 'string' ? '[已隐藏]' : v)));
+            let content = JSON.stringify(safe);
+            if (content.length > 20_000) content = `${content.slice(0, 20_000)}…[已截断]`;
+            return { ok: true, summary: script.name, content };
+        },
+    },
+    {
+        name: 'save_uiv_script',
+        description: '把一段从浏览器 F12 复制的 fetch 请求保存为「数据抓取」脚本。仅管理员可用；只有用户明确要求保存时才调用。更新已有脚本时传 id。',
+        parameters: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: '更新已有脚本时传；新建不传' },
+                name: { type: 'string', description: '脚本名称' },
+                category: { type: 'string', description: '分类，默认「默认分类」' },
+                url: { type: 'string', description: '请求地址' },
+                method: { type: 'string', description: 'GET / POST …' },
+                code: { type: 'string', description: 'fetch(...) 代码原文' },
+            },
+            required: ['name', 'url'],
+        },
+        async run(args, ctx) {
+            if (!ctx.identity.isAdmin) return { ok: false, summary: '需要管理员权限', content: '保存抓取脚本需要管理员权限。可以把脚本内容给用户，请管理员在「数据抓取」页面保存。' };
+            if (!/^https?:\/\//i.test(String(args.url || ''))) return { ok: false, summary: '地址不合法', content: 'url 需要是 http(s) 地址' };
+            const before = new Set((await listScripts()).map((s) => String(s.id)));
+            const all = await saveScripts([{ ...(args.id ? { id: String(args.id) } : {}), name: String(args.name).slice(0, 120), category: args.category, url: String(args.url), method: String(args.method || 'GET').toUpperCase(), code: String(args.code || '').slice(0, 60_000), source: 'chat', createdBy: ctx.identity.username }]);
+            const saved = args.id ? all.find((s) => String(s.id) === String(args.id)) : all.find((s) => !before.has(String(s.id)));
+            return { ok: true, summary: `已保存「${args.name}」`, content: JSON.stringify({ saved: true, id: saved?.id, name: args.name, linkHint: '可在 [数据抓取](/uivf12) 页面查看和运行' }) };
         },
     },
 ];

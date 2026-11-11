@@ -231,9 +231,20 @@ export async function aiRoutes(fastify) {
         return { success: true, summary: `已整理历史对话 ${msgs.length} 条记录` };
     });
 
-    fastify.post('/enhance-prompt', async (req) => ({
-        enhanced: String(req.body?.prompt || ''),
-    }));
+    // 增强提示词：把一句口语化的问题改写成清楚、可执行的提问；没配模型或失败时原样返回
+    fastify.post('/enhance-prompt', async (req) => {
+        const prompt = String(req.body?.prompt || '').trim();
+        if (!prompt) return { enhanced: '' };
+        const res = await callAiCompletion({
+            maxTokens: 600,
+            messages: [
+                { role: 'system', content: '你是提示词编辑。把用户的提问改写得更清楚、具体、可执行：补全对象、范围、期望的输出形式，保留原意和原有的专有名词，不要回答问题，不要加客套话，不要超过 200 字。只输出改写后的提问。' },
+                { role: 'user', content: prompt.slice(0, 4000) },
+            ],
+        }).catch(() => null);
+        const text = String(res?.ok ? res.text : '').trim().replace(/^["“「]|["”」]$/g, '');
+        return { enhanced: text || prompt, changed: Boolean(text && text !== prompt) };
+    });
 
     fastify.post('/uploads', handleChatUpload);
 

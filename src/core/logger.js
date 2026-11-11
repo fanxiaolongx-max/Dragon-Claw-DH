@@ -2,7 +2,7 @@ import pino from 'pino';
 import { config } from '../config.js';
 
 export const logger = pino({
-    level: process.env.LOG_LEVEL || (config.debug ? 'debug' : 'info'),
+    level: config.logLevel || (config.debug ? 'debug' : 'info'),
     base: {
         app: config.appUuid || 'local',
         region: config.appRegion || '',
