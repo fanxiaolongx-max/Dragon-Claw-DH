@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { BusinessError } from '../core/errors.js';
 import { optionalDep } from '../core/optional.js';
 import {
     kvGet, kvSet, selectTable, upsertRow, updateRows, deleteRows,
@@ -23,7 +24,7 @@ export async function listCategories() {
 
 export async function addCategory(name) {
     const trimmed = String(name || '').trim();
-    if (!trimmed) throw new Error('分类名不能为空');
+    if (!trimmed) throw new BusinessError('分类名不能为空');
     if (!DEFAULT_CATEGORIES.includes(trimmed)) {
         const existing = await selectTable('uiv_categories', {
             whereSql: `\`name\` = ${sqlVal(trimmed)}`,
@@ -188,7 +189,7 @@ export async function saveBatchScope(data) {
 
 export async function parseFetchSnippet(codeText) {
     const raw = String(codeText || '').trim();
-    if (!raw) throw new Error('请输入从 Chrome DevTools 复制的 fetch(...) 代码');
+    if (!raw) throw new BusinessError('请输入从 Chrome DevTools 复制的 fetch(...) 代码');
     const acorn = await optionalDep('acorn', 'fetch 代码解析');
     let ast;
     try {
@@ -239,7 +240,7 @@ export async function parseFetchSnippet(codeText) {
     }
 
     walk(ast);
-    if (!url) throw new Error('未在代码片段中识别到 fetch("...") 调用');
+    if (!url) throw new BusinessError('未在代码片段中识别到 fetch("...") 调用');
     return { url, method, headers, body, raw };
 }
 
@@ -294,7 +295,7 @@ export async function analyzeFetchWithAi(payload = {}) {
 export async function saveAutoImportDatasets(sessionId, payload = {}) {
     const sid = String(sessionId || '').trim();
     if (!sid || !/^[a-zA-Z0-9_-]{4,100}$/.test(sid)) {
-        throw new Error('无效的 sessionId');
+        throw new BusinessError('无效的 sessionId');
     }
     const now = Date.now();
     const record = {

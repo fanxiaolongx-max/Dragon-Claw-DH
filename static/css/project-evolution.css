@@ -29,7 +29,7 @@ body {
     content: "";
     position: absolute;
     inset: -90px;
-    background: url('/assets/promotions/project-evolution-galaxy-poster.jpg') center / cover no-repeat;
+    background: url('../assets/promotions/project-evolution-galaxy-poster.jpg') center / cover no-repeat;
     filter: blur(80px) saturate(.65);
     opacity: .12;
 }
@@ -39,7 +39,7 @@ body {
     inset: 0;
     background:
         radial-gradient(ellipse at 50% 45%, transparent 28%, rgba(4, 5, 11, .72) 100%),
-        url('/assets/promotions/project-evolution-stars.svg') center top / 1400px 1000px repeat;
+        url('../assets/promotions/project-evolution-stars.svg') center top / 1400px 1000px repeat;
     opacity: .68;
 }
 .evolution-nav, .evolution-main { position: relative; z-index: 1; }

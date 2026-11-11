@@ -1,0 +1,54 @@
+/*
+ * 数字人 Web 版裁剪层：隐藏桌面版专属、Web 版没有后端支撑的入口。
+ * 只做隐藏，不改桌面版沿用的页面代码；二期接入某项能力时删掉对应选择器即可。
+ * 由 js/shared/dh-runtime.js 注入，并在 <html> 上加 dh-web 类。
+ */
+
+/* 首页左侧导航：频道会话、技能/插件、定时任务、资料库（知识图谱）、运维待办 */
+html.dh-web .v2-nav-item[data-v2-action="channels"],
+html.dh-web .v2-nav-item[data-v2-action="skillHub"],
+html.dh-web .v2-nav-item[data-v2-action="schedule"],
+html.dh-web .v2-nav-item[data-v2-action="library"],
+html.dh-web .v2-nav-item[data-v2-action="opsDrafts"],
+/* 「更多」菜单里的桌面版入口 */
+html.dh-web .v2-pop-item[data-v2-action="requirements"],
+html.dh-web .v2-pop-item[data-v2-action="promotions"],
+html.dh-web .v2-pop-item[data-v2-action="links"],
+html.dh-web #homeKnowledgeGraphEntry,
+html.dh-web #homeCapsEntry,
+/* 快速提问里依赖已隐藏能力的场景：知识图谱、定时任务 */
+html.dh-web .v2-scenes [data-scene="graph"],
+html.dh-web .v2-scenes [data-scene="schedule"],
+/* 对话区：内嵌浏览器、语音输入、附件（附件上传二期开放） */
+html.dh-web #dcBrowserToggle,
+html.dh-web #dcAttach,
+html.dh-web #dcVoice,
+/* 左下角：消息中心、扫码使用 */
+html.dh-web #v2AlertBtn,
+html.dh-web #v2ScanBtn,
+/* 全局设置：只保留菜单布局与 AI 助手 */
+html.dh-web .nav-settings-tab[data-tab="logo"],
+html.dh-web .nav-settings-tab[data-tab="agentTools"],
+html.dh-web .nav-settings-tab[data-tab="vault"],
+html.dh-web .nav-settings-tab[data-tab="channels"],
+html.dh-web .nav-settings-tab[data-tab="desktopAgents"],
+html.dh-web .nav-settings-tab[data-tab="update"],
+html.dh-web .nav-settings-tab[data-tab="backup"],
+html.dh-web .nav-settings-tab[data-tab="snapshotPublish"],
+html.dh-web .nav-settings-tab[data-tab="initialize"],
+html.dh-web .nav-settings-tab[data-tab="media"],
+html.dh-web .nav-settings-tab[data-tab="promotions"],
+html.dh-web .nav-settings-tab[data-tab="customBackup"],
+html.dh-web .nav-settings-tab[data-tab="accounts"],
+html.dh-web .nav-settings-tab[data-tab="security"],
+/* 页面配置：一期未开放的工具 */
+html.dh-web .nav-settings-tab[data-tab="page:duty-roster"],
+html.dh-web .nav-settings-tab[data-tab="page:topic-analysis"],
+html.dh-web .nav-settings-tab[data-tab="page:frt"],
+html.dh-web .nav-settings-tab[data-tab="page:praudit"],
+html.dh-web .nav-settings-tab[data-tab="page:storage"],
+html.dh-web .nav-settings-tab[data-tab="page:db-explorer"],
+html.dh-web .nav-settings-tab[data-tab="page:netcare-explorer"],
+html.dh-web .nav-settings-tab[data-tab="page:f12-extension"] {
+    display: none !important;
+}

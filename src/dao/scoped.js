@@ -1,6 +1,6 @@
 // ★ 唯一数据访问入口（合规红线 R5：routes / services 禁止直接引用 dao/base.js）
 import { config, endpoints } from '../config.js';
-import { DatabaseError } from '../core/errors.js';
+import { BusinessError, DatabaseError } from '../core/errors.js';
 import { pushLog } from '../core/log-ring.js';
 import {
     queryAppSchema,
@@ -317,7 +317,7 @@ export async function debugProbeAction(action, params = {}) {
         case 'sql-size':
             return { mode: 'memory', action, simulated: true, message: '离线内存模式：该探针只在连接真实基座时有意义', items: [] };
         default:
-            throw new DatabaseError(`未知调试动作: ${action}`);
+            throw new BusinessError(`未知调试动作: ${action}`);
         }
     }
 
@@ -421,6 +421,6 @@ export async function debugProbeAction(action, params = {}) {
     case 'cache-delete':
         return cacheDelete(params.key || 'debug_probe_key');
     default:
-        throw new DatabaseError(`未知调试动作: ${action}`);
+        throw new BusinessError(`未知调试动作: ${action}`);
     }
 }

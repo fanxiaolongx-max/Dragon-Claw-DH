@@ -228,7 +228,8 @@ export async function createServer() {
     app.setErrorHandler((err, req, reply) => {
         const status = err instanceof BusinessError
             ? (err.code >= 400 && err.code < 600 ? err.code : 400)
-            : (err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500);
+            // 业务服务沿用桌面版写法，用 error.status 标注 400/404 等业务状态
+            : ([err.statusCode, err.status].find((c) => Number.isInteger(c) && c >= 400 && c < 600) || 500);
         pushLog({
             level: status >= 500 ? 'ERROR' : 'WARN',
             category: 'ERR',

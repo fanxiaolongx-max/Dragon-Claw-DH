@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { BusinessError } from '../core/errors.js';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { encryptSecret, decryptSecret } from '../core/secrets.js';
 import { kvGet, kvSet, selectTable, insertRow, upsertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
@@ -227,7 +228,7 @@ export async function callAiCompletion({ messages, profileId = '', maxTokens } =
         return {
             ok: false,
             text: '',
-            error: '未配置 API Key，请在右上角「AI 设置」中配置模型网关和密钥。',
+            error: '未配置 API Key，请在左下角头像 →「全局设置」→「AI 助手」中配置模型网关和密钥。',
             model: settings.model,
         };
     }
@@ -275,7 +276,7 @@ export async function streamAiChat({ messages, profileId = '', onDelta }) {
     const profiles = await listProfiles();
     const settings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
     if (!settings.apiKey) {
-        throw new Error('未配置可用的 AI 模型 API Key：请先点击「设置 -> AI 设置」配置模型网关与 Token，或在无模型配置时体验系统内置诊断回复。');
+        throw new BusinessError('未配置可用的 AI 模型 API Key：请先点击左下角头像 →「全局设置」→「AI 助手」配置模型网关与 Token，或在无模型配置时体验系统内置诊断回复。');
     }
 
     const reqSpec = buildCompletionRequest(settings, messages, { stream: true });
@@ -288,7 +289,7 @@ export async function streamAiChat({ messages, profileId = '', onDelta }) {
     });
     if (!resp.ok) {
         const text = await resp.text().catch(() => '');
-        throw new Error(`模型服务 HTTP ${resp.status}: ${text.slice(0, 240)}`);
+        throw new BusinessError(`模型服务 HTTP ${resp.status}: ${text.slice(0, 240)}`, 502);
     }
 
     let fullText = '';

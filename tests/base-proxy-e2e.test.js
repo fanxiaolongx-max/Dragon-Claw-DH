@@ -73,6 +73,14 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
             assert.equal((await (await fetch(`${appUrl}${alias}`)).json()).status, 'ok', alias);
         }
 
+        // 业务错误要带着原因返回给用户，不能被统一成“服务内部错误”
+        const missing = await fetch(`${appUrl}/api/ai-report/documents/no-such-doc`);
+        assert.equal(missing.status, 404);
+        assert.doesNotMatch((await missing.json()).error, /服务内部错误/);
+        const badCategory = await fetch(`${appUrl}/api/uiv/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        assert.equal(badCategory.status, 400);
+        assert.equal((await badCategory.json()).error, '分类名不能为空');
+
         // 2. Gateway subpath rewriting & trailing slash redirect + Identity SSO
         const bareSubRes = await fetch(`${appUrl}${subPrefix}`, { redirect: 'manual' });
         assert.equal(bareSubRes.status, 302);

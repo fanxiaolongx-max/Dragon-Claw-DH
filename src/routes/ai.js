@@ -150,7 +150,7 @@ export async function aiRoutes(fastify) {
                 '当前运行在 **Dragon Claw 数字人云端 Web 版（一期）**。',
                 '',
                 '检测到尚未配置大模型 API Token，无法连接外部 LLM。您可以：',
-                '- 点击右上角 **「AI 设置」** 配置您的 OpenAI / Anthropic / Gemini 兼容网关地址与 API Key；',
+                '- 点击左下角头像 → **「全局设置」→「AI 助手」** 配置您的 OpenAI / Anthropic / Gemini 兼容网关地址与 API Key；',
                 '- 或直接使用左侧导航进入 **数据抓取 / 数据导入 / 报表看板 / 一键催办 / AI 月报 / 大屏看板**；',
                 '- 点击右下角 **「🐛 调试模式」** 查看当前数字人身份 Cookie、数据库 MySQL 通道与 Redis 缓存状态。',
             ].join('\n');

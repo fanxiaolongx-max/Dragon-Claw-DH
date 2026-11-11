@@ -397,3 +397,8 @@ CREATE TABLE IF NOT EXISTS `ai_report_image_deletions` (
   PRIMARY KEY (`id`),
   KEY `idx_arid_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 可选：预置管理员。默认不需要——首位被网关识别出工号的访问者会自动成为管理员。
+-- 如果想在上线前就固定管理员（防止别人先打开应用），把下面一行取消注释，
+-- 把 工号1、工号2 换成真实工号（小写）后再交给 DBA 执行。已有名单时不会覆盖。
+-- INSERT IGNORE INTO `sys_kv_store` (`kv_key`, `kv_value`, `updated_at`) VALUES ('dh_admins', '["工号1","工号2"]', 0);

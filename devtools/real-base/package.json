@@ -1,0 +1,9 @@
+{
+  "name": "dh-real-base-emulator",
+  "private": true,
+  "type": "module",
+  "description": "开发用：用真实 MySQL 8 模拟运营数字人基座的 REST 接口与网关（不随应用包发布）",
+  "dependencies": {
+    "mysql2": "3.11.5"
+  }
+}

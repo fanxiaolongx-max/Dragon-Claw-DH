@@ -79,6 +79,15 @@
     window.dhStripBase = dhStripBase;
     window.dhResolveUrl = dhResolveUrl;
 
+    // ── Web 版裁剪层：隐藏桌面版专属入口（见 css/dh-web-trim.css）──
+    try {
+        document.documentElement.classList.add('dh-web');
+        const trim = document.createElement('link');
+        trim.rel = 'stylesheet';
+        trim.href = DH_BASE + '/css/dh-web-trim.css';
+        (document.head || document.documentElement).appendChild(trim);
+    } catch (_) { /* ignore */ }
+
     // ── Digital Human SSO token marker so legacy frontend skips login redirects ──
     try {
         if (!localStorage.getItem('tools_token')) {
@@ -185,6 +194,63 @@
         wrapProp(window.HTMLImageElement?.prototype, 'src');
         wrapProp(window.HTMLLinkElement?.prototype, 'href');
         wrapProp(window.HTMLAnchorElement?.prototype, 'href');
+        wrapProp(window.HTMLIFrameElement?.prototype, 'src');
+        wrapProp(window.HTMLMediaElement?.prototype, 'src');
+        wrapProp(window.HTMLSourceElement?.prototype, 'src');
+        wrapProp(window.HTMLVideoElement?.prototype, 'poster');
+
+        // 页面里大量用 innerHTML 拼出 <img src="/assets/...">：字符串进 DOM 之前就把站内绝对路径补上前缀，
+        // 否则浏览器会先向网关根路径发一次请求（404，图标裂开）。
+        const HTML_URL_ATTR_RE = /(\s(?:src|href|poster|data-src)\s*=\s*)(["'])(\/(?!\/)[^"'\s>]*)\2/gi;
+        const CSS_URL_RE = /url\(\s*(["']?)(\/(?!\/)[^"')\s]+)\1\s*\)/gi;
+        const rewriteHtml = (html) => {
+            if (typeof html !== 'string' || html.indexOf('/') === -1) return html;
+            let out = html;
+            if (/(?:src|href|poster)\s*=/i.test(out)) out = out.replace(HTML_URL_ATTR_RE, (m, a, q, u) => `${a}${q}${dhResolveUrl(u)}${q}`);
+            if (out.indexOf('url(') !== -1) out = out.replace(CSS_URL_RE, (m, q, u) => `url(${q}${dhResolveUrl(u)}${q})`);
+            return out;
+        };
+        window.dhRewriteHtml = rewriteHtml;
+        const wrapHtmlProp = (Proto, prop) => {
+            try {
+                const desc = Object.getOwnPropertyDescriptor(Proto, prop);
+                if (!desc || !desc.configurable || !desc.set) return;
+                Object.defineProperty(Proto, prop, {
+                    configurable: true,
+                    enumerable: desc.enumerable,
+                    get() { return desc.get.call(this); },
+                    set(val) { return desc.set.call(this, rewriteHtml(val)); },
+                });
+            } catch (_) { /* ignore */ }
+        };
+        wrapHtmlProp(Element.prototype, 'innerHTML');
+        wrapHtmlProp(Element.prototype, 'outerHTML');
+        try {
+            const origInsert = Element.prototype.insertAdjacentHTML;
+            Element.prototype.insertAdjacentHTML = function (position, html) {
+                return origInsert.call(this, position, rewriteHtml(html));
+            };
+            const origSetAttr = Element.prototype.setAttribute;
+            const URL_ATTRS = { src: 1, href: 1, poster: 1 };
+            Element.prototype.setAttribute = function (name, value) {
+                const key = typeof name === 'string' ? name.toLowerCase() : name;
+                if (typeof value === 'string') {
+                    if (URL_ATTRS[key] === 1) value = dhResolveUrl(value);
+                    else if (key === 'style' && value.indexOf('url(') !== -1) value = rewriteHtml(value);
+                }
+                return origSetAttr.call(this, name, value);
+            };
+        } catch (_) { /* ignore */ }
+    }
+
+    // 页面没声明图标时浏览器会去网关根路径取 /favicon.ico（那是门户的地址，不是本应用的）
+    if (DH_BASE && !document.querySelector('link[rel~="icon"]')) {
+        try {
+            const icon = document.createElement('link');
+            icon.rel = 'icon';
+            icon.href = DH_BASE + '/favicon.ico';
+            (document.head || document.documentElement).appendChild(icon);
+        } catch (_) { /* ignore */ }
     }
 
     // ── Phase-2 Tool Interception & Notice ──

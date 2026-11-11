@@ -1,12 +1,32 @@
 // 测试用假基座：按真机回执模拟 {code,message,data}、不返回 lastInsertId、Redis 前缀等行为
 import http from 'node:http';
 
-export function startMockBaseServer() {
+// 设了 DH_REAL_BASE（devtools/real-base 的地址）时，/query 与 /execute 不再用下面的正则模拟，
+// 而是转给真实 MySQL 8 执行——同一套用例顺带验证每条 SQL 在真库上能跑。
+const REAL_BASE = String(process.env.DH_REAL_BASE || '').replace(/\/$/, '');
+const REAL_SCHEMA = process.env.DH_REAL_BASE_SCHEMA || 'dh_test';
+
+async function realBase(pathname, body) {
+    const r = await fetch(`${REAL_BASE}${pathname}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, schema: REAL_SCHEMA }),
+    });
+    return r.json();
+}
+
+export async function startMockBaseServer() {
+    if (REAL_BASE) {
+        const r = await fetch(`${REAL_BASE}/_base/reset?schema=${REAL_SCHEMA}`, { method: 'POST' });
+        const j = await r.json();
+        if (j.code !== 0) throw new Error(`真库基座重置失败：${j.message}`);
+    }
     const tables = new Map();
     const cache = new Map();
     const auditRequests = [];
     const notifications = [];
     const aiRequests = [];
+    const sqlErrors = [];
 
     function getTable(name) {
         if (!tables.has(name)) tables.set(name, []);
@@ -187,6 +207,11 @@ export function startMockBaseServer() {
             if (body.schema === 'netcare') {
                 return sendJson({ code: 400, message: '基座库 [netcare] 仅允许基础应用查询', data: null });
             }
+            if (REAL_BASE && !/^netcare/.test(String(body.schema || ''))) {
+                const out = await realBase('/query', body);
+                if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
+                return sendJson(out);
+            }
             const rows = queryMockSql(body.sql, body.limit || 200);
             return sendJson({ code: 0, message: 'ok', data: { datasourceId: body.datasourceId, schema: body.schema, rows, rowCount: rows.length } });
         }
@@ -196,6 +221,11 @@ export function startMockBaseServer() {
             }
             if (body.schema === 'netcare_base') {
                 return sendJson({ code: 409, message: '写 netcare_base 仅允许基础应用携带自身 x-app-id 执行', data: null });
+            }
+            if (REAL_BASE && !/^netcare/.test(String(body.schema || ''))) {
+                const out = await realBase('/execute', body);
+                if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
+                return sendJson(out);
             }
             const affectedRows = execMockSql(body.sql);
             return sendJson({ code: 0, message: 'ok', data: { datasourceId: body.datasourceId, schema: body.schema, affectedRows, success: true } });
@@ -231,6 +261,8 @@ export function startMockBaseServer() {
                 auditRequests,
                 notifications,
                 aiRequests,
+                sqlErrors,
+                realBase: Boolean(REAL_BASE),
                 close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }),
             });
         });
