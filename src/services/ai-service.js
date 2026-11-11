@@ -158,6 +158,19 @@ export async function deleteProfile(profileId) {
     return getPublicSettings();
 }
 
+// 累计用量（读改写，非原子：并发下可能少记几次，只用于展示趋势）
+export async function addUsage({ inputTokens = 0, outputTokens = 0 } = {}) {
+    try {
+        const cur = await getUsage();
+        await kvSet(USAGE_KEY, {
+            ...cur,
+            promptTokens: Number(cur.promptTokens || 0) + Number(inputTokens || 0),
+            completionTokens: Number(cur.completionTokens || 0) + Number(outputTokens || 0),
+            requests: Number(cur.requests || 0) + 1,
+        });
+    } catch { /* 用量统计失败不影响对话 */ }
+}
+
 export async function getUsage() {
     return (await kvGet(USAGE_KEY, { promptTokens: 0, completionTokens: 0, totalCostUsd: 0, requests: 0 })) || {};
 }
@@ -166,7 +179,7 @@ export async function clearUsage() {
     return kvSet(USAGE_KEY, { promptTokens: 0, completionTokens: 0, totalCostUsd: 0, requests: 0 });
 }
 
-function buildCompletionRequest(settings, messages, { stream = false, maxTokens } = {}) {
+export function buildCompletionRequest(settings, messages, { stream = false, maxTokens } = {}) {
     const provider = settings.provider || 'openai';
     const base = settings.apiBaseUrl || (provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : 'https://api.openai.com/v1');
     const outTokens = Number(maxTokens) || Number(settings.maxOutputTokens) || 2048;

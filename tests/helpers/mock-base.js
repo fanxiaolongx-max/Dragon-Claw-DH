@@ -27,6 +27,7 @@ export async function startMockBaseServer() {
     const notifications = [];
     const aiRequests = [];
     const sqlErrors = [];
+    const aiScript = [];
 
     function getTable(name) {
         if (!tables.has(name)) tables.set(name, []);
@@ -63,12 +64,8 @@ export async function startMockBaseServer() {
         if (/^NULL$/i.test(s)) return null;
         if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
         if (s.startsWith("'") && s.endsWith("'")) {
-            return s.slice(1, -1)
-                .replace(/''/g, "'")
-                .replace(/\\n/g, '\n')
-                .replace(/\\r/g, '\r')
-                .replace(/\\'/g, "'")
-                .replace(/\\\\/g, '\\');
+            // 单趟反转义：逐个替换会把 \\\\n（转义的反斜杠 + n）错当成换行
+            return s.slice(1, -1).replace(/''|\\([\s\S])/g, (m, ch) => (m === "''" ? "'" : ({ n: '\n', r: '\r', 0: '\0' }[ch] ?? ch)));
         }
         return s;
     }
@@ -197,6 +194,23 @@ export async function startMockBaseServer() {
         // OpenAI chat completion mock endpoint
         if (url.pathname === '/v1/chat/completions') {
             aiRequests.push(body);
+            // 用例可以预先排好模型的每一轮输出：{ text } 或 { toolCalls: [{ name, args }] }
+            const scripted = body.stream && aiScript.length ? aiScript.shift() : null;
+            if (scripted) {
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+                if (scripted.text) for (const piece of String(scripted.text).match(/[\s\S]{1,12}/g)) send({ choices: [{ delta: { content: piece } }] });
+                (scripted.toolCalls || []).forEach((call, index) => {
+                    const args = JSON.stringify(call.args || {});
+                    send({ choices: [{ delta: { tool_calls: [{ index, id: `call_${aiRequests.length}_${index}`, type: 'function', function: { name: call.name, arguments: args.slice(0, 7) } }] } }] });
+                    send({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: args.slice(7) } }] } }] });
+                });
+                send({ choices: [{ delta: {}, finish_reason: scripted.toolCalls ? 'tool_calls' : 'stop' }] });
+                send({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20 } });
+                res.write('data: [DONE]\n\n');
+                res.end();
+                return;
+            }
             if (body.stream) {
                 res.writeHead(200, { 'Content-Type': 'text/event-stream' });
                 res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '你好，' } }] })}\n\n`);
@@ -277,6 +291,7 @@ export async function startMockBaseServer() {
                 notifications,
                 aiRequests,
                 sqlErrors,
+                aiScript,
                 realBase: Boolean(REAL_BASE),
                 close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }),
             });

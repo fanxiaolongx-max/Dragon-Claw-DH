@@ -6,6 +6,7 @@ import {
     activateProfile,
     deleteProfile,
     getUsage,
+    addUsage,
     clearUsage,
     callAiCompletion,
     streamAiChat,
@@ -19,6 +20,9 @@ import {
     getConversationList,
     saveConversationList,
 } from '../services/ai-service.js';
+import { runAgent } from '../agent/loop.js';
+import { handleChatUpload } from './agent-extras.js';
+import { listSkills } from '../services/skill-service.js';
 
 export async function aiRoutes(fastify) {
     const ownerOf = (req) => resolveRequestIdentity(req).username;
@@ -117,7 +121,8 @@ export async function aiRoutes(fastify) {
         if (persist && !sessionId) {
             const created = await saveSession({
                 ownerId,
-                title: userText.slice(0, 40) || '新对话',
+                // 标题只取用户的话，不带附件清单
+                title: userText.split('📎 附件：')[0].replace(/\s+/g, ' ').trim().slice(0, 40) || '新对话',
                 metadata: { pagePath: body.pagePath || '/' },
             });
             sessionId = created.id;
@@ -169,61 +174,55 @@ export async function aiRoutes(fastify) {
             });
         }
 
-        const llmMessages = messages.map((m) => ({
-            role: m.role === 'model' ? 'assistant' : (m.role || 'user'),
-            content: String(m.content || ''),
-        }));
-        if (selected.systemPrompt) {
-            llmMessages.unshift({ role: 'system', content: selected.systemPrompt });
-        }
+        const history = messages
+            .map((m) => ({ role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') }))
+            .filter((m) => m.content.trim());
+        if (!history.length && userText) history.push({ role: 'user', content: userText });
+
+        // 用户点了停止或断开连接：中止模型请求，不再继续跑工具
+        const abort = new AbortController();
+        const onClose = () => { if (!reply.raw.writableEnded) abort.abort(); };
+        req.raw.on('close', onClose);
+        const write = (event) => {
+            if (stream && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`${JSON.stringify(event)}\n`);
+        };
+        if (stream && sessionId) write({ type: 'start', sessionId });
 
         try {
-            if (stream) {
-                const res = await streamAiChat({
-                    messages: llmMessages,
-                    profileId: selected.id,
-                    onDelta: (delta) => {
-                        if (!reply.raw.destroyed && !reply.raw.writableEnded) {
-                            reply.raw.write(`${JSON.stringify({ type: 'delta', delta })}\n`);
-                        }
-                    },
-                });
-                if (persist && sessionId) {
-                    await appendMessage(sessionId, 'model', res.text, { modelName: res.model });
-                }
-                return sendDone({
-                    reply: res.text,
-                    sessionId,
-                    model: { id: selected.id, name: res.model },
-                    tokens: 0,
-                    usage: { inputTokens: 0, outputTokens: 0 },
-                });
+            const res = await runAgent({
+                settings: selected,
+                identity: req.userIdentity || resolveRequestIdentity(req),
+                history,
+                skillIds: Array.isArray(body.skills) ? body.skills : [],
+                language: body.uiLanguage || 'zh',
+                emit: write,
+                signal: abort.signal,
+            });
+            if (persist && sessionId && (res.text || res.events.length)) {
+                await appendMessage(sessionId, 'model', res.text, { modelName: selected.model, ...(res.events.length ? { events: res.events } : {}) });
             }
-
-            const res = await callAiCompletion({ messages: llmMessages, profileId: selected.id });
-            if (!res.ok) {
-                return reply.code(502).send({ error: res.error || 'AI 调用失败' });
-            }
-            if (persist && sessionId) {
-                await appendMessage(sessionId, 'model', res.text, { modelName: res.model });
-            }
+            addUsage(res.usage);
             return sendDone({
                 reply: res.text,
                 sessionId,
-                model: { id: selected.id, name: res.model },
-                tokens: (res.usage?.prompt_tokens || 0) + (res.usage?.completion_tokens || 0),
-                usage: {
-                    inputTokens: res.usage?.prompt_tokens || 0,
-                    outputTokens: res.usage?.completion_tokens || 0,
-                },
+                model: { id: selected.id, name: selected.model },
+                tokens: res.usage.inputTokens + res.usage.outputTokens,
+                usage: res.usage,
             });
         } catch (err) {
+            if (abort.signal.aborted) {
+                if (stream && !reply.raw.writableEnded) reply.raw.end();
+                return reply;
+            }
+            const message = err.message || 'AI 对话异常';
             if (stream) {
-                reply.raw.write(`${JSON.stringify({ type: 'error', error: err.message })}\n`);
+                write({ type: 'error', error: message });
                 reply.raw.end();
                 return reply;
             }
-            return reply.code(500).send({ error: err.message || 'AI 对话异常' });
+            return reply.code(err.code >= 400 && err.code < 600 ? err.code : 502).send({ error: message });
+        } finally {
+            req.raw.off('close', onClose);
         }
     });
 
@@ -236,13 +235,11 @@ export async function aiRoutes(fastify) {
         enhanced: String(req.body?.prompt || ''),
     }));
 
-    fastify.post('/uploads', async (_req, reply) => reply.code(501).send({
-        code: 'WEB_PHASE2_FEATURE',
-        error: '对话附件上传将在二期开放',
-    }));
+    fastify.post('/uploads', handleChatUpload);
+
 
     // 首页侧栏/联想的非一期接口：温和返回空列表，确保控制台零 404/500 噪音
-    fastify.get('/skills', async () => ({ items: [] }));
+    fastify.get('/skills', async () => ({ items: await listSkills() }));
     fastify.get('/connector-status', async () => ({ connected: false, webPhase: 1, connectors: [] }));
     fastify.get('/suggestions', async () => ({ items: [] }));
     fastify.get('/proactive-alerts', async () => ({ items: [] }));

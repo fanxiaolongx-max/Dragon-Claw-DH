@@ -12,6 +12,8 @@
     "css/project-evolution.css",
     "index.html",
     "js/ai-report/sandbox.js",
+    "js/home/dragon-claw.js",
+    "js/home/workspace-panel.js",
     "js/shared/fetch-dedupe.js",
     "js/shared/navbar.js",
     "js/shared/tool-navigation.js",

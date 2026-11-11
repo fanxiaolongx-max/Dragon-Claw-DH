@@ -85,6 +85,16 @@ export async function scopedQuery(sql, limit = 500) {
     return warnIfTruncated(await queryAppSchema(sql, capped), capped, sql);
 }
 
+// 平台授权给本应用的业务数据源（只读）。未注入 BUSINESS_DATASOURCE_NAME 时抛出明确错误。
+export async function businessQuery(sql, limit = 100) {
+    if (isMemoryMode()) return [];
+    return queryBusiness(sql, Math.min(Number(limit) || 100, PAGE));
+}
+
+export function hasBusinessDatasource() {
+    return Boolean(String(config.businessDatasourceName || '').trim());
+}
+
 export async function scopedExecute(sql) {
     if (isMemoryMode()) return 0;
     return executeAppSchema(sql);

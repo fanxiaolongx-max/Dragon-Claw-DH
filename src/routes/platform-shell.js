@@ -587,12 +587,7 @@ export async function platformShellRoutes(fastify) {
         };
     });
 
-    fastify.get('/api/custom-tools', async () => []);
-    fastify.get('/api/custom-tools/f12-to-extension/scripts', async () => ({ scripts: [] }));
-    fastify.get('/api/custom-tools/market/platform', async () => ({ tools: [] }));
-    fastify.get('/api/custom-tools/backup/summary', async () => ({ tools: [], count: 0 }));
 
-    fastify.get('/api/agent-skills', async () => ({ items: [] }));
     fastify.get('/api/agent-workspace/capability', async () => ({
         enabled: false,
         reason: 'DIGITAL_HUMAN_WEB_MODE',

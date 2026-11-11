@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import Fastify from 'fastify';
@@ -20,7 +22,9 @@ import { uploadRoutes } from './routes/upload.js';
 import { dbRoutes, expediteRoutes } from './routes/db.js';
 import { monthlySnapshotsRoutes, reportMsgRoutes, aiReportRoutes } from './routes/monthly.js';
 import { platformShellRoutes } from './routes/platform-shell.js';
+import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
+const gzipAsync = promisify(zlib.gzip);
 const DH_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+(?=\/|$|\?)/i;
 const DH_BARE_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+$/i;
 
@@ -208,6 +212,19 @@ export async function createServer() {
         return JSON.stringify(ok(body, { elapsedMs, total: Array.isArray(body) ? body.length : (Array.isArray(body?.items) ? body.items.length : 0) }));
     });
 
+    // 大响应压缩：快照、月报这类 JSON 动辄十几 MB，gzip 后通常只剩一成，网关和浏览器都轻松得多。
+    // 只处理已经在内存里的文本响应；流式对话和静态文件不经过这里。
+    app.addHook('onSend', async (req, reply, payload) => {
+        if (typeof payload !== 'string' || payload.length < 32 * 1024) return payload;
+        if (reply.getHeader('content-encoding') || !/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) return payload;
+        if (!/json|text|javascript|xml/.test(String(reply.getHeader('content-type') || ''))) return payload;
+        const zipped = await gzipAsync(payload, { level: 5 });
+        reply.header('content-encoding', 'gzip');
+        reply.header('vary', 'Accept-Encoding');
+        reply.removeHeader('content-length');
+        return zipped;
+    });
+
     app.addHook('onResponse', async (req, reply) => {
         const url = String(req.url || '');
         if (!url.startsWith('/api/') && !url.startsWith('/debug')) return;
@@ -270,6 +287,9 @@ export async function createServer() {
     await app.register(monthlySnapshotsRoutes, { prefix: '/api/monthly-snapshots' });
     await app.register(reportMsgRoutes, { prefix: '/api/report-msg' });
     await app.register(aiReportRoutes, { prefix: '/api/ai-report' });
+    await app.register(agentSkillsRoutes, { prefix: '/api/agent-skills' });
+    await app.register(customToolsRoutes, { prefix: '/api/custom-tools' });
+    await app.register(agentFilesRoutes, { prefix: '/api/agent-files' });
     await app.register(platformShellRoutes);
 
     // ── 静态资源前缀兼容（确保 /pages/*.html 与 /monthly/legacy 下相对资源与无前缀资源一致）─
@@ -329,10 +349,7 @@ export async function createServer() {
         return phase2PlaceholderHtml(`内置工具 (${req.params['*']})`);
     });
 
-    app.get('/custom-tools/*', async (req, reply) => {
-        reply.type('text/html; charset=utf-8');
-        return phase2PlaceholderHtml(`自定义工具 (${req.params['*']})`);
-    });
+    registerCustomToolPages(app, phase2PlaceholderHtml);
 
     return app;
 }

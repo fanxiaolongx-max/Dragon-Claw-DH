@@ -15,6 +15,7 @@ const KNOWN_TABLES = [
     'monthly_logos', 'monthly_documents', 'monthly_drafts',
     'report_snapshots', 'report_category_scores', 'report_metric_data', 'bigscreen_owners',
     'monthly_snapshots', 'ai_report_documents', 'ai_report_images', 'ai_report_image_deletions', 'dh_chunks',
+    'agent_skills', 'custom_tools', 'ai_chat_uploads',
 ];
 
 for (const t of KNOWN_TABLES) TABLES.set(t, []);

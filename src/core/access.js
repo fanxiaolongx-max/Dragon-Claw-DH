@@ -75,6 +75,8 @@ const USER_WRITES = [
     ['PUT', /^\/ai\/conversation-list$/],
     ['*', /^\/ai\/sessions(?:\/.*)?$/], // 路由内校验会话归属
     ['POST', /^\/report-msg\/export$/],
+    ['POST', /^\/custom-tools$/], // 普通用户发布的工具只有自己可见
+    ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
 ];
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/];
 

@@ -407,6 +407,54 @@ CREATE TABLE IF NOT EXISTS `dh_chunks` (
   PRIMARY KEY (`ref`, `idx`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 技能（SKILL.md）：管理员维护，所有人可用
+CREATE TABLE IF NOT EXISTS `agent_skills` (
+  `id` VARCHAR(64) NOT NULL,
+  `name` VARCHAR(191) NOT NULL DEFAULT '',
+  `name_en` VARCHAR(191) NOT NULL DEFAULT '',
+  `description` VARCHAR(1024) NOT NULL DEFAULT '',
+  `description_en` VARCHAR(1024) NOT NULL DEFAULT '',
+  `icon` VARCHAR(32) NOT NULL DEFAULT '',
+  `body` LONGTEXT,
+  `source` VARCHAR(32) NOT NULL DEFAULT 'chat',
+  `created_by` VARCHAR(128) NOT NULL DEFAULT '',
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  `updated_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 自定义 HTML 工具：对话生成或手工导入的单页工具
+CREATE TABLE IF NOT EXISTS `custom_tools` (
+  `slug` VARCHAR(64) NOT NULL,
+  `owner_id` VARCHAR(128) NOT NULL DEFAULT '',
+  `visibility` VARCHAR(16) NOT NULL DEFAULT 'private',
+  `name` VARCHAR(191) NOT NULL DEFAULT '',
+  `name_en` VARCHAR(191) NOT NULL DEFAULT '',
+  `description` VARCHAR(1024) NOT NULL DEFAULT '',
+  `description_en` VARCHAR(1024) NOT NULL DEFAULT '',
+  `icon` VARCHAR(32) NOT NULL DEFAULT '',
+  `tags_json` VARCHAR(1024) NOT NULL DEFAULT '[]',
+  `html` LONGTEXT,
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  `updated_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`slug`),
+  KEY `idx_custom_tools_owner` (`owner_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 对话附件：原文件与提取出的文本
+CREATE TABLE IF NOT EXISTS `ai_chat_uploads` (
+  `id` VARCHAR(64) NOT NULL,
+  `owner_id` VARCHAR(128) NOT NULL DEFAULT '',
+  `filename` VARCHAR(255) NOT NULL DEFAULT '',
+  `mime_type` VARCHAR(128) NOT NULL DEFAULT '',
+  `size_bytes` BIGINT NOT NULL DEFAULT 0,
+  `text_content` LONGTEXT,
+  `data_base64` LONGTEXT,
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_ai_uploads_owner` (`owner_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 可选：预置管理员。默认不需要——首位被网关识别出工号的访问者会自动成为管理员。
 -- 如果想在上线前就固定管理员（防止别人先打开应用），把下面一行取消注释，
 -- 把 工号1、工号2 换成真实工号（小写）后再交给 DBA 执行。已有名单时不会覆盖。

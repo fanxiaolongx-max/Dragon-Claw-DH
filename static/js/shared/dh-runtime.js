@@ -13,7 +13,7 @@
 
     const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|pages|favicon\.ico|healthz|ping|tools|custom-tools|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report)(?:\/|\?|$)/i;
     const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|index\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|(?:tools|custom-tools)\/.*)$/;
-    const PHASE2_RE = /^\/(?:praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|tools\/|custom-tools\/)/i;
+    const PHASE2_RE = /^\/(?:praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|tools\/)/i;
 
     function detectDhBase() {
         const p = window.location.pathname || '/';
