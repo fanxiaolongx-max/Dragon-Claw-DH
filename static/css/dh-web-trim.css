@@ -26,6 +26,15 @@ html.dh-web #dcVoice,
 /* 左下角：消息中心、扫码使用 */
 html.dh-web #v2AlertBtn,
 html.dh-web #v2ScanBtn,
+/* 账号菜单与顶部导航：需求管理、意见反馈、检查更新、告警台；退出登录（身份由数字人门户管理，应用内退出没有意义） */
+html.dh-web .v2-account-list [data-v2-do="requirements"],
+html.dh-web .v2-account-list [data-v2-do="feedback"],
+html.dh-web .v2-account-list [data-v2-do="checkUpdate"],
+html.dh-web .v2-account-list [data-v2-do="logout"],
+html.dh-web .v2-account-list .v2-pop-sep,
+html.dh-web .nav-actions .req-btn,
+html.dh-web .nav-actions .nav-alert-btn,
+html.dh-web .nav-actions .nav-logout-link,
 /* 全局设置：只保留菜单布局与 AI 助手 */
 html.dh-web .nav-settings-tab[data-tab="logo"],
 html.dh-web .nav-settings-tab[data-tab="agentTools"],

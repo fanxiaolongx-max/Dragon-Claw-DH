@@ -1,5 +1,8 @@
 // ★ 唯一数据访问入口（合规红线 R5：routes / services 禁止直接引用 dao/base.js）
-import { config, endpoints } from '../config.js';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { config, endpoints, ROOT_DIR } from '../config.js';
 import { BusinessError, DatabaseError } from '../core/errors.js';
 import { pushLog } from '../core/log-ring.js';
 import {
@@ -94,7 +97,7 @@ export async function scopedCheckHealth() {
     return { healthy: Boolean(healthy), latencyMs: Date.now() - started, mode: 'base-api' };
 }
 
-export async function selectTable(table, {
+async function selectRaw(table, {
     columns = ['*'],
     whereSql = '',
     orderBySql = '',
@@ -125,12 +128,141 @@ export async function selectTable(table, {
     return rows;
 }
 
+export async function selectTable(table, options = {}) {
+    const rows = await selectRaw(table, options);
+    return isMemoryMode() ? rows : resolveChunks(rows);
+}
+
+// ============================================================
+// 大字段分片
+// 基座对单条 SQL / 单次请求体有大小上限，而快照、图片、原始文件动辄几 MB 到几十 MB。
+// 写入时把超过阈值的字段切片存进 dh_chunks，原字段只留一个标记；读取时自动拼回。
+// 对 services 完全透明。标记格式：@@dh-chunk:v1:<ref>:<片数>:<字符数>
+// ============================================================
+const CHUNK_CHARS = Math.max(8_192, Number(process.env.DH_CHUNK_CHARS) || 131_072);
+const CHUNK_MARK = '@@dh-chunk:v1:';
+const CHUNK_TABLE = 'dh_chunks';
+const CHUNK_READ_BATCH = 4;
+const CHUNK_WRITE_PARALLEL = 4;
+
+// 哪些表的哪些列可能存大字段：直接读建表脚本里的 LONGTEXT 列，不另外维护清单
+const LONG_COLS = (() => {
+    const map = new Map();
+    try {
+        const sql = fs.readFileSync(path.join(ROOT_DIR, 'db', 'init.sql'), 'utf8');
+        for (const m of sql.matchAll(/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\(([\s\S]*?)\)\s*ENGINE/g)) {
+            const cols = [...m[2].matchAll(/^\s*`(\w+)`\s+LONGTEXT/gm)].map((c) => c[1]);
+            if (cols.length && m[1] !== CHUNK_TABLE) map.set(m[1], new Set(cols));
+        }
+    } catch { /* 读不到脚本时只影响旧分片的回收，不影响读写 */ }
+    return map;
+})();
+
+function splitChunks(text) {
+    const parts = [];
+    let i = 0;
+    while (i < text.length) {
+        let end = Math.min(i + CHUNK_CHARS, text.length);
+        const last = text.charCodeAt(end - 1);
+        if (end < text.length && last >= 0xD800 && last <= 0xDBFF) end -= 1; // 不把一个表情/生僻字切成两半
+        parts.push(text.slice(i, end));
+        i = end;
+    }
+    return parts;
+}
+
+const refOf = (value) => (typeof value === 'string' && value.startsWith(CHUNK_MARK) ? value.slice(CHUNK_MARK.length).split(':')[0] : '');
+
+async function dropChunks(refs) {
+    const list = [...new Set(refs.filter((r) => /^[0-9a-f-]{36}$/.test(r)))];
+    for (let i = 0; i < list.length; i += 50) {
+        const inSql = list.slice(i, i + 50).map(sqlVal).join(', ');
+        await executeAppSchema(`DELETE FROM ${ident(CHUNK_TABLE)} WHERE \`ref\` IN (${inSql})`).catch((error) => {
+            pushLog({ level: 'WARN', category: 'DAO', message: `清理旧分片失败：${error.message}` });
+        });
+    }
+}
+
+// 把一行里超过阈值的字段写成分片，返回替换成标记后的行
+async function chunkRow(table, row) {
+    if (table === CHUNK_TABLE) return { row, refs: [] };
+    let out = row;
+    const refs = [];
+    try {
+        for (const [key, value] of Object.entries(row)) {
+            const text = typeof value === 'string' ? value : (value && typeof value === 'object' ? JSON.stringify(value) : null);
+            if (text === null || text.length <= CHUNK_CHARS) continue;
+            const ref = crypto.randomUUID();
+            refs.push(ref);
+            const parts = splitChunks(text);
+            const now = Date.now();
+            for (let i = 0; i < parts.length; i += CHUNK_WRITE_PARALLEL) {
+                await Promise.all(parts.slice(i, i + CHUNK_WRITE_PARALLEL).map((data, j) => executeAppSchema(
+                    `INSERT INTO ${ident(CHUNK_TABLE)} (\`ref\`, \`idx\`, \`data\`, \`created_at\`) VALUES (${sqlVal(ref)}, ${i + j}, ${sqlVal(data)}, ${now})`,
+                )));
+            }
+            if (out === row) out = { ...row };
+            out[key] = `${CHUNK_MARK}${ref}:${parts.length}:${text.length}`;
+        }
+    } catch (error) {
+        await dropChunks(refs); // 写到一半失败：把已写的分片清掉，原行保持不变
+        throw error;
+    }
+    return { row: out, refs };
+}
+
+async function resolveChunks(rows) {
+    for (const row of rows) {
+        for (const key of Object.keys(row)) {
+            const value = row[key];
+            if (typeof value !== 'string' || !value.startsWith(CHUNK_MARK)) continue;
+            const [ref, countText, lengthText] = value.slice(CHUNK_MARK.length).split(':');
+            const count = Number(countText);
+            if (!/^[0-9a-f-]{36}$/.test(ref) || !Number.isInteger(count) || count < 1) continue;
+            const parts = new Array(count);
+            for (let from = 0; from < count; from += CHUNK_READ_BATCH) {
+                const page = await queryAppSchema(
+                    `SELECT \`idx\`, \`data\` FROM ${ident(CHUNK_TABLE)} WHERE \`ref\` = ${sqlVal(ref)} AND \`idx\` >= ${from} AND \`idx\` < ${from + CHUNK_READ_BATCH} ORDER BY \`idx\``,
+                    CHUNK_READ_BATCH,
+                );
+                for (const p of page) parts[Number(p.idx)] = String(p.data ?? '');
+            }
+            const text = parts.join('');
+            if (parts.includes(undefined) || text.length !== Number(lengthText)) {
+                throw new DatabaseError(`大字段分片不完整（${key}），请重新保存该数据`);
+            }
+            row[key] = text;
+        }
+    }
+    return rows;
+}
+
+// 覆盖或删除一行之前，记下它名下的旧分片，写成功后回收
+async function existingChunkRefs(table, columns, whereSql) {
+    const long = LONG_COLS.get(table);
+    const cols = long ? columns.filter((c) => long.has(c)) : [];
+    if (!cols.length || !whereSql) return [];
+    const select = cols.map((c) => `LEFT(${ident(c)}, 120) AS ${ident(c)}`).join(', ');
+    const refs = [];
+    try {
+        for (let offset = 0; offset < MAX_ROWS; offset += PAGE) {
+            const rows = await queryAppSchema(`SELECT ${select} FROM ${ident(table)} WHERE ${whereSql} LIMIT ${PAGE} OFFSET ${offset}`, PAGE);
+            for (const r of rows) for (const c of cols) { const ref = refOf(r[c]); if (ref) refs.push(ref); }
+            if (rows.length < PAGE) break;
+        }
+    } catch (error) {
+        pushLog({ level: 'WARN', category: 'DAO', message: `查询旧分片失败：${error.message}` });
+    }
+    return refs;
+}
+
 export async function insertRow(table, row) {
     const keys = Object.keys(row);
     if (!keys.length) return 0;
     if (isMemoryMode()) {
         return memInsert(table, row);
     }
+    ({ row } = await chunkRow(table, row));
     const colSql = keys.map(ident).join(', ');
     const valSql = keys.map((k) => sqlVal(row[k])).join(', ');
     return executeAppSchema(`INSERT INTO ${ident(table)} (${colSql}) VALUES (${valSql})`);
@@ -142,15 +274,22 @@ export async function upsertRow(table, row, keyCols = ['id'], updateCols = null)
     if (isMemoryMode()) {
         return memInsert(table, row, keyCols);
     }
+    const mutableCols = updateCols || keys.filter((k) => !keyCols.includes(k));
+    const keyWhere = keyCols.every((k) => row[k] !== undefined && row[k] !== null)
+        ? keyCols.map((k) => `${ident(k)} = ${sqlVal(row[k])}`).join(' AND ')
+        : '';
+    const stale = await existingChunkRefs(table, mutableCols, keyWhere);
+    ({ row } = await chunkRow(table, row));
     const colSql = keys.map(ident).join(', ');
     const valSql = keys.map((k) => sqlVal(row[k])).join(', ');
-    const mutableCols = updateCols || keys.filter((k) => !keyCols.includes(k));
     const updates = (mutableCols.length ? mutableCols : [keys[0]])
         .map((k) => `${ident(k)} = ${sqlVal(row[k])}`)
         .join(', ');
-    return executeAppSchema(
+    const affected = await executeAppSchema(
         `INSERT INTO ${ident(table)} (${colSql}) VALUES (${valSql}) ON DUPLICATE KEY UPDATE ${updates}`,
     );
+    await dropChunks(stale);
+    return affected;
 }
 
 export async function updateRows(table, patch, { whereSql, memFilter }) {
@@ -162,8 +301,12 @@ export async function updateRows(table, patch, { whereSql, memFilter }) {
     if (isMemoryMode()) {
         return memUpdate(table, memFilter || (() => false), patch);
     }
+    const stale = await existingChunkRefs(table, keys, whereSql);
+    ({ row: patch } = await chunkRow(table, patch));
     const setSql = keys.map((k) => `${ident(k)} = ${sqlVal(patch[k])}`).join(', ');
-    return executeAppSchema(`UPDATE ${ident(table)} SET ${setSql} WHERE ${whereSql}`);
+    const affected = await executeAppSchema(`UPDATE ${ident(table)} SET ${setSql} WHERE ${whereSql}`);
+    await dropChunks(stale);
+    return affected;
 }
 
 export async function deleteRows(table, { whereSql, memFilter }) {
@@ -173,7 +316,10 @@ export async function deleteRows(table, { whereSql, memFilter }) {
     if (isMemoryMode()) {
         return memDelete(table, memFilter || (() => false));
     }
-    return executeAppSchema(`DELETE FROM ${ident(table)} WHERE ${whereSql}`);
+    const stale = await existingChunkRefs(table, [...(LONG_COLS.get(table) || [])], whereSql);
+    const affected = await executeAppSchema(`DELETE FROM ${ident(table)} WHERE ${whereSql}`);
+    await dropChunks(stale);
+    return affected;
 }
 
 export async function kvGet(key, fallback = null) {
@@ -391,7 +537,8 @@ export async function debugProbeAction(action, params = {}) {
             for (const kb of [64, 512, 1024, 4096, 8192]) {
                 const started = Date.now();
                 try {
-                    await kvSet(key, 'x'.repeat(kb * 1024));
+                    // 直接发单条 SQL（不走分片），量的就是基座本身的上限
+                    await executeAppSchema(`INSERT INTO \`sys_kv_store\` (\`kv_key\`, \`kv_value\`, \`updated_at\`) VALUES (${sqlVal(key)}, ${sqlVal('x'.repeat(kb * 1024))}, ${Date.now()}) ON DUPLICATE KEY UPDATE \`kv_value\` = VALUES(\`kv_value\`)`);
                     steps.push({ 大小: `${kb}KB`, 写入: '成功', 耗时ms: Date.now() - started });
                 } catch (error) {
                     steps.push({ 大小: `${kb}KB`, 写入: '失败', 原因: error.message.slice(0, 200), 耗时ms: Date.now() - started });
@@ -402,7 +549,7 @@ export async function debugProbeAction(action, params = {}) {
             await deleteRows('sys_kv_store', { whereSql: `\`kv_key\` = ${sqlVal(key)}`, memFilter: (r) => r.kv_key === key }).catch(() => {});
         }
         const okSteps = steps.filter((s) => s.写入 === '成功');
-        return { action, 最大成功写入: okSteps.length ? okSteps[okSteps.length - 1].大小 : '无', 明细: steps };
+        return { action, 最大成功写入: okSteps.length ? okSteps[okSteps.length - 1].大小 : '无', 当前分片大小: `${Math.round(CHUNK_CHARS / 1024)}K 字符（超过即自动分片存储）`, 明细: steps };
     }
     case 'datasources':
         return rawBaseGet(endpoints.datasources, 'debug:datasources');

@@ -12,7 +12,8 @@ const UPSTREAM = new URL(env.APP_UPSTREAM || 'http://127.0.0.1:5400');
 const PREFIX = `/digital-human/dh/${UUID}`;
 const STRIP_PREFIX = env.GATEWAY_STRIP !== '0';
 const PAGE_CAP = Number(env.BASE_PAGE_CAP || 1000);
-const MAX_SQL_BYTES = Number(env.BASE_MAX_SQL_BYTES || 4 * 1024 * 1024);
+// 真实基座的上限未知，这里按偏严的 1MB 模拟：超过就拒绝，逼出没有分片的大字段写入
+const MAX_SQL_BYTES = Number(env.BASE_MAX_SQL_BYTES || 1024 * 1024);
 const INIT_SQL = env.INIT_SQL || '/init.sql';
 // 额外的库（自动化测试用，可通过 /_base/reset 清空重建）；主库永远不会被重置
 const TEST_SCHEMAS = String(env.TEST_SCHEMAS || 'dh_test').split(',').map((s) => s.trim()).filter((s) => /^[a-z0-9_]+$/i.test(s) && s !== SCHEMA);

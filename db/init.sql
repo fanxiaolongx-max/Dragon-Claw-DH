@@ -398,6 +398,15 @@ CREATE TABLE IF NOT EXISTS `ai_report_image_deletions` (
   KEY `idx_arid_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 大字段分片：超过单条 SQL 大小上限的字段（快照、图片、原始文件）切片存放，读取时自动拼回
+CREATE TABLE IF NOT EXISTS `dh_chunks` (
+  `ref` VARCHAR(64) NOT NULL,
+  `idx` INT NOT NULL,
+  `data` LONGTEXT NOT NULL,
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`ref`, `idx`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 可选：预置管理员。默认不需要——首位被网关识别出工号的访问者会自动成为管理员。
 -- 如果想在上线前就固定管理员（防止别人先打开应用），把下面一行取消注释，
 -- 把 工号1、工号2 换成真实工号（小写）后再交给 DBA 执行。已有名单时不会覆盖。

@@ -203,7 +203,7 @@
         email_params: {
             title: 'Dragon Claw Digital Human 调试通知',
             content: '调试面板发送测试消息',
-            email_to: 'email:test@huawei.com',
+            email_to: '',
         },
     }, null, 2);
     const notifyActions = el('div', 'dh-dbg-btn-grid');
@@ -219,6 +219,11 @@
         notifyPre.textContent = '发送中...';
         try {
             const payload = JSON.parse(notifyTextarea.value || '{}');
+            // 默认不带收件人：避免一点按钮就把测试通知发给不相干的人
+            if (payload.email_params && !String(payload.email_params.email_to || '').trim()) {
+                notifyPre.textContent = '请先在 email_to 里填上你自己的收件地址（例如 email:你的邮箱），再发送。';
+                return;
+            }
             const res = await fetch(apiUrl('/api/debug/notify-test'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

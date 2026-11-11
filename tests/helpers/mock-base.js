@@ -75,11 +75,26 @@ export async function startMockBaseServer() {
 
     function matchesWhere(row, whereStr) {
         if (!whereStr) return true;
-        const m = whereStr.match(/`?([a-zA-Z0-9_]+)`?\s*=\s*('(?:\\.|[^'])*'|\d+)/);
-        if (!m) return true;
-        const col = m[1];
-        const val = parseSqlLiteral(m[2]);
-        return String(row[col]) === String(val);
+        // 支持用 AND 连接的 =、>=、<、IN (...) 条件，够覆盖数据层生成的语句
+        const body = String(whereStr).replace(/\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*$/i, '');
+        const re = /`?([a-zA-Z0-9_]+)`?\s*(>=|<=|=|<|>|IN)\s*(\((?:'(?:\\.|[^'])*'|[^)])*\)|'(?:\\.|[^'])*'|-?\d+)/gi;
+        let m;
+        while ((m = re.exec(body))) {
+            const [, col, op, raw] = m;
+            const left = row[col];
+            if (op.toUpperCase() === 'IN') {
+                const list = splitCsvRespectingQuotes(raw.slice(1, -1)).map(parseSqlLiteral).map(String);
+                if (!list.includes(String(left))) return false;
+                continue;
+            }
+            const right = parseSqlLiteral(raw);
+            if (op === '=' && String(left) !== String(right)) return false;
+            if (op === '>=' && !(Number(left) >= Number(right))) return false;
+            if (op === '<=' && !(Number(left) <= Number(right))) return false;
+            if (op === '<' && !(Number(left) < Number(right))) return false;
+            if (op === '>' && !(Number(left) > Number(right))) return false;
+        }
+        return true;
     }
 
     function execMockSql(sql) {

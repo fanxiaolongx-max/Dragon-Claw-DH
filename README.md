@@ -48,16 +48,16 @@ Dragon Claw 平台面向「运营数字人基座」的裁剪版 Web 应用（一
 `devtools/real-base/` 是一个开发用的“真库基座”：按基座 REST 约定把 SQL 交给真实 MySQL 8 执行，并模拟网关（`/digital-human/dh/{UUID}/` 前缀 + 工号 Cookie）。它不随应用包发布。
 
 ```bash
-# 在一台有 Docker 的 Linux 机器上：MySQL 8 + 真库基座(5401) + 应用(5400)
+# 在一台有 Docker 的 Linux 机器上：MySQL 8 + 真库基座 + 应用，对外只占一个端口 5400
 bash devtools/real-base/deploy.sh /path/to/dragon-claw-dh-<版本>.zip
 
 # 在开发机上：把全部接口打到真库上，报告 SQL 报错和 5xx
-node devtools/real-base/sweep.mjs http://<那台机器>:5401
+node devtools/real-base/sweep.mjs http://<那台机器>:5400
 # 让接口测试的 SQL 也在真库上执行
-DH_REAL_BASE=http://<那台机器>:5401 npm test
+DH_REAL_BASE=http://<那台机器>:5400 npm test
 ```
 
-浏览器打开 `http://<那台机器>:5401/`，输入任意工号即可以该身份进入应用，用来验证权限和前缀。页面底部显示真库上的 SQL 报错次数。
+浏览器打开 `http://<那台机器>:5400/`，输入任意工号即可以该身份进入应用，用来验证权限和前缀。页面底部显示真库上的 SQL 报错次数。
 
 ## 本地开发
 
@@ -77,7 +77,7 @@ npm test         # 接口、权限与浏览器端到端测试
 | --- | --- |
 | 统一响应体、业务失败 HTTP 200（§8） | 前端垫片声明 `x-dh-envelope` 后，服务端返回 `{code,message,data,total,elapsed_ms,cache_hit}`；垫片再还原成桌面版前端的原协议，页面代码不用改。未声明的调用方保持原协议 |
 | API 基址按路径拼接（§12.2） | `static/js/api.js`；从桌面版沿用的页面由 `static/js/shared/dh-runtime.js` 统一改写 |
-| 唯一取数入口（§7.3） | `src/dao/scoped.js`，超过单页 1000 行自动翻页 |
+| 唯一取数入口（§7.3） | `src/dao/scoped.js`，超过单页 1000 行自动翻页；超过约 128K 字符的字段（快照、图片、原始文件）自动切片存进 `dh_chunks`，读取时拼回，单条 SQL 始终远小于 1MB |
 | 健康检查（§9） | `/api/healthz`，同时提供 `/health`、`/healthz`；基座探测结果缓存 10 秒，基座抖动不会导致应用被重启 |
 | 反代前缀（§11.3） | `rewriteUrl` 剥离 `x-forwarded-prefix`，网关已剥离时原样通过 |
 | 日志（§10） | pino 结构化 JSON 输出到 stdout |

@@ -14,7 +14,7 @@ const KNOWN_TABLES = [
     'import_source_batches', 'import_source_files', 'import_source_sheets', 'import_source_presets',
     'monthly_logos', 'monthly_documents', 'monthly_drafts',
     'report_snapshots', 'report_category_scores', 'report_metric_data', 'bigscreen_owners',
-    'monthly_snapshots', 'ai_report_documents', 'ai_report_images', 'ai_report_image_deletions',
+    'monthly_snapshots', 'ai_report_documents', 'ai_report_images', 'ai_report_image_deletions', 'dh_chunks',
 ];
 
 for (const t of KNOWN_TABLES) TABLES.set(t, []);
