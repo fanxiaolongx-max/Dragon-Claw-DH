@@ -31,8 +31,9 @@ export async function debugRoutes(fastify) {
             uptimeSec: Math.round(process.uptime()),
             memoryMode: isMemoryMode(),
             identity,
+            // Cookie 是登录凭据：只回显与身份/语言识别有关的几个值，其余只给长度
             cookies: Object.fromEntries(Object.entries(cookies).map(([k, v]) => (
-                /token|session|auth|secret/i.test(k) ? [k, `[REDACTED len=${String(v).length}]`] : [k, v]
+                /^(iLearningXUserName|current_lang|lang|locale)$/.test(k) ? [k, v] : [k, `[len=${String(v).length}]`]
             ))),
             headers: rawHeaders,
             urlContext: {

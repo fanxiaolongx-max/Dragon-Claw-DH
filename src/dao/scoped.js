@@ -1,6 +1,7 @@
 // ★ 唯一数据访问入口（合规红线 R5：routes / services 禁止直接引用 dao/base.js）
 import { config, endpoints } from '../config.js';
 import { DatabaseError } from '../core/errors.js';
+import { pushLog } from '../core/log-ring.js';
 import {
     queryAppSchema,
     executeAppSchema,
@@ -65,9 +66,20 @@ function ident(name) {
     return `\`${clean}\``;
 }
 
+const PAGE = Math.min(Math.max(config.maxPageSize || 1000, 1), 1000); // 基座单页上限
+const MAX_ROWS = 50_000;
+
+function warnIfTruncated(rows, limit, sql) {
+    if (rows.length >= limit && limit >= 100) {
+        pushLog({ level: 'WARN', category: 'DAO', message: `查询返回行数达到 limit=${limit}，结果可能被截断`, detail: { sql: String(sql).replace(/'(?:[^'\\]|\\.)*'/g, '?').slice(0, 160) } });
+    }
+    return rows;
+}
+
 export async function scopedQuery(sql, limit = 500) {
     if (isMemoryMode()) return [];
-    return queryAppSchema(sql, limit);
+    const capped = Math.min(Number(limit) || 500, PAGE);
+    return warnIfTruncated(await queryAppSchema(sql, capped), capped, sql);
 }
 
 export async function scopedExecute(sql) {
@@ -97,7 +109,20 @@ export async function selectTable(table, {
     const whereClause = whereSql ? ` WHERE ${whereSql}` : '';
     const orderClause = orderBySql ? ` ORDER BY ${orderBySql}` : '';
     const sql = `SELECT ${cols} FROM ${ident(table)}${whereClause}${orderClause}`;
-    return queryAppSchema(sql, limit);
+    const want = Number(limit) || PAGE;
+    if (want < PAGE) return queryAppSchema(sql, want);
+    // 调用方要“全部”或 ≥ 单页上限：首页拿满就继续翻页，避免超过 1000 行时被静默截断
+    const rows = await queryAppSchema(sql, PAGE);
+    if (rows.length < PAGE) return rows;
+    if (!orderBySql) {
+        pushLog({ level: 'WARN', category: 'DAO', message: `${table} 超过 ${PAGE} 行但查询没有 ORDER BY，翻页结果可能重复或遗漏` });
+    }
+    while (rows.length < Math.min(want > PAGE ? want : MAX_ROWS, MAX_ROWS)) {
+        const page = await queryAppSchema(`${sql} LIMIT ${PAGE} OFFSET ${rows.length}`, PAGE);
+        rows.push(...page);
+        if (page.length < PAGE) break;
+    }
+    return rows;
 }
 
 export async function insertRow(table, row) {

@@ -90,24 +90,59 @@
     } catch (_) { /* ignore storage restrictions */ }
 
     // ── Intercept Fetch ──
+    // 1) 给站内绝对路径补上网关前缀；
+    // 2) 对 /api 请求声明 x-dh-envelope，服务端按规范返回 HTTP 200 + {code,message,data,...}，
+    //    这里再还原成桌面版前端原有的协议（成功=原始 JSON，失败=对应 HTTP 状态 + {error}）。
+    //    这样网关不会把业务错误替换成错误页，页面代码也不用改。
+    const API_PATH_RE = /^\/api\//;
+    function isApiUrl(url) {
+        try {
+            const u = new URL(String(url), window.location.href);
+            return u.origin === window.location.origin && API_PATH_RE.test(dhStripBase(u.pathname));
+        } catch (_) { return false; }
+    }
+    async function unwrapEnvelope(resp) {
+        if (resp.headers.get('x-dh-envelope') !== '1') return resp;
+        let body;
+        try { body = await resp.clone().json(); } catch (_) { return resp; }
+        if (!body || typeof body !== 'object' || !('code' in body)) return resp;
+        const failed = body.code !== 0;
+        const status = failed ? (Number(resp.headers.get('x-dh-status')) || Number(body.code) || 500) : 200;
+        const payload = failed
+            ? (body.data && typeof body.data === 'object' ? body.data : { error: body.message || '请求失败' })
+            : body.data;
+        const headers = new Headers(resp.headers);
+        headers.delete('content-length');
+        const out = new Response(JSON.stringify(payload === undefined ? null : payload), {
+            status: status >= 200 && status <= 599 ? status : 500,
+            statusText: failed ? (body.message || '') .slice(0, 60).replace(/[^\x20-\x7e]/g, '') : 'OK',
+            headers,
+        });
+        try { Object.defineProperty(out, 'url', { value: resp.url }); } catch (_) { /* ignore */ }
+        return out;
+    }
     if (typeof window.fetch === 'function') {
         const origFetch = window.fetch.bind(window);
+        window.dhRawFetch = origFetch;
         window.fetch = function (input, init) {
+            let target = input;
+            let options = init;
             try {
-                if (typeof input === 'string') {
-                    return origFetch(dhResolveUrl(input), init);
-                }
-                if (input instanceof URL) {
-                    return origFetch(dhResolveUrl(input.toString()), init);
-                }
-                if (input && typeof Request !== 'undefined' && input instanceof Request) {
+                if (typeof input === 'string') target = dhResolveUrl(input);
+                else if (input instanceof URL) target = dhResolveUrl(input.toString());
+                else if (input && typeof Request !== 'undefined' && input instanceof Request) {
                     const nextUrl = dhResolveUrl(input.url);
-                    if (nextUrl !== input.url) {
-                        return origFetch(new Request(nextUrl, input), init);
-                    }
+                    if (nextUrl !== input.url) target = new Request(nextUrl, input);
+                }
+                const url = typeof target === 'string' ? target : target.url;
+                if (isApiUrl(url)) {
+                    const headers = new Headers((options && options.headers) || (typeof target !== 'string' && target.headers) || undefined);
+                    headers.set('x-dh-envelope', '1');
+                    options = Object.assign({}, options, { headers });
+                    return origFetch(target, options).then(unwrapEnvelope);
                 }
             } catch (_) { /* fallback */ }
-            return origFetch(input, init);
+            return origFetch(target, options);
         };
     }
 
@@ -242,8 +277,24 @@
     }
 
     // ── Inject Persistent Debug Widget once DOM is ready ──
+    // 调试面板只对管理员出现；本地内存模式下所有页面顶部给出醒目提示，避免把演示数据当成已保存
+    function showMemoryBanner() {
+        if (window !== window.top || document.getElementById('dhMemoryBanner')) return;
+        const bar = document.createElement('div');
+        bar.id = 'dhMemoryBanner';
+        bar.textContent = '本地内存模式：未连接数字人基座，所有数据在服务重启后丢失';
+        bar.style.cssText = 'position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483600;padding:6px 14px;border-radius:999px;background:#b45309;color:#fff;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.3);pointer-events:none';
+        document.body.appendChild(bar);
+    }
     function mountDebugWidgetAssets() {
         if (window !== window.top) return; // Keep widget strictly on top frame to avoid duplicate floating pills
+        window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then((me) => {
+            window.DH_ME = me || null;
+            if (me && me.memoryMode) showMemoryBanner();
+            if (me && me.isAdmin) mountDebugWidgetNow();
+        }).catch(() => {});
+    }
+    function mountDebugWidgetNow() {
         const cssHref = dhResolveUrl('/css/dh-debug-widget.css');
         const jsSrc = dhResolveUrl('/js/shared/dh-debug-widget.js');
         if (!document.querySelector('link[href*="dh-debug-widget.css"]')) {

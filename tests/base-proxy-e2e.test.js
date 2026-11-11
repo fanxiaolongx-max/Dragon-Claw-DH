@@ -300,6 +300,8 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
             APP_CACHE_DATASOURCE_ID: '14',
             APP_CACHE_DATASOURCE_NAME: 'redis',
             DEBUG: 'true',
+            DH_OPEN_ADMIN: 'true', // 本用例覆盖功能路径；权限规则见 tests/access.test.js
+            LOG_LEVEL: 'silent',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -318,8 +320,14 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
         assert.equal(hRes.status, 200);
         const hJson = await hRes.json();
         assert.equal(hJson.status, 'ok');
-        assert.equal(hJson.memoryMode, false);
-        assert.equal(hJson.db.healthy, true);
+        assert.equal(hJson.code, 0);
+        assert.equal(hJson.data.status, 'ok');
+        assert.equal(hJson.data.runtime, 'node');
+        assert.equal(hJson.data.base_api, 'ok');
+        assert.equal(hJson.data.data_mode, 'online');
+        for (const alias of ['/health', '/healthz', '/api/health']) {
+            assert.equal((await (await fetch(`${appUrl}${alias}`)).json()).status, 'ok', alias);
+        }
 
         // 2. Gateway subpath rewriting & trailing slash redirect + Identity SSO
         const bareSubRes = await fetch(`${appUrl}${subPrefix}`, { redirect: 'manual' });

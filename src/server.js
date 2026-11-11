@@ -6,10 +6,12 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { config, STATIC_DIR } from './config.js';
 import { BusinessError } from './core/errors.js';
-import { resolveRequestIdentity } from './core/identity.js';
+import { parseIdentity } from './core/identity.js';
+import { resolveAdmin, denyReason } from './core/access.js';
+import { ok, fail } from './core/response.js';
 import { pushLog } from './core/log-ring.js';
-import { requestContext, scopedCheckHealth, isMemoryMode } from './dao/scoped.js';
-import { healthRoutes } from './routes/health.js';
+import { requestContext } from './dao/scoped.js';
+import { healthRoutes, healthHandler } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { debugRoutes } from './routes/debug.js';
 import { aiRoutes, aiSettingsRoutes } from './routes/ai.js';
@@ -147,19 +149,58 @@ export async function createServer() {
         });
     }
 
+    const apiPathOf = (url) => {
+        const pathname = String(url || '').split('?')[0];
+        return pathname.startsWith('/api/') ? pathname.slice(4) : null;
+    };
+
     app.addHook('onRequest', (req, reply, done) => {
-        const requestId = String(req.headers['x-request-id'] || crypto.randomUUID());
-        const identity = resolveRequestIdentity(req);
+        const requestId = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 80);
+        const identity = parseIdentity(req);
         req.requestId = requestId;
         req.startedAt = Date.now();
         req.userIdentity = identity;
         reply.header('x-request-id', requestId);
+        requestContext.run({ requestId, userId: identity.username }, done);
+    });
 
-        requestContext.run({
-            requestId,
-            userId: identity.username,
-            cookieHeader: req.headers.cookie || '',
-        }, done);
+    // 权限：先判定是否管理员，再按桌面版同款规则拦截非管理员的写操作
+    app.addHook('preHandler', async (req, reply) => {
+        const apiPath = apiPathOf(req.url);
+        if (apiPath === null || /^\/(?:healthz|health|ping)$/.test(apiPath)) return;
+        const identity = req.userIdentity;
+        if (await resolveAdmin(identity)) {
+            identity.isAdmin = true;
+            identity.isSuper = true;
+            identity.role = 'admin';
+        }
+        const reason = denyReason(req.method, apiPath, identity);
+        if (reason) {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 被拒绝：${reason}`, requestId: req.requestId, userId: identity.username });
+            return reply.code(403).send({ error: reason, code: 'ADMIN_REQUIRED', requestId: req.requestId });
+        }
+    });
+
+    // 统一响应体（规范 §8）：前端垫片带 x-dh-envelope 请求头时，JSON 响应包成
+    // {code,message,data,total,elapsed_ms,cache_hit} 且业务失败一律 HTTP 200，避免网关把 4xx/5xx 换成错误页；
+    // 垫片收到后还原成桌面版前端原有的协议。未带该头的调用方（curl、探活、脚本）保持原样。
+    app.addHook('onSend', async (req, reply, payload) => {
+        if (req.headers['x-dh-envelope'] !== '1' || apiPathOf(req.url) === null) return payload;
+        const type = String(reply.getHeader('content-type') || '');
+        if (!type.includes('application/json') || typeof payload !== 'string') return payload;
+        let body;
+        try { body = JSON.parse(payload); } catch { return payload; }
+        if (body && typeof body === 'object' && 'code' in body && 'data' in body && 'elapsed_ms' in body) return payload;
+        const status = reply.statusCode;
+        const elapsedMs = req.startedAt ? Date.now() - req.startedAt : 0;
+        reply.header('x-dh-envelope', '1');
+        if (status >= 400) {
+            reply.header('x-dh-status', String(status));
+            reply.code(status >= 500 && !(body && body.business) ? status : 200);
+            const wrapped = { ...fail(body?.error || body?.message || `HTTP ${status}`, status), data: body, elapsed_ms: elapsedMs };
+            return JSON.stringify(wrapped);
+        }
+        return JSON.stringify(ok(body, { elapsedMs, total: Array.isArray(body) ? body.length : (Array.isArray(body?.items) ? body.items.length : 0) }));
     });
 
     app.addHook('onResponse', async (req, reply) => {
@@ -192,21 +233,20 @@ export async function createServer() {
             detail: config.debug ? { name: err.name, stack: String(err.stack || '').split('\n').slice(0, 4) } : null,
         });
         if (reply.sent) return;
+        const business = err instanceof BusinessError;
+        // 未捕获异常不回显内部细节，只给 trace_id（规范 §8.3）
+        const message = business || status < 500 ? (err.message || '请求处理失败') : `服务内部错误，请联系管理员（trace_id: ${req.requestId || ''}）`;
         return reply.code(status).send({
-            error: err.message || '服务内部错误',
+            error: message,
             code: err.code || (status === 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST'),
             requestId: req.requestId || '',
+            ...(business ? { business: true } : {}),
         });
     });
 
-    // ── 健康检查兼容根路径 & /api ──────────────────────────
-    app.get('/healthz', async () => ({
-        status: 'ok',
-        service: config.appName,
-        version: config.appVersion,
-        memoryMode: isMemoryMode(),
-        db: isMemoryMode() ? { healthy: true, mode: 'memory' } : await scopedCheckHealth().catch((e) => ({ healthy: false, error: e.message })),
-    }));
+    // ── 健康检查：/api/healthz（规范）与 /health、/healthz（样例包）同一实现 ──
+    app.get('/healthz', healthHandler);
+    app.get('/health', healthHandler);
 
     // ── 注册全部 API 路由 ──────────────────────────────────
     await app.register(healthRoutes, { prefix: '/api' });

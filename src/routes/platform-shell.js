@@ -551,7 +551,8 @@ export async function platformShellRoutes(fastify) {
         }
         const forwardedHeaders = {};
         for (const [k, v] of Object.entries(req.headers || {})) {
-            if (!DROPPED_SUB_HEADERS.has(k.toLowerCase()) && v !== undefined) {
+            // 子请求的结果要原样塞回前端的预取缓存，不能带统一响应体的声明头
+            if (!DROPPED_SUB_HEADERS.has(k.toLowerCase()) && k.toLowerCase() !== 'x-dh-envelope' && v !== undefined) {
                 forwardedHeaders[k] = v;
             }
         }

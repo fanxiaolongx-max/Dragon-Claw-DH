@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { logger } from './logger.js';
 
 const MAX_ENTRIES = 500;
 const entries = [];
@@ -40,6 +41,9 @@ export function pushLog({ level = 'INFO', category = 'APP', message = '', reques
     };
     entries.push(entry);
     if (entries.length > MAX_ENTRIES) entries.shift();
+    // 同一条日志也按规范输出到 stdout（结构化 JSON，由底座采集）；调试面板读的是上面的环形缓冲
+    const fn = entry.level === 'ERROR' ? 'error' : entry.level === 'WARN' ? 'warn' : entry.level === 'DEBUG' ? 'debug' : 'info';
+    logger[fn]({ category: entry.category, requestId: entry.requestId || undefined, userId: entry.userId || undefined, durationMs: entry.durationMs ?? undefined, detail: entry.detail ?? undefined }, entry.message);
     emitter.emit('log', entry);
     return entry;
 }

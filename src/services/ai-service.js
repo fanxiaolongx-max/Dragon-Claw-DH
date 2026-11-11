@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { encryptSecret, decryptSecret } from '../core/secrets.js';
 import { kvGet, kvSet, selectTable, insertRow, upsertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import { pushLog } from '../core/log-ring.js';
 
@@ -68,6 +69,10 @@ function publicProfile(profile) {
     };
 }
 
+function decryptProfile(raw) {
+    return raw && raw.apiKey ? { ...raw, apiKey: decryptSecret(raw.apiKey) } : (raw || {});
+}
+
 export async function listProfiles() {
     const rows = await selectTable('ai_settings_profiles', {
         orderBySql: '`is_active` DESC, `updated_at` DESC',
@@ -78,7 +83,7 @@ export async function listProfiles() {
         const def = normalizeProfile(DEFAULT_MODEL_SETTINGS);
         return [def];
     }
-    return rows.map((r) => normalizeProfile({ ...parseJsonCol(r.config_json, {}), id: r.id, name: r.name, provider: r.provider, isActive: Boolean(r.is_active) }));
+    return rows.map((r) => normalizeProfile({ ...decryptProfile(parseJsonCol(r.config_json, {})), id: r.id, name: r.name, provider: r.provider, isActive: Boolean(r.is_active) }));
 }
 
 export async function getActiveSettings() {
@@ -117,7 +122,7 @@ export async function saveProfile(input = {}, idOverride = '') {
         name: merged.name,
         provider: merged.provider,
         is_active: merged.isActive ? 1 : 0,
-        config_json: JSON.stringify(merged),
+        config_json: JSON.stringify({ ...merged, apiKey: encryptSecret(merged.apiKey) }),
         created_at: existing?.createdAt || now,
         updated_at: now,
     }, ['id']);

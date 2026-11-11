@@ -23,7 +23,7 @@ export const TEMPLATES_DIR = path.join(ROOT, 'src', 'templates');
 export const config = {
     appName: process.env.APP_NAME || 'Dragon Claw Digital Human',
     appVersion: readVersion(),
-    debug: bool(process.env.DEBUG, true),
+    debug: bool(process.env.DEBUG, false),
     nodeEnv: process.env.NODE_ENV || 'production',
 
     port: num(process.env.PORT, 8000),
@@ -58,7 +58,14 @@ export const config = {
 
     httpTimeoutMs: num(process.env.HTTP_TIMEOUT_MS, num(process.env.HTTP_TIMEOUT, 15) * 1000),
     httpVerifySsl: bool(process.env.HTTP_VERIFY_SSL, false),
-    localDevMemory: bool(process.env.LOCAL_DEV_MEMORY, !String(process.env.BASE_QUERY_URL || '').trim()),
+    // 内存模式只在显式声明时启用（scripts/dev.js 会设置）。基座未注入地址时不静默降级：数据接口直接报错。
+    localDevMemory: bool(process.env.LOCAL_DEV_MEMORY, false),
+
+    // 管理员：工号白名单（逗号分隔）。未配置时由首位已识别用户自动成为管理员，之后在界面里维护。
+    adminUsers: String(process.env.DH_ADMIN_USERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    openAdmin: bool(process.env.DH_OPEN_ADMIN, false),
+    // 落库密钥的加密口令；未配置时退化为按应用 UUID 派生（仅防明文暴露，见 README 安全说明）
+    secretKey: String(process.env.DH_SECRET_KEY || '').trim(),
 };
 
 function deriveFromQuery(suffix) {

@@ -65,33 +65,38 @@ export async function aiRoutes(fastify) {
         return { items, total: items.length };
     });
 
+    // 会话只属于创建者：按 ID 的读写都先核对归属，不属于本人一律按“不存在”处理
+    const ownSession = async (req) => {
+        const session = await getSession(String(req.params.sessionId || ''));
+        return session && session.owner === ownerOf(req) ? session : null;
+    };
+    const notFound = (reply) => reply.code(404).send({ error: '会话不存在' });
+
     fastify.post('/sessions/:sessionId/archive', async (req, reply) => {
-        const session = await setSessionArchived(req.params.sessionId, true);
-        if (!session) return reply.code(404).send({ error: '会话不存在' });
-        return { session };
+        if (!await ownSession(req)) return notFound(reply);
+        return { session: await setSessionArchived(req.params.sessionId, true) };
     });
 
     fastify.post('/sessions/:sessionId/unarchive', async (req, reply) => {
-        const session = await setSessionArchived(req.params.sessionId, false);
-        if (!session) return reply.code(404).send({ error: '会话不存在' });
-        return { session };
+        if (!await ownSession(req)) return notFound(reply);
+        return { session: await setSessionArchived(req.params.sessionId, false) };
     });
 
     fastify.delete('/sessions/:sessionId', async (req, reply) => {
-        const ok = await deleteSession(req.params.sessionId);
-        if (!ok) return reply.code(404).send({ error: '会话不存在' });
+        if (!await ownSession(req)) return notFound(reply);
+        await deleteSession(req.params.sessionId);
         return { deleted: true };
     });
 
-    fastify.get('/sessions/:sessionId/messages', async (req) => {
-        const items = await listMessages(req.params.sessionId);
-        return { items };
+    fastify.get('/sessions/:sessionId/messages', async (req, reply) => {
+        if (!await ownSession(req)) return notFound(reply);
+        return { items: await listMessages(req.params.sessionId) };
     });
 
-    fastify.get('/sessions/:sessionId/export', async (req) => {
-        const session = await getSession(req.params.sessionId);
-        const messages = await listMessages(req.params.sessionId);
-        return { session, messages };
+    fastify.get('/sessions/:sessionId/export', async (req, reply) => {
+        const session = await ownSession(req);
+        if (!session) return notFound(reply);
+        return { session, messages: await listMessages(req.params.sessionId) };
     });
 
     fastify.post('/chat', async (req, reply) => {
@@ -104,6 +109,10 @@ export async function aiRoutes(fastify) {
         const lastUserMsg = [...messages].reverse().find((m) => m?.role === 'user');
         const userText = String(lastUserMsg?.content || body.message || '').trim();
         let sessionId = body.sessionId ? String(body.sessionId) : '';
+        if (sessionId) {
+            const existing = await getSession(sessionId);
+            if (existing && existing.owner !== ownerId) return reply.code(404).send({ error: '会话不存在' });
+        }
 
         if (persist && !sessionId) {
             const created = await saveSession({
@@ -135,7 +144,7 @@ export async function aiRoutes(fastify) {
         }
 
         const profiles = await listProfiles();
-        const selected = profiles.find((p) => p.id === body.modelId || p.isActive) || profiles[0];
+        const selected = profiles.find((p) => p.id === body.modelId) || profiles.find((p) => p.isActive) || profiles[0];
         if (!selected?.apiKey) {
             const fallbackReply = [
                 '当前运行在 **Dragon Claw 数字人云端 Web 版（一期）**。',

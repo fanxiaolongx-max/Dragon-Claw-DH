@@ -15,7 +15,8 @@ const baseDispatcher = new Agent({
 });
 
 function summarizeSql(sql) {
-    return String(sql || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    // 日志只留 SQL 模板：字符串字面量一律替换成 ?，不把业务数据、密钥写进日志（规范 §10.1）
+    return String(sql || '').replace(/'(?:[^'\\]|\\.)*'/g, '?').replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 async function baseRequest(url, { method = 'POST', body, timeoutMs = config.httpTimeoutMs, tag = 'base' } = {}) {
