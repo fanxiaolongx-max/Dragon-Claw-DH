@@ -497,17 +497,17 @@ export async function platformShellRoutes(fastify) {
 
     fastify.get('/api/home/page-updates', async () => {
         const pageFiles = {
-            '/uivf12': 'pages/uivf12.html',
-            '/sla': 'pages/sla.html',
-            '/report': 'pages/report.html',
-            '/expedite': 'pages/expedite.html',
-            '/monthly': 'pages/ai-report.html',
-            '/bigscreen': 'pages/bigscreen.html',
-            '/db-explorer': 'pages/db-explorer.html',
-            '/topic-analysis': 'pages/topic-analysis.html',
-            '/duty-roster': 'pages/duty-roster.html',
-            '/frt': 'pages/frt.html',
-            '/praudit': 'pages/praudit.html',
+            '/uivf12': 'uivf12.html',
+            '/sla': 'sla.html',
+            '/report': 'report.html',
+            '/expedite': 'expedite.html',
+            '/monthly': 'monthly.html',
+            '/bigscreen': 'bigscreen.html',
+            '/db-explorer': 'db-explorer.html',
+            '/topic-analysis': 'topic-analysis.html',
+            '/duty-roster': 'duty-roster.html',
+            '/frt': 'frt.html',
+            '/praudit': 'praudit.html',
         };
         const out = {};
         for (const [key, rel] of Object.entries(pageFiles)) {

@@ -33,7 +33,7 @@ jobs:
         run: |
           cp package-lock.json "$RUNNER_TEMP/package-lock.json"
           cp .npmrc "$RUNNER_TEMP/npmrc"
-          sed -i 's#https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/#https://registry.npmjs.org/#g' package-lock.json .npmrc
+          sed -i -E 's#https?://(mirrors\.tools\.huawei\.com/npm|cmc\.centralrepo\.rnd\.huawei\.com/artifactory/api/npm/npm-central-repo)/#https://registry.npmjs.org/#g' package-lock.json .npmrc
           npm ci --ignore-scripts --no-audit --no-fund
           cp "$RUNNER_TEMP/package-lock.json" package-lock.json
           cp "$RUNNER_TEMP/npmrc" .npmrc

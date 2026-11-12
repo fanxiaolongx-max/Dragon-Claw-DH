@@ -2273,7 +2273,7 @@ function activeTenantName() { return navState.settings?.platformName || 'Dragon 
 
 function renderNavbar() {
     const role = localStorage.getItem('tools_role');
-    const user = localStorage.getItem('tools_user');
+    const user = localStorage.getItem('tools_display_name') || localStorage.getItem('tools_user');
 
     // Hide all buttons that edit/add stuff if readonly
     if (role === 'readonly') {
@@ -5520,18 +5520,22 @@ async function syncNavUserSession() {
             if (data && data.username) {
                 const previousRole = localStorage.getItem('tools_role');
                 const previousUser = localStorage.getItem('tools_user');
+                const previousDisplay = localStorage.getItem('tools_display_name');
+                const displayName = data.displayName || data.username;
                 localStorage.setItem('tools_user', data.username);
+                localStorage.setItem('tools_display_name', displayName);
                 if (data.role) localStorage.setItem('tools_role', data.role);
                 if (await syncTenantWorkspace(data)) return;
                 // 导航栏按本地角色渲染管理员入口（设置、租户管理）；服务端角色与渲染时不同就整条重绘。
-                if ((data.role && data.role !== previousRole) || data.username !== previousUser) {
+                if ((data.role && data.role !== previousRole) || data.username !== previousUser || displayName !== previousDisplay) {
                     renderNavbar();
                 } else {
                     const userChipText = document.querySelector('.nav-user-chip .nav-action-text');
                     if (userChipText) {
-                        userChipText.textContent = data.username;
+                        userChipText.textContent = displayName;
                     }
                 }
+                try { window.dispatchEvent(new CustomEvent('tools:user-synced', { detail: data })); } catch (_) { /* ignore */ }
                 // Digital Human Web SSO 模式免二次重登弹窗
                 if (!window.__dhRuntimeInstalled && !hasNavAuthToken()) promptNavRelogin();
             }

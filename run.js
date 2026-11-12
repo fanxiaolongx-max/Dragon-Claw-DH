@@ -158,7 +158,7 @@ function checkDependencies() {
     if (missingOptional.length && result.nodeModules && !missingRequired.length) {
         result.problems.push({ level: result.profile === '完整包' ? 'warn' : 'info', text: `${result.profile === '完整包' ? '完整包里这些可选依赖没有装上' : '精简包不含这些依赖'}，对应功能不可用：${missingOptional.map((d) => `${d.name}（${d.feature}）`).join('；')}`, hint: result.profile === '完整包' ? '查看安装日志，确认内网源里有这些包。' : '需要这些功能时改传完整包。' });
     }
-    const publicHosts = Object.keys(result.lockRegistries).filter((h) => /registry\.npmjs\.org|npmmirror|mirrors\.tools/.test(h));
+    const publicHosts = Object.keys(result.lockRegistries).filter((h) => /registry\.npmjs\.org|registry\.yarnpkg\.com|npmmirror/i.test(h));
     if (publicHosts.length) {
         result.problems.push({ level: 'warn', text: `锁文件里的下载地址指向公网源：${publicHosts.join('、')}`, hint: '内网通常访问不到公网源，npm ci 会失败。需要在内网机器上重新生成 package-lock.json。' });
     }

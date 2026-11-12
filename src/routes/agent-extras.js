@@ -88,10 +88,53 @@ export async function agentSkillsRoutes(fastify) {
     });
 }
 
+const identityOf = async (req) => {
+    const identity = req.userIdentity;
+    if (await resolveAdmin(identity)) identity.isAdmin = true;
+    return identity;
+};
+
+async function sendCustomToolRaw(req, reply) {
+    const tool = await getCustomTool(req.params.slug, await identityOf(req));
+    if (!tool) return reply.code(404).type('text/plain; charset=utf-8').send('工具不存在');
+    reply.header('Content-Security-Policy', TOOL_CSP);
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Cache-Control', 'private, no-store');
+    return reply.type('text/html; charset=utf-8').send(withBridge(tool.html));
+}
+
+async function handleCustomToolBridge(req, reply) {
+    const identity = await identityOf(req);
+    const tool = await getCustomTool(req.params.slug, identity);
+    if (!tool) return reply.code(404).send({ error: '工具不存在' });
+    const method = String(req.body?.method || '');
+    const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {};
+    reply.header('Cache-Control', 'no-store');
+    if (method === 'me') return { username: identity.username, displayName: identity.displayName, isAdmin: Boolean(identity.isAdmin) };
+    if (method === 'query') {
+        const out = await runSelect({ sql: String(params.sql || ''), limit: params.limit });
+        if (!out.ok) return reply.code(400).send({ error: out.content });
+        return JSON.parse(out.content);
+    }
+    if (method === 'report') {
+        const out = await toolByName.get('get_report_overview').run({ snapshot_id: params.snapshot_id }, { identity });
+        if (!out.ok) return reply.code(400).send({ error: out.content });
+        try { return JSON.parse(out.content); } catch { return { message: out.content }; }
+    }
+    return reply.code(400).send({ error: `不支持的方法：${method}（可用：query、report、me）` });
+}
+
 export async function customToolsRoutes(fastify) {
     fastify.get('/', async (req) => listCustomTools(req.userIdentity));
     fastify.post('/', async (req, reply) => reply.code(201).send(await saveCustomTool(req.body || {}, req.userIdentity)));
     fastify.delete('/:slug', async (req) => deleteCustomTool(req.params.slug, req.userIdentity));
+    fastify.get('/:slug/meta', async (req, reply) => {
+        const tool = await getCustomTool(req.params.slug, await identityOf(req));
+        if (!tool) return reply.code(404).send({ error: '这个工具不存在，或者你没有查看它的权限' });
+        return { slug: tool.slug, name: tool.name, nameEn: tool.nameEn, icon: tool.icon, description: tool.description };
+    });
+    fastify.get('/:slug/raw', sendCustomToolRaw);
+    fastify.post('/:slug/bridge', handleCustomToolBridge);
     fastify.get('/:slug/export', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, req.userIdentity);
         if (!tool) return reply.code(404).send({ error: '工具不存在' });
@@ -165,39 +208,8 @@ function withBridge(html) {
 const BRIDGE_SHELL = `<script>(function(){var f=document.querySelector('iframe');window.addEventListener('message',function(e){if(e.source!==f.contentWindow)return;var d=e.data;if(!d||d.__dh!==1)return;fetch('bridge',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:d.method,params:d.params})}).then(function(r){return r.json().then(function(j){return r.ok?{ok:true,data:j}:{ok:false,error:j.error||('HTTP '+r.status)};});}).catch(function(err){return{ok:false,error:err.message};}).then(function(reply){reply.__dh=1;reply.id=d.id;f.contentWindow.postMessage(reply,'*');});});})();</script>`;
 
 export function registerCustomToolPages(app, phase2Html) {
-    const identityOf = async (req) => {
-        const identity = req.userIdentity;
-        if (await resolveAdmin(identity)) identity.isAdmin = true;
-        return identity;
-    };
-    app.get('/custom-tools/:slug/raw', async (req, reply) => {
-        const tool = await getCustomTool(req.params.slug, await identityOf(req));
-        if (!tool) return reply.code(404).type('text/plain; charset=utf-8').send('工具不存在');
-        reply.header('Content-Security-Policy', TOOL_CSP);
-        reply.header('X-Content-Type-Options', 'nosniff');
-        reply.header('Cache-Control', 'private, no-store');
-        return reply.type('text/html; charset=utf-8').send(withBridge(tool.html));
-    });
-    app.post('/custom-tools/:slug/bridge', async (req, reply) => {
-        const identity = await identityOf(req);
-        const tool = await getCustomTool(req.params.slug, identity);
-        if (!tool) return reply.code(404).send({ error: '工具不存在' });
-        const method = String(req.body?.method || '');
-        const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {};
-        reply.header('Cache-Control', 'no-store');
-        if (method === 'me') return { username: identity.username, displayName: identity.displayName, isAdmin: Boolean(identity.isAdmin) };
-        if (method === 'query') {
-            const out = await runSelect({ sql: String(params.sql || ''), limit: params.limit });
-            if (!out.ok) return reply.code(400).send({ error: out.content });
-            return JSON.parse(out.content);
-        }
-        if (method === 'report') {
-            const out = await toolByName.get('get_report_overview').run({ snapshot_id: params.snapshot_id }, { identity });
-            if (!out.ok) return reply.code(400).send({ error: out.content });
-            try { return JSON.parse(out.content); } catch { return { message: out.content }; }
-        }
-        return reply.code(400).send({ error: `不支持的方法：${method}（可用：query、report、me）` });
-    });
+    app.get('/custom-tools/:slug/raw', sendCustomToolRaw);
+    app.post('/custom-tools/:slug/bridge', handleCustomToolBridge);
     const page = async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
         reply.type('text/html; charset=utf-8').header('Cache-Control', 'private, no-store');

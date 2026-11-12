@@ -28,23 +28,32 @@ function detectLanguage(cookies, headers) {
 export const GUEST_ID = 'dh-guest';
 
 /** 只解析“是谁”，不含权限。 */
+function safeDecode(v) {
+    if (!v) return '';
+    const s = String(v).trim();
+    if (!s) return '';
+    try { return decodeURIComponent(s).trim(); } catch { return s; }
+}
+
 export function parseIdentity(req) {
     const headers = req?.headers || {};
     const cookies = parseCookies(headers.cookie);
+    const frontEndUser = safeDecode(headers['x-dh-user']);
+    const frontEndDisplayName = safeDecode(headers['x-dh-displayname']);
     const cookieUser = String(cookies.iLearningXUserName || '').trim();
     const headerUser = String(headers['x-user-id'] || headers['x-emp-no'] || headers['x-user-name'] || '').trim();
-    const userId = (cookieUser || headerUser || GUEST_ID).slice(0, 120);
+    const userId = (frontEndUser || cookieUser || headerUser || GUEST_ID).slice(0, 120);
     return {
         id: userId,
         username: userId,
-        displayName: String(headers['x-user-name'] || cookieUser || userId).slice(0, 120),
-        identified: Boolean(cookieUser || headerUser),
+        displayName: String(frontEndDisplayName || cookieUser || headers['x-user-name'] || userId).slice(0, 120),
+        identified: Boolean(frontEndUser || cookieUser || headerUser),
         role: 'user',
         isAdmin: false,
         isSuper: false,
         tenantId: 'default',
         homeTenantId: 'default',
-        source: cookieUser ? 'cookie:iLearningXUserName' : (headerUser ? 'header' : 'anonymous'),
+        source: frontEndUser ? 'platform:dh/user/current' : (cookieUser ? 'cookie:iLearningXUserName' : (headerUser ? 'header' : 'anonymous')),
         lang: detectLanguage(cookies, headers),
         cookiesPresent: Object.keys(cookies),
         appId: String(headers['x-app-id'] || ''),

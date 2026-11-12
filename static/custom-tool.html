@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <script src="js/shared/dh-runtime.js"></script>
+    <script src="js/api.js"></script>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>自定义工具 · Dragon Claw</title>
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body { display: flex; flex-direction: column; font: 14px/1.4 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1c2430; }
+        header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #fff; border-bottom: 1px solid #e3e6eb; }
+        header a { color: #1f6feb; text-decoration: none; }
+        header b { font-size: 15px; }
+        header small { color: #6b7480; margin-left: auto; }
+        iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+        .err { margin: auto; max-width: 480px; padding: 28px; border-radius: 14px; background: #fff; border: 1px solid #e3e6eb; text-align: center; }
+        .err h1 { margin: 0 0 8px; font-size: 18px; }
+        .err p { margin: 0 0 18px; color: #5b6573; }
+        .err a { display: inline-block; padding: 8px 16px; border-radius: 8px; background: #1f6feb; color: #fff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <header id="toolHeader">
+        <a href="./">← 返回首页</a>
+        <span id="toolIcon">🧩</span>
+        <b id="toolTitle">自定义工具</b>
+        <small>自定义工具 · 在隔离沙箱中运行</small>
+    </header>
+    <iframe id="toolFrame" sandbox="allow-scripts allow-forms allow-modals allow-downloads" title="自定义工具"></iframe>
+    <div id="toolError" class="err" hidden>
+        <h1>自定义工具不可用</h1>
+        <p id="toolErrorText">这个工具不存在，或者你没有查看它的权限。</p>
+        <a href="./">← 返回平台首页</a>
+    </div>
+    <script>
+        (function () {
+            'use strict';
+            const params = new URLSearchParams(window.location.search);
+            const slug = String(params.get('slug') || '').trim().toLowerCase();
+            const header = document.getElementById('toolHeader');
+            const frame = document.getElementById('toolFrame');
+            const errBox = document.getElementById('toolError');
+            const errText = document.getElementById('toolErrorText');
+            const inToolFrame = (() => {
+                try { return window.top !== window && window.top.location.origin === window.location.origin && Boolean(window.top.HomeToolFrame); } catch { return false; }
+            })();
+            if (inToolFrame) header.hidden = true;
+
+            function showError(msg) {
+                frame.hidden = true;
+                errText.textContent = msg || '这个工具不存在，或者你没有查看它的权限。';
+                errBox.hidden = false;
+            }
+            if (!/^[a-z0-9][a-z0-9-]{1,48}$/.test(slug)) {
+                showError('缺少或无效的自定义工具标识。');
+                return;
+            }
+
+            const base = (window.DH_BASE || '').replace(/\/+$/, '');
+            const apiUrl = (suffix) => `${base}/api/custom-tools/${encodeURIComponent(slug)}${suffix}`;
+
+            fetch(apiUrl('/meta'), { credentials: 'same-origin' })
+                .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+                .then(({ ok, body }) => {
+                    if (!ok || !body?.slug) {
+                        showError(body?.error || '这个工具不存在，或者你没有查看它的权限。');
+                        return;
+                    }
+                    document.title = `${body.name} · Dragon Claw`;
+                    document.getElementById('toolIcon').textContent = body.icon || '🧩';
+                    document.getElementById('toolTitle').textContent = body.name || slug;
+                    frame.title = body.name || slug;
+                    frame.src = apiUrl('/raw');
+                })
+                .catch(() => showError('加载自定义工具元数据失败。'));
+
+            window.addEventListener('message', (event) => {
+                if (event.source !== frame.contentWindow) return;
+                const d = event.data;
+                if (!d || d.__dh !== 1) return;
+                fetch(apiUrl('/bridge'), {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ method: d.method, params: d.params }),
+                })
+                    .then((r) => r.json().then((j) => (r.ok ? { ok: true, data: j } : { ok: false, error: j.error || ('HTTP ' + r.status) })))
+                    .catch((err) => ({ ok: false, error: err.message }))
+                    .then((reply) => {
+                        reply.__dh = 1;
+                        reply.id = d.id;
+                        frame.contentWindow.postMessage(reply, '*');
+                    });
+            });
+        })();
+    </script>
+</body>
+</html>

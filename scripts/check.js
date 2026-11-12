@@ -42,17 +42,29 @@ export async function runCheck() {
         if (aj.runtimeVersion !== '22.21.1') errors.push(`app.json.runtimeVersion 必须为 22.21.1，当前: ${aj.runtimeVersion}`);
         if (aj.entry !== 'run.js') errors.push(`app.json.entry 必须为 run.js，当前: ${aj.entry}`);
         if (aj.health?.path !== '/api/healthz') errors.push(`app.json.health.path 必须为 /api/healthz，当前: ${aj.health?.path}`);
+        const installCmd = String(aj.install?.command || '');
+        if (!installCmd.includes('rm -rf node_modules &&') || !installCmd.includes('--ignore-scripts') || !installCmd.includes('--engine-strict=false')) {
+            errors.push(`app.json.install.command 必须包含 rm -rf node_modules &&、--ignore-scripts 和 --engine-strict=false，当前: ${installCmd}`);
+        }
+        if (aj.install?.registry && /registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|cmc\.centralrepo\.rnd\.huawei\.com/i.test(aj.install.registry)) {
+            errors.push(`app.json.install.registry 禁止指向公网或旧 Artifactory 源: ${aj.install.registry}`);
+        }
     }
 
     // 2. .npmrc
     const npmrcPath = path.join(ROOT, '.npmrc');
-    if (!fs.existsSync(npmrcPath)) {
-        errors.push('缺少 .npmrc');
-    } else {
+    if (fs.existsSync(npmrcPath)) {
         const npmrc = fs.readFileSync(npmrcPath, 'utf8');
-        if (!npmrc.includes('cmc.centralrepo.rnd.huawei.com')) errors.push('.npmrc 未指向公司内部 Artifactory 仓库');
-        if (/_authToken\s*=/i.test(npmrc)) errors.push('.npmrc 禁止携带 _authToken');
-        if (/registry\.npmjs\.org|registry\.yarnpkg\.com/i.test(npmrc)) errors.push('.npmrc 禁止包含外网公网源');
+        const regMatch = /^\s*registry\s*=\s*(.+)$/im.exec(npmrc);
+        if (regMatch && !regMatch[1].includes('mirrors.tools.huawei.com')) {
+            errors.push(`R9 违规：.npmrc 若显式指定 registry，必须指向内网源 mirrors.tools.huawei.com，当前: ${regMatch[1].trim()}`);
+        }
+        if (/^\s*(?:\/\/[^=]+:)?_authToken\s*=\s*(?!\$\{NPM_TOKEN\}\s*$)/im.test(npmrc)) {
+            errors.push('R11 违规：.npmrc 禁止携带明文 _authToken（只允许 ${NPM_TOKEN}）');
+        }
+        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|cmc\.centralrepo\.rnd\.huawei\.com/i.test(npmrc)) {
+            errors.push('R9 违规：.npmrc 禁止包含外网公网源或旧 Artifactory 源');
+        }
     }
 
     // 3. package.json & R1/R2/R8
@@ -63,7 +75,7 @@ export async function runCheck() {
         if (BANNED_DB_PKGS.has(dep)) errors.push(`R1 违规：package.json 禁止包含直接连库依赖 ${dep}`);
         if (BANNED_AUTH_PKGS.has(dep)) errors.push(`R2 违规：package.json 禁止包含自建登录鉴权依赖 ${dep}`);
     }
-    if (pkg.engines?.node !== '22.21.1') errors.push(`package.json engines.node 必须精确为 22.21.1，当前: ${pkg.engines?.node}`);
+    if (pkg.engines?.node !== '>=22 <23') errors.push(`package.json engines.node 必须为 ">=22 <23"，当前: ${pkg.engines?.node}`);
     // 基座会在应用根目录放一个 CommonJS 文件（dh-identity-loader.js）并预加载：根目录声明 ESM 会让它加载失败、应用起不来。
     // 所以根目录保持 CommonJS（run.js 是启动器），应用代码在 src/ 下由 src/package.json 声明 ESM。
     if (pkg.type === 'module') errors.push('根目录 package.json 不能声明 "type": "module"（会导致基座注入的 CommonJS 加载器启动失败）');
@@ -82,11 +94,14 @@ export async function runCheck() {
     const litePkgPath = path.join(ROOT, 'profiles', 'lite', 'package.json');
     if (fs.existsSync(litePkgPath)) {
         const lite = JSON.parse(fs.readFileSync(litePkgPath, 'utf8'));
+        if (lite.engines?.node !== '>=22 <23') errors.push(`profiles/lite/package.json engines.node 必须为 ">=22 <23"，当前: ${lite.engines?.node}`);
         for (const [dep, ver] of Object.entries(lite.dependencies || {})) {
             if (pkg.dependencies?.[dep] !== ver) errors.push(`profiles/lite/package.json 的 ${dep}@${ver} 与主 package.json 不一致`);
         }
         const liteLock = fs.readFileSync(path.join(ROOT, 'profiles', 'lite', 'package-lock.json'), 'utf8');
-        if (/registry\.npmjs\.org|registry\.npmmirror\.com|mirrors\.tools\.huawei\.com/i.test(liteLock)) errors.push('profiles/lite/package-lock.json 包含公网源地址');
+        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|cmc\.centralrepo\.rnd\.huawei\.com/i.test(liteLock)) {
+            errors.push('profiles/lite/package-lock.json 包含外网公网或旧 Artifactory resolved URL');
+        }
     }
     for (const scriptName of Object.keys(pkg.scripts || {})) {
         if (/^(?:(?:pre|post)?install|prepare)$/i.test(scriptName)) {
@@ -104,8 +119,8 @@ export async function runCheck() {
             errors.push(`package-lock.json lockfileVersion 必须 >= 2，当前: ${lock.lockfileVersion}`);
         }
         const rawLock = fs.readFileSync(lockPath, 'utf8');
-        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|mirrors\.tools\.huawei\.com/i.test(rawLock)) {
-            errors.push('package-lock.json 包含外网公网 resolved URL');
+        if (/registry\.npmjs\.org|registry\.yarnpkg\.com|registry\.npmmirror\.com|cmc\.centralrepo\.rnd\.huawei\.com/i.test(rawLock)) {
+            errors.push('package-lock.json 包含外网公网或旧 Artifactory resolved URL');
         }
     }
 
@@ -167,10 +182,7 @@ export async function runCheck() {
     }
 
     // 7. HTML & CSS: zero external CDN links
-    const htmlFiles = [
-        path.join(ROOT, 'static', 'index.html'),
-        ...walkFiles(path.join(ROOT, 'static', 'pages'), (_, name) => name.endsWith('.html')),
-    ].filter((f) => fs.existsSync(f));
+    const htmlFiles = walkFiles(path.join(ROOT, 'static'), (_, name) => name.endsWith('.html'));
     for (const file of htmlFiles) {
         const html = fs.readFileSync(file, 'utf8');
         if (/https?:\/\/(?:cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|unpkg\.com|fonts\.googleapis\.com)/i.test(html)) {

@@ -26,6 +26,7 @@ async function baseRequest(url, { method = 'POST', body, timeoutMs = config.http
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (ctx.requestId) headers['x-request-id'] = ctx.requestId;
+    if (config.appUuid) headers['x-app-id'] = config.appUuid;
 
     let resp;
     try {

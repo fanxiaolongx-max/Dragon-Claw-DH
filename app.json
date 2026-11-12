@@ -4,8 +4,7 @@
   "entry": "run.js",
   "packageManager": "npm",
   "install": {
-    "command": "npm ci --omit=dev --ignore-scripts --no-audit --no-fund",
-    "registry": "https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/",
+    "command": "rm -rf node_modules && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --engine-strict=false",
     "lockfile": "package-lock.json"
   },
   "health": {

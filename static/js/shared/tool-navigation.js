@@ -49,30 +49,32 @@
         }
     }
 
-    const toolPath = /^\/(?:uivf12|sla|report|expedite|monthly|ai-report|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|cinema|cinama|project-evolution|python-updater|desktop-license-admin)(?:\/|\.html$|$)|^\/(?:tools|apps)\/[^/]+(?:\/|$)|^\/pages\/(?:uivf12|sla|report|expedite|ai-report|monthly|monthly-designer|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|project-evolution|python-updater|desktop-license-admin)\.html$/;
+    const toolPath = /^\/(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|cinama|project-evolution|python-updater|desktop-license-admin)(?:\/|\.html$|$)|^\/(?:tools|apps)\/[^/]+(?:\/|$)|^\/pages\/(?:uivf12|sla|report|expedite|ai-report|monthly|monthly-designer|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|project-evolution|python-updater|desktop-license-admin)\.html$/;
     const originals = new WeakMap();
     function resolveTool(href) {
         if (!href || String(href).startsWith('#')) return null;
         try {
+            const strip = (p) => (typeof window.dhStripBase === 'function' ? window.dhStripBase(p) : p);
+            const mapStatic = (p) => (typeof window.dhMapStaticRoute === 'function' ? window.dhMapStaticRoute(p) : p);
             const resolvedHref = typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl(String(href)) : String(href);
             let url = new URL(resolvedHref, location.href);
             if (url.origin !== location.origin) return null;
-            const strip = (p) => (typeof window.dhStripBase === 'function' ? window.dhStripBase(p) : p);
             let strippedPath = strip(url.pathname);
             if (strippedPath === '/' && url.searchParams.has('app')) {
                 const inner = url.searchParams.get('app');
-                url = new URL(typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl(inner) : inner, location.origin);
+                url = new URL(typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl(inner) : inner, location.href);
                 if (url.origin !== location.origin) return null;
                 strippedPath = strip(url.pathname);
             }
-            const raw = strippedPath.match(/^\/custom-tools\/([^/]+)\/(?:index\.html)?$/);
+            const raw = strippedPath.match(/^\/custom-tools\/([^/]+)\/?(?:index\.html)?$/);
             if (raw) strippedPath = '/tools/' + raw[1];
             if (!toolPath.test(strippedPath)) return null;
             if (['/ai-report', '/pages/monthly-designer.html'].includes(strippedPath)) strippedPath = '/monthly';
+            const mappedUrl = new URL(mapStatic(strippedPath + url.search + url.hash), location.origin);
             const prefix = window.DH_BASE || '';
-            url.pathname = prefix + strippedPath;
-            url.searchParams.delete('_t');
-            return url;
+            mappedUrl.pathname = prefix + mappedUrl.pathname;
+            mappedUrl.searchParams.delete('_t');
+            return mappedUrl;
         } catch { return null; }
     }
     function toolUrl(href) {

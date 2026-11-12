@@ -31,18 +31,18 @@ const DH_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+(?=\/|$|\?)/i;
 const DH_BARE_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+$/i;
 
 const PHASE1_PAGES = new Map([
-    ['/uivf12', 'pages/uivf12.html'],
-    ['/sla', 'pages/sla.html'],
-    ['/report', 'pages/report.html'],
-    ['/expedite', 'pages/expedite.html'],
-    ['/monthly', 'pages/ai-report.html'],
-    ['/monthly/legacy', 'pages/monthly.html'],
-    ['/bigscreen', 'pages/bigscreen.html'],
-    ['/db-explorer', 'pages/db-explorer.html'],
-    ['/topic-analysis', 'pages/topic-analysis.html'],
-    ['/duty-roster', 'pages/duty-roster.html'],
-    ['/frt', 'pages/frt.html'],
-    ['/praudit', 'pages/praudit.html'],
+    ['/uivf12', 'uivf12.html'],
+    ['/sla', 'sla.html'],
+    ['/report', 'report.html'],
+    ['/expedite', 'expedite.html'],
+    ['/monthly', 'monthly.html'],
+    ['/monthly/legacy', 'monthly-legacy.html'],
+    ['/bigscreen', 'bigscreen.html'],
+    ['/db-explorer', 'db-explorer.html'],
+    ['/topic-analysis', 'topic-analysis.html'],
+    ['/duty-roster', 'duty-roster.html'],
+    ['/frt', 'frt.html'],
+    ['/praudit', 'praudit.html'],
 ]);
 
 const PHASE2_ROUTES = new Set([
@@ -344,9 +344,22 @@ export async function createServer() {
 
     app.get('/pages/:file', async (req, reply) => {
         const file = String(req.params.file || '').replace(/[^a-zA-Z0-9_.-]/g, '');
-        const allowed = new Set(['uivf12.html', 'sla.html', 'report.html', 'expedite.html', 'monthly.html', 'ai-report.html', 'bigscreen.html', 'db-explorer.html', 'topic-analysis.html', 'duty-roster.html', 'frt.html', 'praudit.html']);
-        if (allowed.has(file)) {
-            return sendHtmlFile(reply, `pages/${file}`);
+        const legacyMap = {
+            'uivf12.html': 'uivf12.html',
+            'sla.html': 'sla.html',
+            'report.html': 'report.html',
+            'expedite.html': 'expedite.html',
+            'monthly.html': 'monthly-legacy.html',
+            'ai-report.html': 'monthly.html',
+            'bigscreen.html': 'bigscreen.html',
+            'db-explorer.html': 'db-explorer.html',
+            'topic-analysis.html': 'topic-analysis.html',
+            'duty-roster.html': 'duty-roster.html',
+            'frt.html': 'frt.html',
+            'praudit.html': 'praudit.html',
+        };
+        if (Object.hasOwn(legacyMap, file)) {
+            return sendHtmlFile(reply, legacyMap[file]);
         }
         reply.type('text/html; charset=utf-8');
         return phase2PlaceholderHtml(file.replace(/\.html$/i, ''));

@@ -11,9 +11,59 @@
     if (window.__dhRuntimeInstalled) return;
     window.__dhRuntimeInstalled = true;
 
-    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|pages|favicon\.ico|healthz|ping|tools|custom-tools|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report)(?:\/|\?|$)/i;
-    const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|index\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|(?:tools|custom-tools)\/.*)$/;
+    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|custom-tool)(?:\.html)?|pages|favicon\.ico|healthz|ping|tools|custom-tools|storage|netcare-explorer|requirements|custom-report)(?:\/|\?|$)/i;
+    const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|(?:index|uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|custom-tool)\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|(?:tools|custom-tools)\/.*)$/;
     const PHASE2_RE = /^\/(?:storage|netcare-explorer|requirements|custom-report|tools\/)/i;
+    const STATIC_PAGE_MAP = {
+        '/uivf12': '/uivf12.html',
+        '/sla': '/sla.html',
+        '/report': '/report.html',
+        '/expedite': '/expedite.html',
+        '/monthly': '/monthly.html',
+        '/ai-report': '/monthly.html',
+        '/monthly/legacy': '/monthly-legacy.html',
+        '/bigscreen': '/bigscreen.html',
+        '/db-explorer': '/db-explorer.html',
+        '/topic-analysis': '/topic-analysis.html',
+        '/duty-roster': '/duty-roster.html',
+        '/frt': '/frt.html',
+        '/praudit': '/praudit.html',
+        '/pages/uivf12.html': '/uivf12.html',
+        '/pages/sla.html': '/sla.html',
+        '/pages/report.html': '/report.html',
+        '/pages/expedite.html': '/expedite.html',
+        '/pages/ai-report.html': '/monthly.html',
+        '/pages/monthly-designer.html': '/monthly.html',
+        '/pages/monthly.html': '/monthly-legacy.html',
+        '/pages/bigscreen.html': '/bigscreen.html',
+        '/pages/db-explorer.html': '/db-explorer.html',
+        '/pages/topic-analysis.html': '/topic-analysis.html',
+        '/pages/duty-roster.html': '/duty-roster.html',
+        '/pages/frt.html': '/frt.html',
+        '/pages/praudit.html': '/praudit.html',
+    };
+
+    // 底座 Nginx 只把 /api/* 转给 Node，无后缀页面和 /custom-tools/:slug/ 会回落到 static/index.html 造成套娃；
+    // 统一映射为 static/ 根目录真实存在的 .html 文件，在底座 Nginx 和本地 Fastify 下都能直接打开。
+    function dhMapStaticRoute(urlOrPath) {
+        if (typeof urlOrPath !== 'string' || !urlOrPath.startsWith('/')) return urlOrPath;
+        const hashIdx = urlOrPath.indexOf('#');
+        const hash = hashIdx >= 0 ? urlOrPath.slice(hashIdx) : '';
+        const noHash = hashIdx >= 0 ? urlOrPath.slice(0, hashIdx) : urlOrPath;
+        const qIdx = noHash.indexOf('?');
+        const cleanPath = qIdx >= 0 ? noHash.slice(0, qIdx) : noHash;
+        const search = qIdx >= 0 ? noHash.slice(qIdx) : '';
+        const normalized = cleanPath.length > 1 ? cleanPath.replace(/\/+$/, '') : cleanPath;
+        const mapped = STATIC_PAGE_MAP[normalized.toLowerCase()];
+        if (mapped) return mapped + search + hash;
+        const customMatch = cleanPath.match(/^\/custom-tools\/([^/]+)\/?(?:index\.html)?$/i);
+        if (customMatch && customMatch[1].toLowerCase() !== 'f12-to-extension') {
+            const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : '');
+            params.set('slug', decodeURIComponent(customMatch[1]));
+            return '/custom-tool.html?' + params.toString() + hash;
+        }
+        return urlOrPath;
+    }
 
     function detectDhBase() {
         const p = window.location.pathname || '/';
@@ -55,28 +105,33 @@
             return rawUrl;
         }
         if (/^https?:\/\//i.test(val)) {
-            if (!DH_BASE) return rawUrl;
             try {
                 const u = new URL(val);
-                if (u.origin === window.location.origin && REWRITE_PREFIX_RE.test(u.pathname) && !u.pathname.startsWith(DH_BASE + '/') && u.pathname !== DH_BASE) {
-                    u.pathname = DH_BASE + u.pathname;
-                    return u.toString();
+                if (u.origin === window.location.origin) {
+                    const stripped = dhStripBase(u.pathname) + u.search + u.hash;
+                    const mapped = dhMapStaticRoute(stripped);
+                    if (DH_BASE && REWRITE_PREFIX_RE.test(mapped)) {
+                        return DH_BASE + mapped;
+                    }
+                    if (mapped !== stripped && !DH_BASE) return u.origin + mapped;
                 }
             } catch (_) { /* ignore */ }
             return rawUrl;
         }
         if (val.startsWith('//')) return rawUrl;
         if (val.startsWith('/')) {
-            if (!DH_BASE) return rawUrl;
-            if (val === DH_BASE || val.startsWith(DH_BASE + '/')) return rawUrl;
-            if (val === '/') return DH_BASE + '/';
-            if (REWRITE_PREFIX_RE.test(val)) return DH_BASE + val;
-            return rawUrl;
+            const stripped = dhStripBase(val);
+            const mapped = dhMapStaticRoute(stripped);
+            if (!DH_BASE) return mapped;
+            if (mapped === '/') return DH_BASE + '/';
+            if (REWRITE_PREFIX_RE.test(mapped)) return DH_BASE + mapped;
+            return val;
         }
         return rawUrl;
     }
 
     window.dhStripBase = dhStripBase;
+    window.dhMapStaticRoute = dhMapStaticRoute;
     window.dhResolveUrl = dhResolveUrl;
 
     // ── Web 版裁剪层：隐藏桌面版专属入口（见 css/dh-web-trim.css）──
@@ -100,11 +155,90 @@
         localStorage.setItem('tools.home.promoVideos.dismissed', 'v2');
     } catch (_) { /* ignore storage restrictions */ }
 
+    // ── Digital Human 平台身份同步（规范 §12.5） ──
+    // 平台使用 W3 SSO + Cookie/CSRF 双重认证，服务端拿不到浏览器 localStorage 里的 CSRF token；
+    // 前端在加载时读缓存并异步调 /digital-human/api/dh/user/current，在 fetch('/api/*') 注入 x-dh-user / x-dh-displayname。
+    function getCsrfToken() {
+        for (const store of [localStorage, sessionStorage]) {
+            try {
+                for (const key of ['csrfToken', 'x-csrf-token', 'csrf-token', 'XSRF-TOKEN', 'dh_csrf_token']) {
+                    const direct = store.getItem(key);
+                    if (direct && String(direct).trim()) return String(direct).trim();
+                }
+                const gc = store.getItem('globalConfig');
+                if (gc) {
+                    const cfg = JSON.parse(gc);
+                    const tok = cfg?.csrfToken || cfg?.configData?.csrfToken || cfg?.token;
+                    if (tok && String(tok).trim()) return String(tok).trim();
+                }
+            } catch (_) { /* ignore */ }
+        }
+        try {
+            const meta = document.querySelector('meta[name="csrf-token"],meta[name="x-csrf-token"],meta[name="x-gde-csrf-token"]');
+            if (meta?.content?.trim()) return meta.content.trim();
+        } catch (_) { /* ignore */ }
+        try {
+            for (const part of String(document.cookie || '').split(';')) {
+                const idx = part.indexOf('=');
+                if (idx <= 0) continue;
+                const k = part.slice(0, idx).trim().toLowerCase();
+                if (['xsrf-token', 'csrf-token', 'csrftoken', 'x-csrf-token'].includes(k)) {
+                    const v = decodeURIComponent(part.slice(idx + 1).trim());
+                    if (v) return v;
+                }
+            }
+        } catch (_) { /* ignore */ }
+        return '';
+    }
+
+    let dhPlatformUser = null;
+    try {
+        const cachedUser = localStorage.getItem('dh_platform_user');
+        if (cachedUser) {
+            const parsed = JSON.parse(cachedUser);
+            if (parsed && parsed.userName) dhPlatformUser = parsed;
+        }
+    } catch (_) { /* ignore */ }
+
+    const origFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+    let dhPlatformUserPromise = null;
+    if (origFetch && /\/dh\/[^/]+$/i.test(DH_BASE)) {
+        const currentUserUrl = DH_BASE.replace(/\/dh\/[^/]+$/, '/api/dh/user/current');
+        const csrf = getCsrfToken();
+        dhPlatformUserPromise = origFetch(currentUserUrl, {
+            credentials: 'include',
+            headers: csrf ? { 'x-csrf-token': csrf } : {},
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (data && data.code === 0 && data.data && data.data.uid) {
+                    const d = data.data;
+                    const next = {
+                        userName: String(d.uid).trim(),
+                        displayName: String(d.cn || d.name || d.uid).trim(),
+                        empNo: String(d.uid).trim(),
+                    };
+                    const changed = !dhPlatformUser || dhPlatformUser.userName !== next.userName || dhPlatformUser.displayName !== next.displayName;
+                    dhPlatformUser = next;
+                    try {
+                        localStorage.setItem('dh_platform_user', JSON.stringify(next));
+                        localStorage.setItem('tools_user', next.userName);
+                        localStorage.setItem('tools_display_name', next.displayName);
+                    } catch (_) { /* ignore */ }
+                    if (changed) {
+                        try { window.dispatchEvent(new CustomEvent('dh:platform-user', { detail: next })); } catch (_) { /* ignore */ }
+                    }
+                }
+                return dhPlatformUser;
+            })
+            .catch(() => dhPlatformUser);
+    }
+
     // ── Intercept Fetch ──
     // 1) 给站内绝对路径补上网关前缀；
-    // 2) 对 /api 请求声明 x-dh-envelope，服务端按规范返回 HTTP 200 + {code,message,data,...}，
+    // 2) 注入 x-dh-user / x-dh-displayname 平台身份头；
+    // 3) 对 /api 请求声明 x-dh-envelope，服务端按规范返回 HTTP 200 + {code,message,data,...}，
     //    这里再还原成桌面版前端原有的协议（成功=原始 JSON，失败=对应 HTTP 状态 + {error}）。
-    //    这样网关不会把业务错误替换成错误页，页面代码也不用改。
     const API_PATH_RE = /^\/api\//;
     function isApiUrl(url) {
         try {
@@ -132,8 +266,7 @@
         try { Object.defineProperty(out, 'url', { value: resp.url }); } catch (_) { /* ignore */ }
         return out;
     }
-    if (typeof window.fetch === 'function') {
-        const origFetch = window.fetch.bind(window);
+    if (origFetch) {
         window.dhRawFetch = origFetch;
         window.fetch = function (input, init) {
             let target = input;
@@ -147,10 +280,22 @@
                 }
                 const url = typeof target === 'string' ? target : target.url;
                 if (isApiUrl(url)) {
-                    const headers = new Headers((options && options.headers) || (typeof target !== 'string' && target.headers) || undefined);
-                    headers.set('x-dh-envelope', '1');
-                    options = Object.assign({}, options, { headers });
-                    return origFetch(target, options).then(unwrapEnvelope);
+                    const sendApiFetch = () => {
+                        const headers = new Headers((options && options.headers) || (typeof target !== 'string' && target.headers) || undefined);
+                        headers.set('x-dh-envelope', '1');
+                        if (dhPlatformUser?.userName) {
+                            if (!headers.has('x-dh-user')) headers.set('x-dh-user', encodeURIComponent(dhPlatformUser.userName));
+                            if (!headers.has('x-dh-displayname') && dhPlatformUser.displayName) {
+                                headers.set('x-dh-displayname', encodeURIComponent(dhPlatformUser.displayName));
+                            }
+                        }
+                        const opts = Object.assign({}, options, { headers });
+                        return origFetch(target, opts).then(unwrapEnvelope);
+                    };
+                    if (!dhPlatformUser && dhPlatformUserPromise) {
+                        return dhPlatformUserPromise.then(sendApiFetch, sendApiFetch);
+                    }
+                    return sendApiFetch();
                 }
             } catch (_) { /* fallback */ }
             return origFetch(target, options);

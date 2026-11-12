@@ -70,17 +70,32 @@
         return [...paths].map(href => { try { return new URL(href, location.origin); } catch { return null; } })
             .filter(url => url && url.origin === location.origin && url.pathname !== '/' && !url.searchParams.has('skill')).map(url => url.pathname);
     }
+    function normalizeToolTarget(url) {
+        const raw = url.pathname + url.search;
+        const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(url.pathname) : url.pathname;
+        const mapped = typeof window.dhMapStaticRoute === 'function' ? window.dhMapStaticRoute(stripped + url.search) : (stripped + url.search);
+        return mapped || raw;
+    }
     function isToolUrl(url) {
         if (staticNav) return Boolean(staticNav.resolveTool(url));
-        if (url.origin !== location.origin || url.pathname === '/' || /^\/(api|login|downloads?)\b/.test(url.pathname)) return false;
-        // Requirements also has fixed menu/navbar entries outside the async tool catalog.
-        if (['/requirements', '/pages/requirements.html'].includes(url.pathname)) return true;
-        if (/^\/(tools|custom-tools|apps)\//.test(url.pathname)) return true;
-        return knownPaths().some(path => url.pathname === path || url.pathname.startsWith(path.replace(/\/$/, '') + '/'));
+        const p = typeof window.dhStripBase === 'function' ? window.dhStripBase(url.pathname) : url.pathname;
+        if (url.origin !== location.origin || p === '/' || p === '/index.html' || /^\/(api|login|downloads?)\b/.test(p)) return false;
+        if (/^\/(tools|custom-tools|apps)\//.test(p) || p === '/custom-tool.html') return true;
+        const target = normalizeToolTarget(url).split('?')[0];
+        return knownPaths().some(path => {
+            const k = (typeof window.dhMapStaticRoute === 'function' ? window.dhMapStaticRoute(path) : path).split('?')[0];
+            return p === path || target === k || p.startsWith(path.replace(/\/$/, '') + '/');
+        });
     }
     function toolInfo(url) {
         if (staticNav) return staticNav.resolveTool(url) || {};
-        const tool = (window.HomeWorkspace?.getTools?.() || []).find(item => { try { return new URL(item.href, location.origin).pathname === url.pathname; } catch { return false; } });
+        const target = normalizeToolTarget(url);
+        const tool = (window.HomeWorkspace?.getTools?.() || []).find(item => {
+            try {
+                const iu = new URL(item.href, location.origin);
+                return normalizeToolTarget(iu) === target || iu.pathname === url.pathname;
+            } catch { return false; }
+        });
         return { title: tool?.title || '', icon: tool?.icon || '' };
     }
     function iconHtml(icon) {
@@ -221,7 +236,11 @@
             if (staticNav && !staticNav.resolveTool(href)) return;
             if (doc?.title && !toolInfo(new URL(href, location.origin)).title) titleEl.textContent = doc.title.replace(/\s*[-|]\s*Dragon.*$/i, '');
             // 工具页里点回首页（Logo 等）：关掉内嵌而不是在框里再套一个首页
-            try { if (new URL(href, location.origin).pathname === '/') { close(); return; } } catch { /* ignore */ }
+            try {
+                const loadedPath = new URL(href, location.origin).pathname;
+                const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(loadedPath) : loadedPath;
+                if (stripped === '/' || stripped === '/index.html') { close(); return; }
+            } catch { /* ignore */ }
             writeUrl(href, true);
         });
     }
@@ -242,7 +261,23 @@
 
     function open(href, { push = true } = {}) {
         let url;
-        try { url = new URL(href, location.origin); } catch { return false; }
+        try {
+            const raw = new URL(href, location.href);
+            const resolved = typeof window.dhResolveUrl === 'function'
+                ? window.dhResolveUrl(raw.pathname + raw.search + raw.hash)
+                : (raw.pathname + raw.search + raw.hash);
+            url = raw.origin === location.origin ? new URL(resolved, location.origin) : raw;
+        } catch { return false; }
+        if (window.dhIsPhase2Href?.(url.pathname + url.search)) {
+            const info = toolInfo(url);
+            window.dhNotifyPhase2?.(info.title || url.pathname);
+            return false;
+        }
+        const strippedPath = typeof window.dhStripBase === 'function' ? window.dhStripBase(url.pathname) : url.pathname;
+        if (strippedPath === '/' || strippedPath === '/index.html') {
+            close({ push: false });
+            return true;
+        }
         if (staticNav) {
             const tool = staticNav.resolveTool(url);
             if (!tool) {

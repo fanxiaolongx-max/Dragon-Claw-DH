@@ -567,12 +567,16 @@
     const serviceText = () => $('server-status-text')?.textContent?.trim() || t('online');
     const versionText = () => ($('nav-resource-version-display')?.textContent?.trim() || '').split(' · ')[0];
     function renderUser() {
-        const name = localStorage.getItem('tools_user') || '';
+        const name = localStorage.getItem('tools_display_name') || localStorage.getItem('tools_user') || '';
         $('v2UserName').textContent = name;
         if (!$('v2Avatar').firstChild) $('v2Avatar').innerHTML = '<img src="/assets/logo.png" alt="">';
         $('v2UserMeta').textContent = serviceText();
         $('v2StatusDot').classList.toggle('is-down', serviceDown());
     }
+    window.addEventListener('tools:user-synced', () => {
+        renderUser();
+        if (openPop?.pop === userPop) renderUserMenu();
+    });
     const rowItem = (icon, label, action, hint = '', arrow = false) => `<button type="button" class="v2-pop-item" role="menuitem" data-v2-do="${action}"><span class="v2-ico" data-icon="${icon}"></span><span>${esc(label)}</span>${hint ? `<span class="v2-pop-hint">${esc(hint)}</span>` : ''}${arrow ? '<span class="v2-ico v2-pop-arrow" data-icon="chevronRight"></span>' : ''}</button>`;
     const switchItem = (icon, label, action, on) => `<button type="button" class="v2-pop-item" role="menuitemcheckbox" aria-checked="${on}" data-v2-do="${action}"><span class="v2-ico" data-icon="${icon}"></span><span>${esc(label)}</span><span class="v2-pop-switch" aria-hidden="true"></span></button>`;
     // 宽屏模式：对话正文与输入框随窗口变宽，两侧不再留大片空白；只记在本浏览器
@@ -582,7 +586,7 @@
         window.dispatchEvent(new Event('resize'));
     }
     function renderUserMenu() {
-        const name = localStorage.getItem('tools_user') || '';
+        const name = localStorage.getItem('tools_display_name') || localStorage.getItem('tools_user') || '';
         const admin = localStorage.getItem('tools_role') === 'admin';
         const dark = root.getAttribute('data-theme') === 'dark';
         const mac = /Mac/i.test(navigator.platform || '');
