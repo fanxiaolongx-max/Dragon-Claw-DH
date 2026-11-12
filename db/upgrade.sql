@@ -79,3 +79,4 @@ CREATE TABLE IF NOT EXISTS `agent_schedules` (
   KEY `idx_sched_due` (`status`, `next_run_at`),
   KEY `idx_sched_owner` (`owner_id`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- ===== 1.6.0：没有新增表（消息中心、用量趋势、工具开关、技能历史都存 sys_kv_store，自定义 Logo 存 dh_blob_assets）=====

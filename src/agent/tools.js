@@ -48,6 +48,11 @@ const SCHEMA = (() => {
 const ALLOWED = new Set(Object.keys(TABLE_NOTES).filter((t) => SCHEMA.has(t)));
 const APP_DB = 'app';
 
+/** 数据探索页用的表目录：表名、说明、列（标出默认不查的大字段） */
+export function tableCatalog() {
+    return [...ALLOWED].sort().map((name) => ({ name, note: TABLE_NOTES[name], columns: SCHEMA.get(name).map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) })) }));
+}
+
 /** 给系统提示词用的紧凑目录：模型不用先花一轮去查结构 */
 export function schemaDigest() {
     return [...ALLOWED].map((t) => `- ${t}(${SCHEMA.get(t).map((c) => c.name).join(', ')})：${TABLE_NOTES[t]}`).join('\n');

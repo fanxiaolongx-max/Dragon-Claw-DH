@@ -12,7 +12,6 @@ const aiAgent = new Agent({
 });
 
 const CONVERSATION_LIST_KEY_PREFIX = 'ai_conversation_list:';
-const USAGE_KEY = 'ai_usage_stats';
 const DEFAULT_PROFILE_ID = 'default-profile';
 
 const DEFAULT_MODEL_SETTINGS = {
@@ -170,26 +169,7 @@ export async function deleteProfile(profileId) {
     return getPublicSettings();
 }
 
-// 累计用量（读改写，非原子：并发下可能少记几次，只用于展示趋势）
-export async function addUsage({ inputTokens = 0, outputTokens = 0 } = {}) {
-    try {
-        const cur = await getUsage();
-        await kvSet(USAGE_KEY, {
-            ...cur,
-            promptTokens: Number(cur.promptTokens || 0) + Number(inputTokens || 0),
-            completionTokens: Number(cur.completionTokens || 0) + Number(outputTokens || 0),
-            requests: Number(cur.requests || 0) + 1,
-        });
-    } catch { /* 用量统计失败不影响对话 */ }
-}
-
-export async function getUsage() {
-    return (await kvGet(USAGE_KEY, { promptTokens: 0, completionTokens: 0, totalCostUsd: 0, requests: 0 })) || {};
-}
-
-export async function clearUsage() {
-    return kvSet(USAGE_KEY, { promptTokens: 0, completionTokens: 0, totalCostUsd: 0, requests: 0 });
-}
+export { addUsage, getUsage, clearUsage } from './usage-service.js';
 
 export function buildCompletionRequest(settings, messages, { stream = false, maxTokens } = {}) {
     const provider = settings.provider || 'openai';
@@ -462,10 +442,24 @@ export async function getConversationList(ownerId) {
     return (await kvGet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, [])) || [];
 }
 
-export async function saveConversationList(ownerId, item) {
+// 置顶、改名、归档等个人偏好：前端每次只发改动的字段，这里按「来源 + 会话」合并后存回
+export async function saveConversationList(ownerId, patch) {
+    const source = String(patch?.source || 'mine').slice(0, 60);
+    const id = String(patch?.id || '').slice(0, 120);
+    if (!id) throw new BusinessError('缺少会话标识');
     const list = await getConversationList(ownerId);
-    const id = String(item?.id || `item_${Date.now()}`);
-    const next = [...list.filter((x) => x.id !== id), { ...item, id, updatedAt: Date.now() }];
+    const same = (x) => String(x.source || 'mine') === source && String(x.id) === id;
+    const allowed = {};
+    if (typeof patch.pinned === 'boolean') allowed.pinned = patch.pinned;
+    if (typeof patch.archived === 'boolean') allowed.archived = patch.archived;
+    if (typeof patch.hidden === 'boolean') allowed.hidden = patch.hidden;
+    if (typeof patch.title === 'string') allowed.title = patch.title.trim().slice(0, 160);
+    if (typeof patch.group === 'string') allowed.group = patch.group.trim().slice(0, 60);
+    if (Number.isFinite(Number(patch.order))) allowed.order = Number(patch.order);
+    const item = { ...(list.find(same) || {}), ...allowed, source, id, updatedAt: Date.now() };
+    // 没有任何偏好的条目不留着占位置；最多保留最近改动的 500 条
+    const meaningful = item.pinned || item.archived || item.hidden || item.title || item.group || item.order !== undefined;
+    const next = [...list.filter((x) => !same(x)), ...(meaningful ? [item] : [])].sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0)).slice(0, 500);
     await kvSet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, next);
     return item;
 }

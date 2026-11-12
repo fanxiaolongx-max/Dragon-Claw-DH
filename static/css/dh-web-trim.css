@@ -18,8 +18,7 @@ html.dh-web .v2-scenes [data-scene="graph"],
 /* 对话区：内嵌浏览器、语音输入 */
 html.dh-web #dcBrowserToggle,
 html.dh-web #dcVoice,
-/* 左下角：消息中心、扫码使用 */
-html.dh-web #v2AlertBtn,
+/* 左下角：扫码使用 */
 html.dh-web #v2ScanBtn,
 /* 账号菜单与顶部导航：需求管理、意见反馈、检查更新、告警台；退出登录（身份由数字人门户管理，应用内退出没有意义） */
 html.dh-web .v2-account-list [data-v2-do="requirements"],
@@ -28,11 +27,8 @@ html.dh-web .v2-account-list [data-v2-do="checkUpdate"],
 html.dh-web .v2-account-list [data-v2-do="logout"],
 html.dh-web .v2-account-list .v2-pop-sep,
 html.dh-web .nav-actions .req-btn,
-html.dh-web .nav-actions .nav-alert-btn,
 html.dh-web .nav-actions .nav-logout-link,
-/* 全局设置：只保留菜单布局与 AI 助手 */
-html.dh-web .nav-settings-tab[data-tab="logo"],
-html.dh-web .nav-settings-tab[data-tab="agentTools"],
+/* 全局设置：保留菜单布局、AI 助手、平台标识、智能体工具 */
 html.dh-web .nav-settings-tab[data-tab="vault"],
 html.dh-web .nav-settings-tab[data-tab="channels"],
 html.dh-web .nav-settings-tab[data-tab="desktopAgents"],
@@ -45,6 +41,13 @@ html.dh-web .nav-settings-tab[data-tab="promotions"],
 html.dh-web .nav-settings-tab[data-tab="customBackup"],
 html.dh-web .nav-settings-tab[data-tab="accounts"],
 html.dh-web .nav-settings-tab[data-tab="security"],
+/* 智能体工具：Web 版没有 MCP 服务、危险命令规则、工具说明生成，只留工具清单 */
+html.dh-web .nat-card[data-section="mcp"],
+html.dh-web .nat-card[data-section="danger"],
+html.dh-web .nat-card[data-section="guides"],
+/* 平台标识：图片处理选项与物料包下载是桌面版能力 */
+html.dh-web .logo-option-item,
+html.dh-web #logoDownloadBundleBtn,
 /* 页面配置：一期未开放的工具 */
 html.dh-web .nav-settings-tab[data-tab="page:duty-roster"],
 html.dh-web .nav-settings-tab[data-tab="page:topic-analysis"],
@@ -54,5 +57,21 @@ html.dh-web .nav-settings-tab[data-tab="page:storage"],
 html.dh-web .nav-settings-tab[data-tab="page:db-explorer"],
 html.dh-web .nav-settings-tab[data-tab="page:netcare-explorer"],
 html.dh-web .nav-settings-tab[data-tab="page:f12-extension"] {
+    display: none !important;
+}
+
+/* 平台标识：商店截图是桌面版打包用的 */
+html.dh-web #logoStoreScreenshots,
+html.dh-web label[for="logoStoreScreenshots"] {
+    display: none !important;
+}
+
+/* 平台标识：打包图标说明、桌面图标预览、物料包说明都是桌面版的 */
+html.dh-web .logo-ci-banner,
+html.dh-web .logo-preview-box.neutral-bg,
+html.dh-web #logoStoreScreenshots + p,
+/* AI 助手：Web 版没有绘图模型和多团队，隐藏绘图页签与「分配给所有团队」 */
+html.dh-web .nav-ai-tab[onclick*="'image'"],
+html.dh-web label.nav-settings-check:has(#navAiShared) {
     display: none !important;
 }

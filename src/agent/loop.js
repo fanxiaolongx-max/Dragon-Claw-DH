@@ -10,7 +10,9 @@ import { redactText } from './redact.js';
 import { requestApproval } from './approvals.js';
 import { withFailover, orderCandidates } from './failover.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
-import { TOOLS, toolByName, schemaDigest, imageMime, MAX_IMAGE_BYTES } from './tools.js';
+import { toolByName, schemaDigest, imageMime, MAX_IMAGE_BYTES } from './tools.js';
+import { enabledTools, recordToolCalls } from '../services/tool-catalog-service.js';
+import { pushAdminAlert } from '../services/alert-service.js';
 
 const MAX_ROUNDS = 10;
 const MAX_TOOL_RESULT = 30_000;
@@ -102,6 +104,10 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         if (images.length) current.images = images;
     }
 
+    // 管理员在「工具清单」里停用的工具不发给模型，模型点名调用时也会被拒绝
+    const tools = await enabledTools().catch(() => [...toolByName.values()]);
+    const allowedNames = new Set(tools.map((t) => t.name));
+    const callLog = [];
     let asked = null;
     const ctx = {
         identity,
@@ -137,7 +143,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             settings: s,
             system: lastRound ? `${system}\n\n（已达到工具调用轮数上限：请基于已有信息直接给出最终回答，不要再调用工具。）` : system,
             messages,
-            tools: toolsOn && !lastRound ? TOOLS : [],
+            tools: toolsOn && !lastRound ? tools : [],
             signal,
             onDelta: (delta) => { roundText += delta; emit({ type: 'delta', delta }); },
             onThinking: (delta) => emit({ type: 'thinking', delta }),
@@ -152,6 +158,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                     const ev = { type: 'status', status: `模型「${from.name || from.model}」暂时不可用（${String(error.message).slice(0, 60)}），已切换到「${to.name || to.model}」` };
                     emit(ev);
                     pushLog({ level: 'WARN', category: 'AI', userId: identity.username, message: `模型故障切换 ${from.model} → ${to.model}：${error.message}` });
+                    pushAdminAlert({ type: 'system', severity: 'warn', title: `模型「${from.name || from.model}」调用失败，已自动切换`, message: `切换到「${to.name || to.model}」。原因：${String(error.message).slice(0, 300)}`, actor: identity.username, objectType: 'model', objectId: from.id });
                 },
             });
             res = out.res;
@@ -187,13 +194,13 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 
         const results = await Promise.all(res.toolCalls.map(async (call) => {
-            const tool = toolByName.get(call.name);
+            const tool = allowedNames.has(call.name) ? toolByName.get(call.name) : null;
             const shownArgs = call.args?.html ? { ...call.args, html: `[${String(call.args.html).length} 字符]` } : call.args;
             const silent = Boolean(tool?.silent); // 任务清单、提问有自己的界面，不占工具行
             if (!silent) ctx.emit({ type: 'tool_start', callId: call.id, tool: call.name, args: shownArgs });
             const t0 = Date.now();
             let out;
-            if (!tool) out = { ok: false, summary: '未知工具', content: `没有名为 ${call.name} 的工具。可用工具：${TOOLS.map((t) => t.name).join('、')}` };
+            if (!tool) out = { ok: false, summary: '未知工具', content: `没有名为 ${call.name} 的工具。可用工具：${tools.map((t) => t.name).join('、')}` };
             else if (call.args?.__invalid) out = { ok: false, summary: '参数格式错误', content: '工具参数不是合法的 JSON，请重新调用并给出完整参数。' };
             else {
                 try {
@@ -212,10 +219,15 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                             }
                         }
                     }
-                    if (allowed) out = await tool.run(call.args || {}, ctx);
+                    if (allowed) {
+                        out = await tool.run(call.args || {}, ctx);
+                        // 对话里执行的写操作留一条记录给管理员
+                        if (tool.approval && out?.ok) pushAdminAlert({ type: 'user_action', severity: 'info', title: `${identity.displayName || identity.username} 通过对话执行了「${call.name}」`, message: String(out.summary || out.content || '').slice(0, 400), actor: identity.username, objectType: 'tool', objectId: call.name });
+                    }
                 } catch (error) { out = { ok: false, summary: '执行出错', content: `工具执行出错：${error.message}` }; }
             }
             const durationMs = Date.now() - t0;
+            callLog.push({ name: call.name, ok: Boolean(out.ok) });
             if (!silent) ctx.emit({ type: 'tool_result', callId: call.id, tool: call.name, ok: Boolean(out.ok), summary: String(out.summary || '').slice(0, 120), durationMs, ...(out.output ? { output: String(out.output).slice(0, 3000) } : {}) });
             return { call, content: clip(redactText(String(out.content ?? ''), { secrets }), MAX_TOOL_RESULT) };
         }));
@@ -236,6 +248,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         }
     }
 
+    recordToolCalls(callLog.filter((c) => toolByName.has(c.name)));
     pushLog({
         level: 'INFO',
         category: 'AI',

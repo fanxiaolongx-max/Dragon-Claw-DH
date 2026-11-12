@@ -3,6 +3,7 @@ import { resolveRequestIdentity } from '../core/identity.js';
 import { listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
+import { pushAdminAlert } from '../services/alert-service.js';
 
 function publicIdentity(id) {
     return {
@@ -50,6 +51,7 @@ export async function authRoutes(fastify) {
         }
         const stored = await saveAdmins(next);
         pushLog({ level: 'WARN', category: 'AUTH', message: `管理员名单已更新（${stored.length} 人）`, userId: me.username });
+        await pushAdminAlert({ type: 'security', severity: 'warn', title: '管理员名单已更新', message: `${me.username} 把管理员名单改为：${stored.join('、') || '（空）'}`, actor: me.username, objectType: 'admins' });
         return { success: true, stored };
     });
 }

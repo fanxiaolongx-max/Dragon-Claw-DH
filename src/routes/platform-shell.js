@@ -375,33 +375,6 @@ export async function platformShellRoutes(fastify) {
         return layout;
     });
 
-    // ── Platform Logo ───────────────────────────────────────
-    fastify.get('/api/platform-logo/status', async (_req, reply) => {
-        reply.header('Cache-Control', 'no-store');
-        const logoFile = path.join(STATIC_DIR, 'assets', 'logo.png');
-        const exists = fs.existsSync(logoFile);
-        const updatedAt = exists ? Math.floor(fs.statSync(logoFile).mtimeMs) : Date.now();
-        return {
-            ok: true,
-            hasLogo: exists,
-            updatedAt,
-            storageMode: 'source',
-            logoUrl: `assets/logo.png?t=${updatedAt}`,
-            logoRawUrl: `assets/logo-raw.png?t=${updatedAt}`,
-            fileSizes: { logo: exists ? fs.statSync(logoFile).size : 0 },
-        };
-    });
-
-    fastify.get('/api/platform-logo/image', async (_req, reply) => {
-        const logoFile = path.join(STATIC_DIR, 'assets', 'logo.png');
-        if (!fs.existsSync(logoFile)) {
-            return reply.code(404).send({ error: 'logo not found' });
-        }
-        reply.header('Cache-Control', 'public, max-age=3600');
-        reply.type('image/png');
-        return fs.createReadStream(logoFile);
-    });
-
     // ── Platform Promotions / Metrics ───────────────────────
     fastify.get('/api/platform-promotions', async (_req, reply) => {
         reply.header('Cache-Control', 'no-store');
@@ -530,6 +503,7 @@ export async function platformShellRoutes(fastify) {
             '/expedite': 'pages/expedite.html',
             '/monthly': 'pages/ai-report.html',
             '/bigscreen': 'pages/bigscreen.html',
+            '/db-explorer': 'pages/db-explorer.html',
         };
         const out = {};
         for (const [key, rel] of Object.entries(pageFiles)) {
@@ -613,16 +587,6 @@ export async function platformShellRoutes(fastify) {
     fastify.get('/api/desktop-agents/sessions', async () => ({ sessions: [], items: [] }));
     fastify.get('/api/desktop-agents/quota', async () => ({ quota: { remaining: 0, limit: 0 }, webMode: true }));
     fastify.get('/api/desktop-license/status', async () => ({ enabled: false, valid: true }));
-
-    fastify.get('/api/alert-center/summary', async () => ({
-        total: 0,
-        unread: 0,
-        critical: 0,
-        warnOrAbove: 0,
-        byType: {},
-        bySeverity: {},
-    }));
-    fastify.get('/api/alert-center/events', async () => ({ events: [] }));
 
     fastify.get('/api/onboarding/defaults/status', async () => ({
         required: false,

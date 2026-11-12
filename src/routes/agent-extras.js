@@ -3,6 +3,7 @@ import { BusinessError } from '../core/errors.js';
 import { resolveAdmin } from '../core/access.js';
 import {
     listSkills, getSkill, saveSkill, previewSkill, renameSkill, removeSkill, exportSkillZip, skillMarkdownFromArchive,
+    listSkillBackups, getSkillBackup, rollbackSkill,
 } from '../services/skill-service.js';
 import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool } from '../services/custom-tool-service.js';
 import { saveChatUpload, readChatUpload } from '../services/chat-upload-service.js';
@@ -66,7 +67,15 @@ export async function agentSkillsRoutes(fastify) {
         if (!skill) return reply.code(404).send({ error: '技能不存在' });
         return { skill };
     });
-    fastify.get('/:id/backups', async () => ({ items: [] }));
+    // 版本历史：覆盖、回退、删除前自动留一份
+    fastify.get('/:id/backups', async (req) => ({ backups: await listSkillBackups(req.params.id) }));
+    fastify.get('/:id/backups/:backupId', async (req, reply) => {
+        const backup = await getSkillBackup(req.params.id, req.params.backupId);
+        if (!backup) return reply.code(404).send({ error: '这个历史版本不存在' });
+        return { backup };
+    });
+    fastify.post('/:id/rollback/:backupId', async (req) => ({ skill: await rollbackSkill(req.params.id, req.params.backupId, { createdBy: req.userIdentity.username }) }));
+    fastify.post('/:id/reset', async () => { throw new BusinessError('内置技能在 Web 版里不能修改，无需恢复默认'); });
     fastify.patch('/:id/name', async (req) => renameSkill(req.params.id, req.body?.name));
     fastify.delete('/:id', async (req) => removeSkill(req.params.id));
     fastify.get('/:id/export', async (req, reply) => {

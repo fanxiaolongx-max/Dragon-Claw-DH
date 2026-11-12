@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ROOT_DIR } from '../config.js';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { optionalDep } from '../core/optional.js';
-import { selectTable, upsertRow, updateRows, deleteRows, sqlVal } from '../dao/scoped.js';
+import { selectTable, upsertRow, updateRows, deleteRows, sqlVal, kvGet, kvSet } from '../dao/scoped.js';
 
 const ID_RE = /^[a-z][a-z0-9-]{1,40}$/;
 const LIMITS = { name: 80, description: 400, body: 60_000 };
@@ -110,13 +110,14 @@ export async function getSkill(id) {
     return builtins().find((s) => s.id === key) || null;
 }
 
-export async function saveSkill(markdown, { createdBy = '', source = 'chat', overwrite = false, overrides = {}, fileName = '' } = {}) {
+export async function saveSkill(markdown, { createdBy = '', source = 'chat', overwrite = false, overrides = {}, fileName = '', backupSummary = '' } = {}) {
     const skill = normalizeSkillMarkdown(markdown, { fallbackId: String(fileName || '').replace(/\.(md|markdown|txt)$/i, ''), overrides });
     if (builtins().some((s) => s.id === skill.id)) throw new BusinessError(`「${skill.id}」是内置技能的标识，请换一个标识`, 409);
     const existing = await getSkill(skill.id);
     if (existing && !overwrite) {
         throw Object.assign(new BusinessError(`技能「${skill.id}」已存在，确认要覆盖吗？`, 409), { codeName: 'SKILL_EXISTS' });
     }
+    if (existing) await backupSkill(existing, { createdBy, summary: backupSummary || (source === 'import' ? '导入覆盖前的版本' : '修改前的版本') });
     const now = Date.now();
     await upsertRow('agent_skills', {
         id: skill.id,
@@ -157,8 +158,44 @@ export async function renameSkill(id, name) {
 
 export async function removeSkill(id) {
     const key = await requireCustom(id);
+    const current = await getSkill(key);
+    if (current) await backupSkill(current, { summary: '删除前的版本' });
     await deleteRows('agent_skills', { whereSql: `\`id\` = ${sqlVal(key)}`, memFilter: (r) => r.id === key });
     return { success: true };
+}
+
+// ── 版本历史：每次覆盖、回退前把旧版本存一份（每个技能最多 10 份，存键值表）──
+const MAX_BACKUPS = 10;
+const backupKey = (id) => `skill_backups:${id}`;
+
+async function loadBackups(id) {
+    const list = await kvGet(backupKey(String(id || '').toLowerCase()), []);
+    return Array.isArray(list) ? list : [];
+}
+
+async function backupSkill(skill, { createdBy = '', summary = '' } = {}) {
+    try {
+        const list = await loadBackups(skill.id);
+        const markdown = skillMarkdown(skill);
+        if (list[0]?.markdown === markdown) return;
+        list.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), createdBy, name: skill.name, summary, markdown });
+        await kvSet(backupKey(skill.id), list.slice(0, MAX_BACKUPS));
+    } catch { /* 备份失败不阻止保存 */ }
+}
+
+export async function listSkillBackups(id) {
+    return (await loadBackups(id)).map(({ markdown, ...rest }) => ({ ...rest, size: String(markdown || '').length }));
+}
+
+export async function getSkillBackup(id, backupId) {
+    return (await loadBackups(id)).find((b) => b.id === String(backupId)) || null;
+}
+
+export async function rollbackSkill(id, backupId, { createdBy = '' } = {}) {
+    const key = await requireCustom(id);
+    const backup = await getSkillBackup(key, backupId);
+    if (!backup) throw new NotFoundError('这个历史版本不存在');
+    return saveSkill(backup.markdown, { createdBy, source: 'chat', overwrite: true, overrides: { id: key }, backupSummary: '回退前的版本' });
 }
 
 export function skillMarkdown(skill) {

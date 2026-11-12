@@ -22,6 +22,7 @@ import { uploadRoutes } from './routes/upload.js';
 import { dbRoutes, expediteRoutes } from './routes/db.js';
 import { monthlySnapshotsRoutes, reportMsgRoutes, aiReportRoutes } from './routes/monthly.js';
 import { platformShellRoutes } from './routes/platform-shell.js';
+import { alertCenterRoutes, platformLogoRoutes, agentToolsRoutes, dbExplorerRoutes, sendLogo } from './routes/platform-extras.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
 const gzipAsync = promisify(zlib.gzip);
@@ -36,13 +37,13 @@ const PHASE1_PAGES = new Map([
     ['/monthly', 'pages/ai-report.html'],
     ['/monthly/legacy', 'pages/monthly.html'],
     ['/bigscreen', 'pages/bigscreen.html'],
+    ['/db-explorer', 'pages/db-explorer.html'],
 ]);
 
 const PHASE2_ROUTES = new Set([
     '/praudit',
     '/frt',
     '/storage',
-    '/db-explorer',
     '/netcare-explorer',
     '/topic-analysis',
     '/duty-roster',
@@ -245,6 +246,8 @@ export async function createServer() {
     app.setErrorHandler((err, req, reply) => {
         const status = err instanceof BusinessError
             ? (err.code >= 400 && err.code < 600 ? err.code : 400)
+            // 请求体 / 查询参数格式不对（JSON 解析失败、类型不符）：规范 §8.4 要求 422
+            : (err.validation || (err instanceof SyntaxError && err.statusCode === 400) || ['FST_ERR_CTP_INVALID_JSON_BODY', 'FST_ERR_CTP_EMPTY_JSON_BODY', 'FST_ERR_VALIDATION'].includes(err.code)) ? 422
             // 业务服务沿用桌面版写法，用 error.status 标注 400/404 等业务状态
             : ([err.statusCode, err.status].find((c) => Number.isInteger(c) && c >= 400 && c < 600) || 500);
         pushLog({
@@ -291,13 +294,19 @@ export async function createServer() {
     await app.register(customToolsRoutes, { prefix: '/api/custom-tools' });
     await app.register(agentFilesRoutes, { prefix: '/api/agent-files' });
     await app.register(agentWorkspaceRoutes, { prefix: '/api/agent-workspace' });
+    await app.register(alertCenterRoutes, { prefix: '/api/alert-center' });
+    await app.register(platformLogoRoutes, { prefix: '/api/platform-logo' });
+    await app.register(agentToolsRoutes, { prefix: '/api/agent-mcp' });
+    await app.register(dbExplorerRoutes, { prefix: '/api/db-explorer' });
     await app.register(platformShellRoutes);
+    // 平台标识：页面里固定引用 assets/logo.png，管理员上传过自定义图标时这里返回自定义的
+    app.get('/assets/logo.png', async (_req, reply) => sendLogo(reply));
 
     // ── 静态资源前缀兼容（确保 /pages/*.html 与 /monthly/legacy 下相对资源与无前缀资源一致）─
     for (const staticPrefix of ['/pages', '/monthly']) {
         app.get(`${staticPrefix}/css/*`, async (req, reply) => reply.sendFile(`css/${req.params['*']}`));
         app.get(`${staticPrefix}/js/*`, async (req, reply) => reply.sendFile(`js/${req.params['*']}`));
-        app.get(`${staticPrefix}/assets/*`, async (req, reply) => reply.sendFile(`assets/${req.params['*']}`));
+        app.get(`${staticPrefix}/assets/*`, async (req, reply) => (req.params['*'] === 'logo.png' ? sendLogo(reply) : reply.sendFile(`assets/${req.params['*']}`)));
         app.get(`${staticPrefix}/downloads/*`, async (req, reply) => reply.sendFile(`downloads/${req.params['*']}`));
         app.get(`${staticPrefix}/favicon.ico`, async (_req, reply) => {
             if (fs.existsSync(path.join(STATIC_DIR, 'favicon.ico'))) return reply.sendFile('favicon.ico');
@@ -330,7 +339,7 @@ export async function createServer() {
 
     app.get('/pages/:file', async (req, reply) => {
         const file = String(req.params.file || '').replace(/[^a-zA-Z0-9_.-]/g, '');
-        const allowed = new Set(['uivf12.html', 'sla.html', 'report.html', 'expedite.html', 'monthly.html', 'ai-report.html', 'bigscreen.html']);
+        const allowed = new Set(['uivf12.html', 'sla.html', 'report.html', 'expedite.html', 'monthly.html', 'ai-report.html', 'bigscreen.html', 'db-explorer.html']);
         if (allowed.has(file)) {
             return sendHtmlFile(reply, `pages/${file}`);
         }

@@ -158,12 +158,12 @@ export async function aiRoutes(fastify) {
         const selected = profiles.find((p) => p.id === body.modelId) || profiles.find((p) => p.isActive) || profiles[0];
         if (!selected?.apiKey) {
             const fallbackReply = [
-                '当前运行在 **Dragon Claw 数字人云端 Web 版（一期）**。',
+                '还没有配置可用的大模型，所以暂时不能对话。',
                 '',
-                '检测到尚未配置大模型 API Token，无法连接外部 LLM。您可以：',
-                '- 点击左下角头像 → **「全局设置」→「AI 助手」** 配置您的 OpenAI / Anthropic / Gemini 兼容网关地址与 API Key；',
-                '- 或直接使用左侧导航进入 **数据抓取 / 数据导入 / 报表看板 / 一键催办 / AI 月报 / 大屏看板**；',
-                '- 点击右下角 **「🐛 调试模式」** 查看当前数字人身份 Cookie、数据库 MySQL 通道与 Redis 缓存状态。',
+                '- 管理员：点左下角头像 →「全局设置」→「AI 助手」，填写模型网关地址、模型名和 API Key，点「测试连接」通过后即可使用（支持 OpenAI 兼容、Anthropic、Gemini 兼容网关）。',
+                '- 其他同事：请联系管理员完成配置。',
+                '',
+                '不依赖模型的功能可以照常使用：数据抓取、数据导入、报表看板、一键催办、大屏看板、数据探索。',
             ].join('\n');
             if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'delta', delta: fallbackReply })}\n`);
@@ -217,7 +217,7 @@ export async function aiRoutes(fastify) {
             if (persist && sessionId && (res.text || res.events.length)) {
                 await appendMessage(sessionId, 'model', res.text, { modelName: usedModel.model, ...(res.events.length ? { events: res.events } : {}) });
             }
-            addUsage(res.usage);
+            addUsage(res.usage, usedModel);
             if (titlePromise) {
                 const title = await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))]);
                 if (title) {
@@ -307,8 +307,8 @@ export async function aiSettingsRoutes(fastify) {
     fastify.post('/profiles/:profileId/activate', async (req) => activateProfile(req.params.profileId));
     fastify.delete('/profiles/:profileId', async (req) => deleteProfile(req.params.profileId));
 
-    fastify.get('/usage', async () => getUsage());
-    fastify.delete('/usage', async () => ({ success: true, ...(await clearUsage()) }));
+    fastify.get('/usage', async (req) => getUsage(String(req.query?.dimension || 'day')));
+    fastify.delete('/usage', async (req) => ({ success: true, ...(await clearUsage(req.query?.clearAll === 'true' ? '' : String(req.query?.key || ''))) }));
     fastify.post('/usage/clear', async () => ({ success: true, ...(await clearUsage()) }));
     fastify.put('/model-aliases', async (_req, reply) => reply.code(410).send({
         code: 'MODEL_ALIASES_REMOVED',

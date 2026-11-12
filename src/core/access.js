@@ -79,6 +79,8 @@ const USER_WRITES = [
     ['POST', /^\/agent-workspace\/approvals\/[^/]+$/], // 只能批自己发起的（路由内校验）
     ['*', /^\/ai\/schedules(?:\/[^/]+)?$/], // 定时任务只属于创建者（服务内校验）
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
+    ['*', /^\/alert-center\/events(?:\/.*)?$/], // 消息只属于本人
+    ['POST', /^\/db-explorer\/query$/], // 只读查询（路由内走只读守卫）
 ];
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/];
 

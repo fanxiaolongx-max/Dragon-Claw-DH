@@ -7,7 +7,8 @@ import { resolveAdmin } from '../core/access.js';
 import { selectTable, insertRow, updateRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import * as parser from '../agent/schedule/parser.js';
 import { runAgent } from '../agent/loop.js';
-import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch } from './ai-service.js';
+import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch, addUsage } from './ai-service.js';
+import { pushAlert } from './alert-service.js';
 
 const MAX_ACTIVE_PER_USER = 20;
 const RUN_TIMEOUT_MS = 5 * 60_000;
@@ -165,11 +166,14 @@ async function execute(row, firedAt) {
         });
         await appendMessage(sessionId, 'model', res.text, { modelName: res.model?.model || settings.model, ...(res.events.length ? { events: res.events } : {}) });
         await finish({ last_status: 'ok', last_error: '', last_reply: res.text.slice(0, 600), status: row.kind === 'once' ? 'done' : 'active' });
+        addUsage(res.usage, res.model || settings);
+        await pushAlert(row.owner_id, { type: 'system', severity: 'info', title: `定时任务已完成：${item.instruction.slice(0, 40)}`, message: res.text.slice(0, 600), actor: 'schedule', objectType: 'schedule', objectId: row.id });
         pushLog({ level: 'INFO', category: 'SCHEDULE', userId: row.owner_id, message: `定时任务 ${row.id} 执行完成` });
         return { ran: true };
     } catch (error) {
         const message = abort.signal.aborted ? '执行超时（5 分钟）' : String(error.message || error);
         await finish({ last_status: 'failed', last_error: message.slice(0, 500), status: row.kind === 'once' ? 'failed' : 'active' }).catch(() => {});
+        await pushAlert(row.owner_id, { type: 'system', severity: 'warn', title: `定时任务执行失败：${item.instruction.slice(0, 40)}`, message, actor: 'schedule', objectType: 'schedule', objectId: row.id });
         pushLog({ level: 'WARN', category: 'SCHEDULE', userId: row.owner_id, message: `定时任务 ${row.id} 执行失败：${message}` });
         return { failed: true, error: message };
     } finally {
