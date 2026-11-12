@@ -221,6 +221,98 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         // ── 10. 请求体不是合法 JSON：返回 422（规范 §8.4），不是 500 ──
         const broken = await fetch(`${url}/api/ai/conversation-list`, { method: 'PUT', headers: json(as('bob')), body: '{"source":' });
         assert.equal(broken.status, 422);
+
+        // ── 11. 模型配置测试与前端字段：POST /profiles/:id/test、maskedApiKey、apiKeySource、clone & clearApiKey ──
+        const aiList = (await call('alice', 'GET', '/api/ai-settings')).data;
+        const pId = aiList.activeProfileId;
+        assert.equal(aiList.apiKeySource, 'stored');
+        assert.equal(aiList.maskedApiKey, 'test***-000');
+        mock.aiScript.push({ text: 'OK' });
+        const testRes = await call('alice', 'POST', `/api/ai-settings/profiles/${pId}/test`, {
+            profileId: pId,
+            provider: 'openai',
+            apiBaseUrl: `${mock.baseUrl}/v1`,
+            model: 'sub-model',
+            models: ['test-model', 'sub-model'],
+        });
+        assert.equal(testRes.status, 200);
+        assert.equal(testRes.data.success, true);
+        assert.equal(testRes.data.model, 'sub-model');
+        assert.equal((await call('alice', 'GET', '/api/ai-settings')).data.model, 'test-model', '测非主模型不篡改主模型');
+        assert.equal((await call('alice', 'POST', '/api/ai-settings/profiles/no-such-profile/test', {})).status, 404);
+        const cloned = await call('alice', 'POST', '/api/ai-settings/profiles', { sourceProfileId: pId, name: 'MockLLM Copy' });
+        assert.equal(cloned.status, 201);
+        assert.ok(cloned.data.createdProfileId);
+        const copiedProfile = cloned.data.profiles.find((p) => p.id === cloned.data.createdProfileId);
+        assert.equal(copiedProfile.hasApiKey, true);
+        assert.equal(copiedProfile.apiKeySource, 'stored');
+        const clearedKey = await call('alice', 'PUT', `/api/ai-settings/profiles/${copiedProfile.id}`, { clearApiKey: true });
+        assert.equal(clearedKey.data.profiles.find((p) => p.id === copiedProfile.id).hasApiKey, false);
+
+        // ── 12. 服务状态中心运行日志：logs / total / page / totalPages 字段、levels 过滤、仅管理员 ──
+        assert.equal((await call('bob', 'GET', '/api/platform-metrics/service-status/logs?page=1&pageSize=20')).status, 403);
+        const logRes = await call('alice', 'GET', '/api/platform-metrics/service-status/logs?levels=DEBUG,INFO,LOG,WARN,ERROR&page=1&pageSize=20');
+        assert.equal(logRes.status, 200);
+        assert.ok(Array.isArray(logRes.data.logs) && logRes.data.logs.length > 0);
+        assert.ok(logRes.data.total >= logRes.data.logs.length);
+        assert.equal(logRes.data.page, 1);
+        assert.ok(logRes.data.totalPages >= 1);
+        assert.ok(logRes.data.logs[0].timestamp && logRes.data.logs[0].source && logRes.data.logs[0].detail);
+        assert.equal((await call('alice', 'GET', '/api/platform-metrics/service-status/logs?levels=__none__')).data.logs.length, 0);
+
+        // ── 13. 开箱即用默认规则自动初始化 + SLA flat targets/prefs + snapshots/:id ──
+        assert.equal((await call('bob', 'POST', '/api/onboarding/defaults/apply', {})).status, 403);
+        const onStatus = await call('alice', 'GET', '/api/onboarding/defaults/status');
+        assert.equal(onStatus.status, 200);
+        assert.equal(onStatus.data.required, false);
+        assert.equal(onStatus.data.decided, true);
+        assert.equal(onStatus.data.state?.result?.targetsAdded, 58);
+        assert.equal(onStatus.data.state?.result?.preferencesAdded, 77);
+        assert.equal(onStatus.data.state?.result?.scriptsAdded, 43);
+        const applyAgain = await call('alice', 'POST', '/api/onboarding/defaults/apply', { importScripts: true, importMetricRules: true });
+        assert.equal(applyAgain.status, 200);
+        assert.equal(applyAgain.data.state.result.targetsAdded, 0, 'preserve-existing 不重复导入已有规则');
+
+        const targetsRes = await fetch(`${url}/api/sla/targets`, { headers: as('bob') });
+        assert.equal(targetsRes.status, 200);
+        assert.equal(targetsRes.headers.get('x-data-source'), 'mysql');
+        const targetsData = await targetsRes.json();
+        assert.equal(targetsData.items, undefined, 'targets 接口返回扁平字典，不套 items 壳');
+        assert.equal(targetsData.manual_target_1778881260277?.label, 'IBMS');
+
+        const prefHit = await call('bob', 'GET', '/api/sla/prefs/sla_prefs_other_16amqd');
+        assert.equal(prefHit.status, 200);
+        assert.equal(prefHit.data.prefs, undefined, 'prefs 接口直接返回对象本身');
+        assert.ok(Array.isArray(prefHit.data.customMetrics) && prefHit.data.customMetrics.length > 0);
+        const prefMiss = await call('bob', 'GET', '/api/sla/prefs/no_such_schema_hash');
+        assert.equal(prefMiss.status, 200);
+        assert.equal(prefMiss.data, null);
+
+        const groupsRes = await call('bob', 'GET', '/api/sla/groups');
+        assert.equal(groupsRes.status, 200);
+        assert.ok(groupsRes.data.length >= 9);
+        assert.ok(Array.isArray(groupsRes.data[0].metrics));
+
+        const snapSave = await call('alice', 'POST', '/api/sla/snapshot', {
+            category: 'TE',
+            name: 'test-snap',
+            topMetrics: [{ label: '任职率', value: '98%' }],
+        });
+        assert.equal(snapSave.status, 200);
+        const snapGet = await call('bob', 'GET', `/api/sla/snapshots/${snapSave.data.id}`);
+        assert.equal(snapGet.status, 200);
+        assert.equal(snapGet.data.id, snapSave.data.id);
+        assert.equal((await call('bob', 'GET', '/api/sla/snapshots/no-such-id')).status, 404);
+
+        // ── 14. UIV 分类删除：除 默认分类 外都可删且刷新不再复活 ──
+        assert.equal((await call('alice', 'POST', '/api/uiv/categories', { name: 'NetCare' })).status, 201);
+        assert.ok((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'));
+        const delNetCare = await call('alice', 'DELETE', '/api/uiv/categories/NetCare');
+        assert.equal(delNetCare.status, 200);
+        assert.equal(delNetCare.data.categories.includes('NetCare'), false);
+        assert.equal((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'), false, '刷新后仍保持已删除');
+        assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.categories.includes('NetCare'), false);
+        assert.equal((await call('alice', 'DELETE', `/api/uiv/categories/${encodeURIComponent('默认分类')}`)).status, 400);
     } finally {
         await app.close();
         await mock.close();

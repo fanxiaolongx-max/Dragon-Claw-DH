@@ -313,11 +313,22 @@
     // ── 二级菜单：技能·插件·工具 / 更多（悬停或点击展开） ──
     const flyouts = {
         more: () => {
+            const normalizeNavPath = href => {
+                if (!href) return '';
+                const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(href) : href;
+                return stripped.split(/[?#]/)[0].replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+            };
             const workflow = window.NavWorkflow?.links() || [];
-            const workflowPaths = new Set(workflow.map(item => item.href));
+            const workflowIds = new Set([...(window.NavWorkflow?.ids || []), 'home']);
+            const workflowPaths = new Set(['/', '/index', ...workflow.map(item => normalizeNavPath(item.href))]);
             const toolLink = (href, label) => `<a class="v2-pop-item" role="menuitem" href="${esc(href)}"><span class="v2-ico v2-app-glyph" data-icon="${appGlyph(href)}"></span><span>${esc(label)}</span></a>`;
             const links = [...document.querySelectorAll('#app-navbar .nav-links a[href]')]
-                .filter(a => isNavSidebarShortcut(a.getAttribute('href')) && !workflowPaths.has(a.getAttribute('href')))
+                .filter(a => {
+                    const itemId = a.dataset?.navItemId || '';
+                    if (itemId && workflowIds.has(itemId)) return false;
+                    const href = a.getAttribute('href');
+                    return isNavSidebarShortcut(href) && !workflowPaths.has(normalizeNavPath(href));
+                })
                 .map(a => toolLink(a.getAttribute('href'), (a.querySelector('.nav-text, .nav-link-text')?.textContent || a.getAttribute('title') || a.textContent || '').trim().replace(/^\S+\s+/, m => (/^[\p{Extended_Pictographic}️]+\s+$/u.test(m) ? '' : m))));
             const personal = window.HomeSidebarMenu;
             return [

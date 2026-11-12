@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { STATIC_DIR } from '../config.js';
+import { ensureQuickStartSeeded } from '../services/onboarding-service.js';
 import {
     listCategories,
     addCategory,
@@ -23,6 +24,7 @@ import {
 
 export async function uivRoutes(fastify) {
     fastify.get('/scripts', async (_req, reply) => {
+        await ensureQuickStartSeeded();
         reply.header('X-Data-Source', 'mysql');
         const [scripts, categories] = await Promise.all([listScripts(), listCategories()]);
         return { scripts, categories };
@@ -44,7 +46,10 @@ export async function uivRoutes(fastify) {
     fastify.patch('/scripts/:id/category', async (req) => moveScriptCategory(req.params.id, req.body?.category));
     fastify.patch('/scripts/:id/rename', async (req) => renameScript(req.params.id, req.body?.name));
 
-    fastify.get('/categories', async () => listCategories());
+    fastify.get('/categories', async () => {
+        await ensureQuickStartSeeded();
+        return listCategories();
+    });
     fastify.post('/categories', async (req, reply) => {
         const categories = await addCategory(req.body?.name);
         return reply.code(201).send({ categories });

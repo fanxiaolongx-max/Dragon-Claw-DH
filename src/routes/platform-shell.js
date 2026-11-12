@@ -5,6 +5,7 @@ import { config, STATIC_DIR } from '../config.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { pushLog, listLogs } from '../core/log-ring.js';
 import { getSetting as kvGet, saveSetting as kvSet } from '../services/system-service.js';
+import { getOnboardingStatus, applyOnboardingDecision } from '../services/onboarding-service.js';
 import { listScripts as listUivScripts } from '../services/uiv-service.js';
 
 const DEFAULT_IDENTITY = {
@@ -436,10 +437,38 @@ export async function platformShellRoutes(fastify) {
         channels: { enabled: false, channels: [] },
     }));
 
-    fastify.get('/api/platform-metrics/service-status/logs', async (req) => ({
-        items: listLogs({ limit: req.query?.pageSize || 100, level: req.query?.level || '', q: req.query?.q || '' }),
-        total: listLogs({ limit: 500 }).length,
-    }));
+    fastify.get('/api/platform-metrics/service-status/logs', async (req) => {
+        const pageSize = Math.min(200, Math.max(1, Number(req.query?.pageSize) || 50));
+        const requestedPage = Math.max(1, Number(req.query?.page) || 1);
+        const all = listLogs({
+            limit: 500,
+            levels: req.query?.levels || '',
+            level: req.query?.level || '',
+            q: req.query?.q || '',
+            startDate: req.query?.startDate || '',
+            endDate: req.query?.endDate || '',
+            newestFirst: true,
+        });
+        const total = all.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const page = Math.min(requestedPage, totalPages);
+        const start = (page - 1) * pageSize;
+        const logs = all.slice(start, start + pageSize).map((e) => {
+            const extra = e.detail == null ? '' : (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail, null, 2));
+            return {
+                id: e.id,
+                timestamp: e.ts,
+                level: e.level,
+                source: e.category || 'APP',
+                detail: extra ? `${e.message}\n${extra}` : (e.message || ''),
+                requestId: e.requestId || '',
+                statusCode: e.statusCode ?? null,
+                durationMs: e.durationMs ?? null,
+                userId: e.userId || '',
+            };
+        });
+        return { logs, total, page, pageSize, totalPages, retentionDays: 30 };
+    });
 
     fastify.get('/api/builtin-promotion/status', async () => ({
         writable: false,
@@ -592,13 +621,44 @@ export async function platformShellRoutes(fastify) {
     fastify.get('/api/desktop-agents/quota', async () => ({ quota: { remaining: 0, limit: 0 }, webMode: true }));
     fastify.get('/api/desktop-license/status', async () => ({ enabled: false, valid: true }));
 
-    fastify.get('/api/onboarding/defaults/status', async () => ({
-        required: false,
-        decided: true,
-        requiresAdmin: false,
-        state: { decided: true },
-        bundle: { version: '1.0.0' },
-    }));
+    fastify.get('/api/onboarding/defaults/status', async (req) => {
+        const identity = resolveRequestIdentity(req);
+        return getOnboardingStatus({ role: identity.role });
+    });
+    fastify.post('/api/onboarding/defaults/decision', async (req, reply) => {
+        const identity = resolveRequestIdentity(req);
+        try {
+            const body = req.body || {};
+            return await applyOnboardingDecision({
+                action: body.action,
+                importScripts: body.importScripts !== false && Boolean(body.importScripts),
+                importMetricRules: body.importMetricRules !== false && Boolean(body.importMetricRules),
+                allowRepeat: body.allowRepeat === true,
+                role: identity.role,
+            });
+        } catch (err) {
+            const code = err.statusCode || (Number.isInteger(err.code) ? err.code : 400);
+            return reply.code(code).send({ error: err.message, code: typeof err.code === 'string' ? err.code : undefined });
+        }
+    });
+    fastify.post('/api/onboarding/defaults/apply', async (req, reply) => {
+        const identity = resolveRequestIdentity(req);
+        try {
+            const body = req.body || {};
+            const importScripts = body.importScripts !== undefined ? Boolean(body.importScripts) : true;
+            const importMetricRules = body.importMetricRules !== undefined ? Boolean(body.importMetricRules) : true;
+            return await applyOnboardingDecision({
+                action: 'import',
+                importScripts,
+                importMetricRules,
+                allowRepeat: true,
+                role: identity.role,
+            });
+        } catch (err) {
+            const code = err.statusCode || (Number.isInteger(err.code) ? err.code : 400);
+            return reply.code(code).send({ error: err.message, code: typeof err.code === 'string' ? err.code : undefined });
+        }
+    });
 
     fastify.get('/api/requirements/catalog-updates', async () => ({ updates: [], pendingCount: 0 }));
     fastify.get('/api/requirements', async () => ({ items: [] }));

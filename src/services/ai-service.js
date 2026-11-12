@@ -59,13 +59,18 @@ function normalizeProfile(raw = {}) {
     };
 }
 
-function publicProfile(profile) {
+function publicProfile(profile, sourceHint = '') {
     const p = normalizeProfile(profile);
+    const masked = maskSecret(p.apiKey);
     return {
         ...p,
         apiKey: '',
         hasApiKey: Boolean(p.apiKey),
-        apiKeyMasked: maskSecret(p.apiKey),
+        apiKeyMasked: masked,
+        maskedApiKey: masked,
+        apiKeySource: p.apiKey ? (p.apiKeySource || sourceHint || 'stored') : 'none',
+        hasHeaders: Object.keys(p.headers || {}).length > 0,
+        hasExtraBody: Object.keys(p.extraBody || {}).length > 0,
         keyLooksValid: Boolean(p.apiKey && p.apiKey.length >= 6),
     };
 }
@@ -81,10 +86,23 @@ export async function listProfiles() {
         memSort: (a, b) => (Number(b.is_active || 0) - Number(a.is_active || 0)) || ((b.updated_at || 0) - (a.updated_at || 0)),
     });
     if (!rows.length) {
-        const def = normalizeProfile(DEFAULT_MODEL_SETTINGS);
+        const def = normalizeProfile({
+            ...DEFAULT_MODEL_SETTINGS,
+            apiKeySource: DEFAULT_MODEL_SETTINGS.apiKey ? 'env' : 'none',
+        });
         return [def];
     }
-    return rows.map((r) => normalizeProfile({ ...decryptProfile(parseJsonCol(r.config_json, {})), id: r.id, name: r.name, provider: r.provider, isActive: Boolean(r.is_active) }));
+    return rows.map((r) => {
+        const decrypted = decryptProfile(parseJsonCol(r.config_json, {}));
+        return normalizeProfile({
+            ...decrypted,
+            id: r.id,
+            name: r.name,
+            provider: r.provider,
+            apiKeySource: decrypted?.apiKey ? (decrypted.apiKeySource || 'stored') : 'none',
+            isActive: Boolean(r.is_active),
+        });
+    });
 }
 
 export async function getActiveSettings() {
@@ -119,14 +137,20 @@ export async function saveProfile(input = {}, idOverride = '') {
     const existingList = await listProfiles();
     const targetId = String(idOverride || input.id || '').trim() || `profile-${crypto.randomUUID().slice(0, 8)}`;
     const existing = existingList.find((p) => p.id === targetId);
-    const keepKey = !input.apiKey && existing ? existing.apiKey : (input.apiKey || '');
+    const sourceProfile = !existing && input.sourceProfileId
+        ? existingList.find((p) => p.id === String(input.sourceProfileId).trim())
+        : null;
+    const baseProfile = existing || sourceProfile || null;
+    let keepKey = !input.apiKey && baseProfile ? baseProfile.apiKey : (input.apiKey || '');
+    if (input.clearApiKey) keepKey = '';
     const activeInput = input.isActive !== undefined ? input.isActive : input.activate;
     const merged = normalizeProfile({
-        ...(existing || {}),
+        ...(baseProfile || {}),
         ...input,
         id: targetId,
-        apiKey: keepKey === '***' && existing ? existing.apiKey : keepKey,
-        isActive: activeInput !== undefined ? Boolean(activeInput) : (existing ? existing.isActive : existingList.every((x) => !x.isActive || x.id === DEFAULT_PROFILE_ID)),
+        apiKey: keepKey === '***' && baseProfile ? baseProfile.apiKey : keepKey,
+        apiKeySource: keepKey ? 'stored' : 'none',
+        isActive: activeInput !== undefined ? Boolean(activeInput) : (existing ? existing.isActive : (sourceProfile ? false : existingList.every((x) => !x.isActive || x.id === DEFAULT_PROFILE_ID))),
     });
     const now = Date.now();
     await upsertRow('ai_settings_profiles', {
@@ -141,7 +165,7 @@ export async function saveProfile(input = {}, idOverride = '') {
     if (merged.isActive) {
         await activateProfile(merged.id);
     }
-    return getPublicSettings();
+    return { ...(await getPublicSettings()), createdProfileId: merged.id };
 }
 
 export async function activateProfile(profileId) {
@@ -226,9 +250,11 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
     };
 }
 
-export async function callAiCompletion({ messages, profileId = '', maxTokens } = {}) {
+export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens } = {}) {
     const profiles = await listProfiles();
-    const settings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
+    const baseSettings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
+    const modelOverride = String(model || '').trim();
+    const settings = modelOverride ? { ...baseSettings, model: modelOverride } : baseSettings;
     if (!settings.apiKey) {
         return {
             ok: false,

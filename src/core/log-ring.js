@@ -27,7 +27,7 @@ function sanitizeDetail(detail) {
     }
 }
 
-export function pushLog({ level = 'INFO', category = 'APP', message = '', requestId = '', userId = '', durationMs = null, detail = null } = {}) {
+export function pushLog({ level = 'INFO', category = 'APP', message = '', requestId = '', userId = '', statusCode = null, durationMs = null, detail = null } = {}) {
     const entry = {
         id: ++seqCounter,
         ts: new Date().toISOString(),
@@ -36,6 +36,7 @@ export function pushLog({ level = 'INFO', category = 'APP', message = '', reques
         message: String(message || ''),
         requestId: String(requestId || ''),
         userId: String(userId || ''),
+        statusCode: Number.isFinite(Number(statusCode)) ? Number(statusCode) : null,
         durationMs: Number.isFinite(durationMs) ? durationMs : null,
         detail: sanitizeDetail(detail),
     };
@@ -48,20 +49,34 @@ export function pushLog({ level = 'INFO', category = 'APP', message = '', reques
     return entry;
 }
 
-export function listLogs({ limit = 200, level = '', category = '', q = '', sinceId = 0 } = {}) {
+export function listLogs({ limit = 200, level = '', levels = '', category = '', q = '', sinceId = 0, startDate = '', endDate = '', newestFirst = false } = {}) {
+    const rawLevels = String(levels || '').trim();
+    if (rawLevels === '__none__') return [];
     const minId = Number(sinceId) || 0;
     const lv = String(level || '').trim().toUpperCase();
+    const levelSet = rawLevels
+        ? new Set(rawLevels.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))
+        : null;
     const cat = String(category || '').trim().toUpperCase();
     const kw = String(q || '').trim().toLowerCase();
+    const sd = String(startDate || '').trim();
+    const ed = String(endDate || '').trim();
     let list = entries;
     if (minId > 0) list = list.filter((e) => e.id > minId);
-    if (lv && lv !== 'ALL') list = list.filter((e) => e.level === lv);
+    if (levelSet && levelSet.size) {
+        list = list.filter((e) => levelSet.has(e.level) || (e.level === 'INFO' && levelSet.has('LOG')));
+    } else if (lv && lv !== 'ALL') {
+        list = list.filter((e) => e.level === lv);
+    }
     if (cat && cat !== 'ALL') list = list.filter((e) => e.category === cat);
+    if (sd) list = list.filter((e) => e.ts.slice(0, 10) >= sd);
+    if (ed) list = list.filter((e) => e.ts.slice(0, 10) <= ed);
     if (kw) {
-        list = list.filter((e) => `${e.message} ${e.requestId} ${e.userId} ${JSON.stringify(e.detail || '')}`.toLowerCase().includes(kw));
+        list = list.filter((e) => `${e.message} ${e.category} ${e.requestId} ${e.userId} ${JSON.stringify(e.detail || '')}`.toLowerCase().includes(kw));
     }
     const max = Math.min(Math.max(Number(limit) || 200, 1), MAX_ENTRIES);
-    return list.slice(-max);
+    const sliced = list.slice(-max);
+    return newestFirst ? [...sliced].reverse() : sliced;
 }
 
 export function clearLogs() {

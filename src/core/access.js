@@ -84,7 +84,7 @@ const USER_WRITES = [
     ['POST', /^\/db-explorer\/query$/], // 只读查询（路由内走只读守卫）
     ['POST', /^\/duty-roster$/], // 已识别用户可维护各月份值班表（与桌面版一致）
 ];
-const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/];
+const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
 
 /** 返回 null 表示放行，否则返回拒绝原因。path 为去掉 /api 前缀后的路径。 */
 export function denyReason(method, path, identity) {

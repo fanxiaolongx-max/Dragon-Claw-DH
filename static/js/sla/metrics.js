@@ -263,7 +263,11 @@ function renderTopStickyBar() {
     if (!keys.length) {
         if (window.expandedSubMetrics) window.expandedSubMetrics.clear();
         syncStickyBarSubExpandedState();
-        content.innerHTML = `<span style="color:#888;">${SLAT('sla.sticky.noData')}</span>`;
+        const hasLoadedSections = typeof AppState === 'object' && Object.keys(AppState).some(id => AppState[id] && !AppState[id].archiveSupplementary);
+        const emptyText = hasLoadedSections
+            ? '已导入数据，但当前表格尚未匹配到已启用的指标规则（请展开各表“指标规则”配置，或在“全局设置 → 初始化与数据”补充导入默认规则）'
+            : SLAT('sla.sticky.noData');
+        content.innerHTML = `<span style="color:#888;">${escapeHTML(emptyText)}</span>`;
         btnExpand.style.display = 'none'; 
         return;
     }

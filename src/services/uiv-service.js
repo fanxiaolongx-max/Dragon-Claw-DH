@@ -7,7 +7,7 @@ import {
 } from '../dao/scoped.js';
 import { callAiCompletion } from './ai-service.js';
 
-const DEFAULT_CATEGORIES = ['默认分类', 'NetCare', 'DataFab'];
+const DEFAULT_CATEGORIES = ['默认分类'];
 
 export async function listCategories() {
     const rows = await selectTable('uiv_categories', {
@@ -45,6 +45,8 @@ export async function addCategory(name) {
 
 export async function deleteCategory(name) {
     const trimmed = String(name || '').trim();
+    if (!trimmed) throw new BusinessError('分类名不能为空');
+    if (DEFAULT_CATEGORIES.includes(trimmed)) throw new BusinessError('默认分类不可删除');
     await deleteRows('uiv_categories', {
         whereSql: `\`name\` = ${sqlVal(trimmed)}`,
         memFilter: (r) => r.name === trimmed,
@@ -53,7 +55,7 @@ export async function deleteCategory(name) {
         whereSql: `\`category\` = ${sqlVal(trimmed)}`,
         memFilter: (r) => r.category === trimmed,
     });
-    return { success: true };
+    return listCategories();
 }
 
 function hydrateScriptRow(r) {

@@ -1,6 +1,6 @@
 {
   "name": "dragon-claw-dh",
-  "version": "1.7.0",
+  "version": "1.7.2",
   "description": "Dragon Claw Digital Human Web Edition (Node.js 22 + Fastify + Base REST)",
   "main": "run.js",
   "engines": {

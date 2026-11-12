@@ -2495,7 +2495,10 @@ function hasHomeSidebarMenu() {
 }
 
 function isNavSidebarShortcut(href) {
-    return Boolean(href && href !== '/' && !href.startsWith('#'));
+    if (!href || href.startsWith('#')) return false;
+    const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(href) : href;
+    const clean = stripped.split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+    return clean !== '/' && clean !== '/index.html';
 }
 
 function getPrimarySettingsTitle() {

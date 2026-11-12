@@ -97,6 +97,7 @@
         }
         return p;
     }
+    window.dhStripBase = dhStripBase;
 
     function dhResolveUrl(rawUrl) {
         if (typeof rawUrl !== 'string') return rawUrl;

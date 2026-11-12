@@ -1,5 +1,7 @@
 import { resolveRequestIdentity } from '../core/identity.js';
+import { ensureQuickStartSeeded } from '../services/onboarding-service.js';
 import {
+    slaSourceLabel,
     expandCompressedSnapshot,
     getAuditLog,
     listCategories,
@@ -17,6 +19,7 @@ import {
     patchPrefsBulk,
     listSnapshots,
     getLatestSnapshot,
+    getSnapshotById,
     addSnapshot,
     updateSnapshot,
     deleteSnapshot,
@@ -34,7 +37,11 @@ import {
 } from '../services/sla-service.js';
 
 export async function slaRoutes(fastify) {
-    fastify.get('/categories', async () => listCategories());
+    fastify.get('/categories', async (_req, reply) => {
+        await ensureQuickStartSeeded();
+        reply.header('X-Data-Source', slaSourceLabel());
+        return listCategories();
+    });
     fastify.put('/categories', async (req) => ({
         success: true,
         categories: await replaceCategories(Array.isArray(req.body) ? req.body : (req.body?.categories || [])),
@@ -42,13 +49,21 @@ export async function slaRoutes(fastify) {
     fastify.get('/categories/:name/cascade-impact', async (req) => collectCategoryCascadeImpact(req.params.name));
     fastify.delete('/categories/:name/cascade', async (req) => deleteCategoryCascade(req.params.name));
 
-    fastify.get('/groups', async () => listGroups());
+    fastify.get('/groups', async (_req, reply) => {
+        await ensureQuickStartSeeded();
+        reply.header('X-Data-Source', slaSourceLabel());
+        return listGroups();
+    });
     fastify.put('/groups', async (req) => ({
         success: true,
         groups: await replaceGroups(Array.isArray(req.body) ? req.body : (req.body?.groups || [])),
     }));
 
-    fastify.get('/targets', async () => ({ items: await getTargets() }));
+    fastify.get('/targets', async (_req, reply) => {
+        await ensureQuickStartSeeded();
+        reply.header('X-Data-Source', slaSourceLabel());
+        return getTargets();
+    });
     fastify.put('/targets', async (req) => {
         const raw = req.body?.items || req.body || {};
         return { success: true, items: await replaceTargets(raw) };
@@ -58,8 +73,20 @@ export async function slaRoutes(fastify) {
         target: await patchTarget(decodeURIComponent(req.params.targetKey), req.body || {}),
     }));
 
-    fastify.get('/snapshots/latest', async () => ({ snapshot: await getLatestSnapshot() }));
-    fastify.get('/snapshots', async (req) => listSnapshots({ view: req.query?.view === 'summary' ? 'summary' : 'full' }));
+    fastify.get('/snapshots/latest', async (_req, reply) => {
+        reply.header('X-Data-Source', slaSourceLabel());
+        return { snapshot: await getLatestSnapshot() };
+    });
+    fastify.get('/snapshots', async (req, reply) => {
+        reply.header('X-Data-Source', slaSourceLabel());
+        return listSnapshots({ view: req.query?.view === 'summary' ? 'summary' : 'full' });
+    });
+    fastify.get('/snapshots/:id', async (req, reply) => {
+        reply.header('X-Data-Source', slaSourceLabel());
+        const snapshot = await getSnapshotById(req.params.id);
+        if (!snapshot) return reply.code(404).send({ error: '快照不存在' });
+        return snapshot;
+    });
     fastify.post('/snapshot', async (req) => {
         const snapshot = expandCompressedSnapshot(req.body || {});
         const saved = await addSnapshot(snapshot);
@@ -76,10 +103,11 @@ export async function slaRoutes(fastify) {
     }));
     fastify.post('/snapshots/cleanup-redundant', async (req) => cleanupRedundantSnapshots(req.body || {}));
 
-    fastify.get('/prefs/:schemaHash', async (req) => ({
-        schemaHash: req.params.schemaHash,
-        prefs: await getPrefItem(req.params.schemaHash),
-    }));
+    fastify.get('/prefs/:schemaHash', async (req, reply) => {
+        await ensureQuickStartSeeded();
+        reply.header('X-Data-Source', slaSourceLabel());
+        return getPrefItem(req.params.schemaHash);
+    });
     fastify.put('/prefs/:schemaHash', async (req) => ({
         success: true,
         prefs: await upsertPrefItem(req.params.schemaHash, req.body?.prefs ?? req.body),
@@ -97,7 +125,14 @@ export async function slaRoutes(fastify) {
         return { success: true };
     });
 
-    fastify.get('/config', async () => {
+    fastify.get('/config', async (_req, reply) => {
+        await ensureQuickStartSeeded();
+        const src = slaSourceLabel();
+        reply.header('X-Data-Source', src);
+        reply.header('X-Data-Source-Targets', src);
+        reply.header('X-Data-Source-Prefs', src);
+        reply.header('X-Data-Source-Categories', src);
+        reply.header('X-Data-Source-Groups', src);
         const [categories, groups, targets, prefs, copiedFields] = await Promise.all([
             listCategories(),
             listGroups(),
@@ -126,7 +161,11 @@ export async function slaRoutes(fastify) {
 
     fastify.post('/rename-metric', async (req) => {
         const identity = resolveRequestIdentity(req);
-        return renameMetricKey(req.body?.oldKey, req.body?.newKey, identity.username);
+        return renameMetricKey(
+            req.body?.oldKey ?? req.body?.oldName,
+            req.body?.newKey ?? req.body?.newName,
+            identity.username,
+        );
     });
 
     fastify.post('/preview-yuxiang', async (req) => {

@@ -331,14 +331,36 @@ export async function aiSettingsRoutes(fastify) {
         error: '已取消模型名称映射，对话直接显示真实模型名称',
     }));
 
-    fastify.post('/test', async (req, reply) => {
-        const settings = await saveProfile(req.body || {}, req.body?.profileId || '');
+    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models'];
+    const handleProfileTest = async (req, reply) => {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const paramId = String(req.params?.profileId || body.profileId || '').trim();
+        const profiles = await listProfiles();
+        const existing = paramId ? profiles.find((p) => p.id === paramId) : null;
+        const hasEdits = EDITABLE_PROFILE_KEYS.some((k) => body[k] !== undefined);
+        if (paramId && !existing && !hasEdits) {
+            return reply.code(404).send({ success: false, error: 'AI 配置方案不存在' });
+        }
+        let targetProfileId = paramId;
+        if (hasEdits) {
+            // 测试渠道列表里的非主模型时，保留已有主模型，避免误覆盖 ★ 默认主模型
+            const keepPrimary = existing && Array.isArray(body.models) && body.model && body.model !== existing.model && body.models.includes(existing.model);
+            const saveInput = keepPrimary ? { ...body, model: existing.model } : body;
+            const settings = await saveProfile(saveInput, paramId);
+            targetProfileId = paramId || settings.activeProfileId;
+        } else if (typeof body.autoSwitchEnabled === 'boolean') {
+            await saveProfile({ autoSwitchEnabled: body.autoSwitchEnabled, profileId: paramId }, paramId);
+        }
         const res = await callAiCompletion({
-            profileId: settings.activeProfileId,
+            profileId: targetProfileId,
+            model: String(body.model || '').trim(),
             messages: [{ role: 'user', content: 'Hi, please reply OK.' }],
             maxTokens: 16,
         });
-        if (!res.ok) return reply.code(400).send({ success: false, error: res.error });
+        if (!res.ok) return reply.code(400).send({ success: false, error: res.error, model: res.model });
         return { success: true, model: res.model, latencyMs: res.latencyMs, reply: res.text };
-    });
+    };
+
+    fastify.post('/test', handleProfileTest);
+    fastify.post('/profiles/:profileId/test', handleProfileTest);
 }

@@ -230,9 +230,9 @@ export async function createServer() {
     app.addHook('onResponse', async (req, reply) => {
         const url = String(req.url || '');
         if (!url.startsWith('/api/') && !url.startsWith('/debug')) return;
-        if (url.startsWith('/api/debug/logs')) return;
+        if (url.startsWith('/api/debug/logs') || url.startsWith('/api/platform-metrics/service-status/logs')) return;
         const durationMs = req.startedAt ? Date.now() - req.startedAt : 0;
-        const status = reply.statusCode;
+        const status = Number(reply.getHeader('x-dh-status')) || reply.statusCode;
         const level = status >= 500 ? 'ERROR' : (status >= 400 ? 'WARN' : 'INFO');
         pushLog({
             level,
@@ -240,6 +240,7 @@ export async function createServer() {
             message: `${req.method} ${url} -> ${status}`,
             requestId: req.requestId || '',
             userId: req.userIdentity?.username || '',
+            statusCode: status,
             durationMs,
         });
     });
@@ -257,6 +258,7 @@ export async function createServer() {
             message: `${req.method} ${req.url} -> ${status}: ${err.message}`,
             requestId: req.requestId || '',
             userId: req.userIdentity?.username || '',
+            statusCode: status,
             detail: config.debug ? { name: err.name, stack: String(err.stack || '').split('\n').slice(0, 4) } : null,
         });
         if (reply.sent) return;

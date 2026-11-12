@@ -4,11 +4,24 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { optionalDep } from '../core/optional.js';
 import { TEMPLATES_DIR } from '../config.js';
-import { kvGet, kvSet, selectTable, upsertRow, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
+import { isMemoryMode, kvGet, kvSet, selectTable, upsertRow, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 
 const FAST_MAPPING_KEY = 'sla_fast_mapping_templates';
 const AUDIT_LOG_KEY = 'sla_audit_log';
 const MAX_SNAPSHOTS = 180;
+
+export function slaSourceLabel() {
+    return isMemoryMode() ? 'memory' : 'mysql';
+}
+
+async function mapConcurrent(items, limit, fn) {
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async (_, offset) => {
+        for (let i = offset; i < items.length; i += limit) {
+            await fn(items[i], i);
+        }
+    });
+    await Promise.all(workers);
+}
 
 export function expandCompressedSnapshot(body) {
     if (!body || typeof body !== 'object') return body;
@@ -111,12 +124,15 @@ export async function listGroups() {
     }
     return groupRows.map((g) => {
         const meta = parseJsonCol(g.meta_json, {}) || {};
+        const items = byGroup.get(g.group_key) || meta.items || meta.metrics || [];
         return {
             ...meta,
+            id: meta.id || g.group_key,
             key: g.group_key,
             name: g.name,
             category: g.category || '',
-            items: byGroup.get(g.group_key) || meta.items || [],
+            metrics: Array.isArray(meta.metrics) ? meta.metrics : items,
+            items,
         };
     });
 }
@@ -136,7 +152,7 @@ export async function replaceGroups(groups = []) {
             meta_json: JSON.stringify(g),
             created_at: now,
         }, ['group_key']);
-        const items = Array.isArray(g.items) ? g.items : [];
+        const items = Array.isArray(g.items) ? g.items : (Array.isArray(g.metrics) ? g.metrics : []);
         for (let j = 0; j < items.length; j += 1) {
             const it = items[j];
             const targetKey = typeof it === 'string' ? it : String(it?.key || it?.targetKey || j);
@@ -169,8 +185,7 @@ export async function replaceTargets(targets = {}) {
     await deleteRows('sla_targets', { whereSql: '`id` > 0', memFilter: () => true });
     const entries = Object.entries(targets || {});
     const now = Date.now();
-    for (let i = 0; i < entries.length; i += 1) {
-        const [key, val] = entries[i];
+    await mapConcurrent(entries, 8, async ([key, val], i) => {
         await upsertRow('sla_targets', {
             target_key: String(key),
             name: String(val?.name || val?.label || key),
@@ -179,7 +194,24 @@ export async function replaceTargets(targets = {}) {
             sort_order: i,
             updated_at: now,
         }, ['target_key']);
-    }
+    });
+    return getTargets();
+}
+
+export async function patchTargetsBulk(targets = {}, sortOffset = 0) {
+    const entries = Object.entries(targets || {});
+    if (!entries.length) return {};
+    const now = Date.now();
+    await mapConcurrent(entries, 8, async ([key, val], i) => {
+        await upsertRow('sla_targets', {
+            target_key: String(key),
+            name: String(val?.name || val?.label || key),
+            category: String(val?.category || ''),
+            payload_json: JSON.stringify(val ?? {}),
+            sort_order: sortOffset + i,
+            updated_at: now,
+        }, ['target_key']);
+    });
     return getTargets();
 }
 
@@ -217,7 +249,7 @@ export async function getPrefItem(schemaHash) {
         limit: 1,
         memFilter: (r) => r.item_key === schemaHash && r.scope_key === 'sla_pref',
     });
-    return rows.length ? parseJsonCol(rows[0].value_json, {}) : {};
+    return rows.length ? parseJsonCol(rows[0].value_json, {}) : null;
 }
 
 export async function upsertPrefItem(schemaHash, value) {
@@ -231,9 +263,9 @@ export async function upsertPrefItem(schemaHash, value) {
 }
 
 export async function patchPrefsBulk(patch = {}) {
-    for (const [k, v] of Object.entries(patch || {})) {
+    await mapConcurrent(Object.entries(patch || {}), 8, async ([k, v]) => {
         await upsertPrefItem(k, v);
-    }
+    });
     return { success: true };
 }
 
@@ -263,6 +295,20 @@ export async function getLatestSnapshot() {
     if (!rows.length) return null;
     const r = rows[0];
     return { ...(parseJsonCol(r.payload_json, {}) || {}), id: r.id };
+}
+
+export async function getSnapshotById(id) {
+    const key = String(id || '').trim();
+    if (!key) return null;
+    const rows = await selectTable('sla_snapshots', {
+        whereSql: `\`id\` = ${sqlVal(key)}`,
+        limit: 1,
+        memFilter: (r) => r.id === key,
+    });
+    if (!rows.length) return null;
+    const r = rows[0];
+    const payload = parseJsonCol(r.payload_json, {}) || {};
+    return { ...payload, id: r.id, category: r.category || payload.category || '', name: r.name || payload.name || '', timestamp: r.snapshot_time || payload.timestamp || '' };
 }
 
 export async function addSnapshot(snapshot = {}) {

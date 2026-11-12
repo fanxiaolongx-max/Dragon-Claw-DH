@@ -182,12 +182,24 @@ test('Nginx 静态直出页面与 dh-runtime.js：路径映射、自定义工具
     sandbox.window = sandbox;
     vm.runInNewContext(runtimeSrc, sandbox);
 
-    // 验证所有常见路径都正确重写为带网关前缀和 .html 后缀的真实文件
+    // 验证所有常见路径都正确重写为带网关前缀和 .html 后缀的真实文件，dhStripBase 能还原
     assert.equal(sandbox.dhResolveUrl('/sla'), `${basePrefix}/sla.html`);
     assert.equal(sandbox.dhResolveUrl('/monthly/legacy'), `${basePrefix}/monthly-legacy.html`);
     assert.equal(sandbox.dhResolveUrl('/ai-report?month=2026-10'), `${basePrefix}/monthly.html?month=2026-10`);
     assert.equal(sandbox.dhResolveUrl('/custom-tools/my-report/'), `${basePrefix}/custom-tool.html?slug=my-report`);
     assert.equal(sandbox.dhResolveUrl('/custom-tools/my-report/?tab=1'), `${basePrefix}/custom-tool.html?tab=1&slug=my-report`);
+    assert.equal(sandbox.dhStripBase(`${basePrefix}/`), '/');
+    assert.equal(sandbox.dhStripBase(`${basePrefix}/sla.html`), '/sla.html');
+
+    // 验证「更多 → 快捷工具」在网关子路径重写下仍能排除首页(/)与系统工具
+    const navSrc = fs.readFileSync(path.join(ROOT, 'static/js/shared/navbar.js'), 'utf8');
+    const fnMatch = navSrc.match(/function isNavSidebarShortcut\(href\)\s*\{[\s\S]*?\n\}/);
+    assert.ok(fnMatch, '应存在 isNavSidebarShortcut 函数');
+    vm.runInNewContext(fnMatch[0], sandbox);
+    assert.equal(sandbox.isNavSidebarShortcut('/'), false);
+    assert.equal(sandbox.isNavSidebarShortcut(`${basePrefix}/`), false);
+    assert.equal(sandbox.isNavSidebarShortcut(`${basePrefix}/index.html`), false);
+    assert.equal(sandbox.isNavSidebarShortcut(`${basePrefix}/topic-analysis.html`), true);
 
     // 紧接着发起 /api/auth/me，应等待 /digital-human/api/dh/user/current 返回后自动注入身份头
     const meResp = await sandbox.fetch('/api/auth/me');
