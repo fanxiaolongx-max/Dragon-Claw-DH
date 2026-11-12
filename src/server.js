@@ -8,7 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { config, STATIC_DIR } from './config.js';
 import { BusinessError } from './core/errors.js';
 import { parseIdentity } from './core/identity.js';
-import { resolveAdmin, denyReason } from './core/access.js';
+import { resolveAdmin, denyReason, isAuthEnforced, authRequiredReason } from './core/access.js';
 import { ok, fail } from './core/response.js';
 import { pushLog } from './core/log-ring.js';
 import { requestContext } from './dao/scoped.js';
@@ -111,10 +111,21 @@ function phase2PlaceholderHtml(title) {
 </html>`;
 }
 
-function sendHtmlFile(reply, relPath) {
+function sendHtmlFile(reply, relPath, statusCode = 200) {
     reply.header('Cache-Control', 'no-store');
     reply.type('text/html; charset=utf-8');
+    if (statusCode !== 200) reply.code(statusCode);
     return reply.sendFile(relPath);
+}
+
+function sendProtectedHtml(req, reply, relPath) {
+    const authEnforced = isAuthEnforced();
+    const identified = Boolean(req.userIdentity?.identified);
+    const hasSubpath = Boolean(req.raw?._dhHasSubpath);
+    if (authEnforced && !identified && !hasSubpath) {
+        return sendHtmlFile(reply, '401.html', 401);
+    }
+    return sendHtmlFile(reply, relPath);
 }
 
 export async function createServer() {
@@ -129,6 +140,7 @@ export async function createServer() {
             req._dhRawPath = rawPath;
             req._dhRawSearch = qIdx >= 0 ? rawUrl.slice(qIdx) : '';
             req._dhNeedsTrailingSlash = DH_BARE_SUBPATH_RE.test(rawPath);
+            req._dhHasSubpath = DH_SUBPATH_RE.test(rawPath) || Boolean(String(req.headers['x-forwarded-prefix'] || '').trim());
             return stripSubpathPrefix(rawUrl, req.headers['x-forwarded-prefix']);
         },
     });
@@ -175,7 +187,7 @@ export async function createServer() {
         requestContext.run({ requestId, userId: identity.username }, done);
     });
 
-    // 权限：先判定是否管理员，再按桌面版同款规则拦截非管理员的写操作
+    // 权限：先判定是否管理员，未登录生产请求直接拦 401，再按桌面版同款规则拦截非管理员写操作
     app.addHook('preHandler', async (req, reply) => {
         const apiPath = apiPathOf(req.url);
         if (apiPath === null || /^\/(?:healthz|health|ping)$/.test(apiPath)) return;
@@ -184,6 +196,11 @@ export async function createServer() {
             identity.isAdmin = true;
             identity.isSuper = true;
             identity.role = 'admin';
+        }
+        const authReason = authRequiredReason(apiPath, identity);
+        if (authReason) {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 未登录拒绝：${authReason}`, requestId: req.requestId, userId: identity.username });
+            return reply.code(401).send({ error: authReason, code: 'AUTH_REQUIRED', requestId: req.requestId });
         }
         const reason = denyReason(req.method, apiPath, identity);
         if (reason) {
@@ -325,18 +342,25 @@ export async function createServer() {
         return reply.sendFile('assets/icon.png');
     });
 
-    // ── HTML 页面路由 ──────────────────────────────────────
+    // ── 未登录 / 401 页面与 HTML 页面路由 ──────────────────
+    for (const unauthPath of ['/401', '/401.html', '/unauthorized']) {
+        app.get(unauthPath, async (_req, reply) => sendHtmlFile(reply, '401.html', 401));
+    }
+    for (const loginPath of ['/login', '/login.html']) {
+        app.get(loginPath, async (_req, reply) => sendHtmlFile(reply, '401.html'));
+    }
+
     app.get('/', async (req, reply) => {
         if (req.raw._dhNeedsTrailingSlash) {
             const tail = path.posix.basename(req.raw._dhRawPath);
             return reply.redirect(302, `${tail}/${req.raw._dhRawSearch || ''}`);
         }
-        return sendHtmlFile(reply, 'index.html');
+        return sendProtectedHtml(req, reply, 'index.html');
     });
-    app.get('/index.html', async (_req, reply) => sendHtmlFile(reply, 'index.html'));
+    app.get('/index.html', async (req, reply) => sendProtectedHtml(req, reply, 'index.html'));
 
     for (const [routePath, relHtml] of PHASE1_PAGES.entries()) {
-        app.get(routePath, async (_req, reply) => sendHtmlFile(reply, relHtml));
+        app.get(routePath, async (req, reply) => sendProtectedHtml(req, reply, relHtml));
     }
 
     app.get('/ai-report', async (req, reply) => {
@@ -361,7 +385,7 @@ export async function createServer() {
             'praudit.html': 'praudit.html',
         };
         if (Object.hasOwn(legacyMap, file)) {
-            return sendHtmlFile(reply, legacyMap[file]);
+            return sendProtectedHtml(req, reply, legacyMap[file]);
         }
         reply.type('text/html; charset=utf-8');
         return phase2PlaceholderHtml(file.replace(/\.html$/i, ''));

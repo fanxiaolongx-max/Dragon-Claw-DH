@@ -3893,6 +3893,7 @@ window.doLogout = async function () {
             key === 'tools_platform_name' ||
             key === 'tools_platform_identity' ||
             key === 'builtin_tools_sync_snooze_date_v1' ||
+            key.startsWith('dh_home_tour_v1:') ||
             key.startsWith('tools_ai_proactive_alerts_snoozed') ||
             key.startsWith('tools_ai_proactive_alerts_seen')
         )) {
@@ -3908,7 +3909,7 @@ window.doLogout = async function () {
     sessionStorage.clear();
     try { sessionStorage.setItem('tools_manual_logout', '1'); } catch (_) {}
     document.cookie = 'tools_token=; path=/; max-age=0';
-    window.location.href = '/login.html';
+    window.location.href = '/401.html';
 };
 
 // ==========================================

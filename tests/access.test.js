@@ -35,11 +35,27 @@ test('首位已识别用户成为管理员，其余用户按桌面版规则只�
         APP_DATASOURCE_ID: '2',
     });
     try {
-        // 匿名访问者永远不是管理员，也不会触发“首位管理员”
+        // 匿名访问者永远不是管理员，也不会触发“首位管理员”；且业务 API 与直接页面访问返回 401
         const guest = await (await fetch(`${app.url}/api/auth/me`)).json();
         assert.equal(guest.isAdmin, false);
         assert.equal(guest.identified, false);
+        assert.equal(guest.authRequired, true);
         assert.equal((await fetch(`${app.url}/api/debug/summary`)).status, 403);
+        for (const [m, p] of [['GET', '/api/sla/snapshots'], ['GET', '/api/ai/sessions'], ['POST', '/api/ai/chat'], ['GET', '/api/monthly-snapshots']]) {
+            const unauth = await fetch(`${app.url}${p}`, { method: m, headers: m === 'POST' ? json() : {}, body: m === 'POST' ? '{}' : undefined });
+            assert.equal(unauth.status, 401, `${m} ${p} 未登录应返回 401`);
+            assert.equal((await unauth.json()).code, 'AUTH_REQUIRED');
+        }
+        const directPage = await fetch(`${app.url}/`);
+        assert.equal(directPage.status, 401, '未登录直接访问首页应返回 401');
+        const directHtml = await directPage.text();
+        assert.match(directHtml, /assets\/logo\.png/);
+        assert.match(directHtml, /401/);
+        const monthlyPage = await fetch(`${app.url}/monthly`);
+        assert.equal(monthlyPage.status, 401, '未登录直接访问子页面应返回 401');
+        const subpathPage = await fetch(`${app.url}/digital-human/dh/00000000-0000-4000-8000-000000000001/`);
+        assert.equal(subpathPage.status, 200, '网关子路径首页放行以供 dh-runtime.js 校验 /api/dh/user/current');
+        assert.equal((await fetch(`${app.url}/`, { headers: as('alice') })).status, 200);
 
         const alice = await (await fetch(`${app.url}/api/auth/me`, { headers: as('alice') })).json();
         assert.deepEqual([alice.username, alice.isAdmin, alice.role], ['alice', true, 'admin']);

@@ -1,6 +1,7 @@
 import { BusinessError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
-import { hasAdminMatch, listAdmins, saveAdmins } from '../core/access.js';
+import { config } from '../config.js';
+import { hasAdminMatch, isAuthEnforced, listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
@@ -21,6 +22,8 @@ function publicIdentity(id) {
         appLevel: id.appLevel,
         digitalHumanMode: true,
         memoryMode: isMemoryMode(),
+        openAdmin: Boolean(config.openAdmin),
+        authRequired: isAuthEnforced(),
     };
 }
 

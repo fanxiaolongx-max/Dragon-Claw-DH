@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>401 · 请先登录 - Dragon Claw</title>
+    <script src="js/shared/dh-runtime.js"></script>
+    <style>
+        :root {
+            --bg-top: #f3faf7;
+            --bg-bot: #eef4ff;
+            --card-bg: rgba(255, 255, 255, 0.90);
+            --card-border: rgba(16, 163, 127, 0.16);
+            --ink: #0f172a;
+            --ink-2: #475569;
+            --ink-3: #94a3b8;
+            --accent: #10a37f;
+            --accent-2: #0ea5e9;
+            --accent-soft: rgba(16, 163, 127, 0.10);
+            --shadow: 0 24px 68px rgba(15, 23, 42, 0.12), 0 4px 18px rgba(16, 163, 127, 0.08);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-top: #0b1117;
+                --bg-bot: #0f172a;
+                --card-bg: rgba(20, 26, 36, 0.90);
+                --card-border: rgba(62, 207, 158, 0.18);
+                --ink: #f1f5f9;
+                --ink-2: #cbd5e1;
+                --ink-3: #64748b;
+                --accent: #3ecf9e;
+                --accent-2: #38bdf8;
+                --accent-soft: rgba(62, 207, 158, 0.14);
+                --shadow: 0 28px 72px rgba(0, 0, 0, 0.55), 0 4px 20px rgba(0, 0, 0, 0.35);
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            min-height: 100dvh;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background:
+                radial-gradient(640px 380px at 20% 15%, rgba(16, 163, 127, 0.14), transparent 70%),
+                radial-gradient(560px 340px at 85% 82%, rgba(14, 165, 233, 0.13), transparent 70%),
+                linear-gradient(160deg, var(--bg-top), var(--bg-bot));
+            color: var(--ink);
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+        .dh401-card {
+            position: relative;
+            width: min(460px, 100%);
+            padding: 36px 32px 28px;
+            border-radius: 26px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            backdrop-filter: blur(22px) saturate(1.4);
+            -webkit-backdrop-filter: blur(22px) saturate(1.4);
+            box-shadow: var(--shadow);
+            text-align: center;
+            animation: dh401Enter 420ms cubic-bezier(.22, 1, .36, 1) both;
+        }
+        @keyframes dh401Enter {
+            from { opacity: 0; transform: translateY(14px) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .dh401-mascot-wrap {
+            position: relative;
+            width: 112px;
+            height: 112px;
+            margin: 0 auto 18px;
+            display: grid;
+            place-items: center;
+        }
+        .dh401-halo {
+            position: absolute;
+            inset: 4px;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg, rgba(16, 163, 127, 0.35), rgba(56, 189, 248, 0.32), rgba(251, 191, 36, 0.25), rgba(16, 163, 127, 0.35));
+            filter: blur(10px);
+            animation: dh401Spin 8s linear infinite;
+        }
+        @keyframes dh401Spin { to { transform: rotate(360deg); } }
+        .dh401-dragon {
+            position: relative;
+            z-index: 1;
+            width: 92px;
+            height: 92px;
+            border-radius: 28px;
+            padding: 6px;
+            background: linear-gradient(145deg, #ffffff, #ecfdf5);
+            box-shadow: 0 12px 28px rgba(16, 163, 127, 0.20), inset 0 1px 0 #ffffff;
+            animation: dh401Float 3.4s ease-in-out infinite;
+        }
+        @media (prefers-color-scheme: dark) {
+            .dh401-dragon {
+                background: linear-gradient(145deg, #1e293b, #0f172a);
+                box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            }
+        }
+        @keyframes dh401Float {
+            0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+            50% { transform: translateY(-6px) rotate(1.5deg); }
+        }
+        .dh401-dragon img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 22px;
+        }
+        .dh401-tag {
+            position: absolute;
+            right: -6px;
+            bottom: 2px;
+            z-index: 2;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            background: linear-gradient(135deg, #10a37f, #0ea5e9);
+            color: #ffffff;
+            box-shadow: 0 6px 16px rgba(16, 163, 127, 0.35);
+            border: 2px solid #ffffff;
+        }
+        .dh401-spark {
+            position: absolute;
+            color: #f59e0b;
+            font-size: 14px;
+            line-height: 1;
+            animation: dh401Twinkle 2.4s ease-in-out infinite;
+            user-select: none;
+        }
+        .dh401-spark.s1 { left: 4px; top: 10px; }
+        .dh401-spark.s2 { right: 8px; top: 4px; font-size: 12px; color: #38bdf8; animation-delay: 0.8s; }
+        @keyframes dh401Twinkle {
+            0%, 100% { opacity: 0.45; transform: scale(0.9); }
+            50% { opacity: 1; transform: scale(1.18); }
+        }
+        .dh401-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            margin-bottom: 12px;
+        }
+        .dh401-title {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 750;
+            letter-spacing: -0.02em;
+            line-height: 1.35;
+        }
+        .dh401-desc {
+            margin: 10px auto 0;
+            max-width: 370px;
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--ink-2);
+        }
+        .dh401-actions {
+            margin-top: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .dh401-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            height: 42px;
+            padding: 0 20px;
+            border-radius: 12px;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 650;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 140ms ease, filter 150ms ease, background 150ms ease;
+        }
+        .dh401-btn:active { transform: scale(0.98); }
+        .dh401-btn.primary {
+            border: 0;
+            background: linear-gradient(135deg, #10a37f, #0d9488);
+            color: #ffffff;
+            box-shadow: 0 10px 24px rgba(16, 163, 127, 0.28);
+        }
+        .dh401-btn.primary:hover { filter: brightness(1.06); }
+        .dh401-btn.secondary {
+            border: 1px solid var(--card-border);
+            background: transparent;
+            color: var(--ink-2);
+        }
+        .dh401-btn.secondary:hover { background: var(--accent-soft); color: var(--ink); }
+        .dh401-foot {
+            margin-top: 18px;
+            font-size: 12px;
+            color: var(--ink-3);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .dh401-card, .dh401-halo, .dh401-dragon, .dh401-spark { animation: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <main class="dh401-card" role="main" aria-labelledby="dh401Title">
+        <div class="dh401-mascot-wrap">
+            <span class="dh401-spark s1" aria-hidden="true">✦</span>
+            <span class="dh401-spark s2" aria-hidden="true">✦</span>
+            <div class="dh401-halo" aria-hidden="true"></div>
+            <div class="dh401-dragon">
+                <img src="assets/logo.png" alt="Dragon Claw">
+            </div>
+            <span class="dh401-tag">401</span>
+        </div>
+        <div class="dh401-pill" id="dh401Badge">401 Unauthorized · 登录校验未通过</div>
+        <h1 class="dh401-title" id="dh401Title">小龙还没认出你是谁哦 ~</h1>
+        <p class="dh401-desc" id="dh401Desc">为保障业务与数据安全，未登录或登录状态已过期时暂无法进入 Dragon Claw。请先登录数字人平台后再继续访问。</p>
+        <div class="dh401-actions">
+            <a class="dh401-btn primary" id="dh401LoginBtn" href="../">前往数字人平台登录 →</a>
+            <button type="button" class="dh401-btn secondary" id="dh401RetryBtn">重新检测登录状态</button>
+        </div>
+        <div class="dh401-foot" id="dh401Foot">Dragon Claw · 安全访问守护</div>
+    </main>
+    <script>
+        (function () {
+            const lang = (localStorage.getItem('tools_language') || navigator.language || '').toLowerCase();
+            const isEn = lang.startsWith('en');
+            if (isEn) {
+                document.documentElement.lang = 'en';
+                document.title = '401 · Sign In Required - Dragon Claw';
+                document.getElementById('dh401Badge').textContent = '401 Unauthorized · Sign in required';
+                document.getElementById('dh401Title').textContent = 'Oops, Dragon Claw needs to know you first ~';
+                document.getElementById('dh401Desc').textContent = 'Access to workspace data is protected. Please sign in to the Digital Human portal first before continuing.';
+                document.getElementById('dh401LoginBtn').textContent = 'Go to Digital Human Portal →';
+                document.getElementById('dh401RetryBtn').textContent = 'Re-check sign-in status';
+                document.getElementById('dh401Foot').textContent = 'Dragon Claw · Protected Workspace';
+            }
+            const base = String(window.DH_BASE || '');
+            const portalUrl = /\/dh\/[^/]+$/i.test(base)
+                ? base.replace(/\/dh\/[^/]+$/i, '/')
+                : '/';
+            const loginBtn = document.getElementById('dh401LoginBtn');
+            loginBtn.href = portalUrl;
+            loginBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                try {
+                    (window.top || window).location.href = portalUrl;
+                } catch (_) {
+                    window.location.href = portalUrl;
+                }
+            });
+            document.getElementById('dh401RetryBtn').addEventListener('click', async function () {
+                const btn = this;
+                btn.disabled = true;
+                try {
+                    if (/\/dh\/[^/]+$/i.test(base)) {
+                        const r = await (window.dhRawFetch || window.fetch)(base.replace(/\/dh\/[^/]+$/i, '/api/dh/user/current'), { credentials: 'include' });
+                        const d = r.ok ? await r.json().catch(() => null) : null;
+                        if (d && d.code === 0 && d.data && d.data.uid) {
+                            window.location.replace(base + '/');
+                            return;
+                        }
+                    }
+                    const meRes = await window.fetch('/api/auth/me');
+                    const me = meRes.ok ? await meRes.json().catch(() => null) : null;
+                    if (me && (me.identified || me.memoryMode)) {
+                        window.location.replace(base ? (base + '/') : '/');
+                        return;
+                    }
+                } catch (_) { /* keep 401 screen */ }
+                btn.disabled = false;
+                btn.textContent = isEn ? 'Still not signed in · Go to portal above' : '暂未检测到登录态 · 请先点击上方登录';
+            });
+        })();
+    </script>
+</body>
+</html>

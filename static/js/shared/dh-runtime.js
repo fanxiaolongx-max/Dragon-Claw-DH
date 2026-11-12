@@ -144,9 +144,11 @@
         (document.head || document.documentElement).appendChild(trim);
     } catch (_) { /* ignore */ }
 
+    const IS_401_PAGE = /(?:^|\/)(?:401|unauthorized|login)(?:\.html)?$/i.test(window.location.pathname || '');
+
     // ── Digital Human SSO token marker so legacy frontend skips login redirects ──
     try {
-        if (!localStorage.getItem('tools_token')) {
+        if (!IS_401_PAGE && !localStorage.getItem('tools_token')) {
             localStorage.setItem('tools_token', 'digital-human-sso');
         }
         if (!localStorage.getItem('tools_tenant_id')) {
@@ -155,6 +157,25 @@
         // 推广视频文件不随 Web 版发布（体积大）：视频小窗按「永久关闭」处理，只保留推广链接横幅
         localStorage.setItem('tools.home.promoVideos.dismissed', 'v2');
     } catch (_) { /* ignore storage restrictions */ }
+
+    let dhAuthBootMask = null;
+    function installBootMask() {
+        if (IS_401_PAGE || !DH_BASE || dhAuthBootMask || window !== window.top) return;
+        try {
+            const st = document.createElement('style');
+            st.id = 'dhAuthBootMask';
+            st.textContent = 'html,body{opacity:0 !important;pointer-events:none !important;}';
+            (document.head || document.documentElement).appendChild(st);
+            dhAuthBootMask = st;
+            setTimeout(clearBootMask, 1500);
+        } catch (_) { /* ignore */ }
+    }
+    function clearBootMask() {
+        if (!dhAuthBootMask) return;
+        try { dhAuthBootMask.remove(); } catch (_) { /* ignore */ }
+        dhAuthBootMask = null;
+    }
+    installBootMask();
 
     // ── Digital Human 平台身份同步（规范 §12.5） ──
     // 平台使用 W3 SSO + Cookie/CSRF 双重认证，服务端拿不到浏览器 localStorage 里的 CSRF token；
@@ -193,6 +214,30 @@
     }
 
     let dhPlatformUser = null;
+    let dhPlatformUserSettled = false;
+    let dhRedirecting401 = false;
+    function clearClientAuthState() {
+        dhPlatformUser = null;
+        try {
+            localStorage.removeItem('dh_platform_user');
+            localStorage.removeItem('tools_user');
+            localStorage.removeItem('tools_display_name');
+            localStorage.removeItem('tools_token');
+            localStorage.removeItem('tools_role');
+            localStorage.removeItem('tools_super');
+        } catch (_) { /* ignore */ }
+    }
+    function redirectTo401() {
+        if (IS_401_PAGE || dhRedirecting401) return;
+        dhRedirecting401 = true;
+        clearClientAuthState();
+        const url401 = dhResolveUrl('/401.html');
+        try {
+            (window.top || window).location.replace(url401);
+        } catch (_) {
+            window.location.replace(url401);
+        }
+    }
     try {
         const cachedUser = localStorage.getItem('dh_platform_user');
         if (cachedUser) {
@@ -203,15 +248,19 @@
 
     const origFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
     let dhPlatformUserPromise = null;
-    if (origFetch && /\/dh\/[^/]+$/i.test(DH_BASE)) {
+    if (origFetch && /\/dh\/[^/]+$/i.test(DH_BASE) && !IS_401_PAGE) {
         const currentUserUrl = DH_BASE.replace(/\/dh\/[^/]+$/, '/api/dh/user/current');
         const csrf = getCsrfToken();
         dhPlatformUserPromise = origFetch(currentUserUrl, {
             credentials: 'include',
             headers: csrf ? { 'x-csrf-token': csrf } : {},
         })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
+            .then(async (r) => {
+                if (r.status === 401 || r.status === 403) {
+                    clearClientAuthState();
+                    return null;
+                }
+                const data = r.ok ? await r.json().catch(() => null) : null;
                 if (data && data.code === 0 && data.data && data.data.uid) {
                     const d = data.data;
                     const next = {
@@ -225,14 +274,24 @@
                         localStorage.setItem('dh_platform_user', JSON.stringify(next));
                         localStorage.setItem('tools_user', next.userName);
                         localStorage.setItem('tools_display_name', next.displayName);
+                        if (!localStorage.getItem('tools_token')) localStorage.setItem('tools_token', 'digital-human-sso');
                     } catch (_) { /* ignore */ }
                     if (changed) {
                         try { window.dispatchEvent(new CustomEvent('dh:platform-user', { detail: next })); } catch (_) { /* ignore */ }
                     }
+                    return dhPlatformUser;
                 }
-                return dhPlatformUser;
+                if (r.ok) {
+                    clearClientAuthState();
+                }
+                return null;
             })
-            .catch(() => dhPlatformUser);
+            .catch(() => dhPlatformUser)
+            .finally(() => {
+                dhPlatformUserSettled = true;
+            });
+    } else {
+        dhPlatformUserSettled = true;
     }
 
     // ── Intercept Fetch ──
@@ -291,9 +350,14 @@
                             }
                         }
                         const opts = Object.assign({}, options, { headers });
-                        return origFetch(target, opts).then(unwrapEnvelope);
+                        return origFetch(target, opts).then(unwrapEnvelope).then((resp) => {
+                            if (resp && resp.status === 401 && !IS_401_PAGE && !/\/api\/auth\/(?:me|logout)\b/.test(url)) {
+                                redirectTo401();
+                            }
+                            return resp;
+                        });
                     };
-                    if (!dhPlatformUser && dhPlatformUserPromise) {
+                    if (!dhPlatformUserSettled && dhPlatformUserPromise) {
                         return dhPlatformUserPromise.then(sendApiFetch, sendApiFetch);
                     }
                     return sendApiFetch();
@@ -501,12 +565,23 @@
         document.body.appendChild(bar);
     }
     function mountDebugWidgetAssets() {
-        if (window !== window.top) return; // Keep widget strictly on top frame to avoid duplicate floating pills
-        window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then((me) => {
+        if (IS_401_PAGE) return;
+        const checkMe = () => window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then((me) => {
             window.DH_ME = me || null;
+            if (me && me.authRequired && !me.identified && !me.memoryMode && !me.openAdmin) {
+                redirectTo401();
+                return;
+            }
+            clearBootMask();
+            if (window !== window.top) return; // Keep widget strictly on top frame to avoid duplicate floating pills
             if (me && me.memoryMode) showMemoryBanner();
             if (me && me.isAdmin) mountDebugWidgetNow();
-        }).catch(() => {});
+        }).catch(() => { clearBootMask(); });
+        if (!dhPlatformUserSettled && dhPlatformUserPromise) {
+            dhPlatformUserPromise.then(checkMe, checkMe);
+        } else {
+            checkMe();
+        }
     }
     function mountDebugWidgetNow() {
         const cssHref = dhResolveUrl('/css/dh-debug-widget.css');

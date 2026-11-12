@@ -106,6 +106,20 @@ const USER_WRITES = [
     ['POST', /^\/duty-roster$/], // 已识别用户可维护各月份值班表（与桌面版一致）
 ];
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
+const ANON_ALLOWED_APIS = [/^\/auth\/(?:me|logout)$/, /^\/platform-logo\/image$/, /^\/(?:healthz|health|ping)$/];
+
+/** 生产环境（已注入基座 API 且未开启免鉴权/内存模式）强制要求已识别身份。 */
+export function isAuthEnforced() {
+    return !isMemoryMode() && !config.openAdmin && Boolean(config.baseQueryUrl);
+}
+
+/** 未登录时对业务 API 返回 401 拒绝原因；管理员只读调试接口保留给 denyReason 判 403。 */
+export function authRequiredReason(apiPath, identity) {
+    if (!isAuthEnforced() || identity?.identified) return null;
+    if (ANON_ALLOWED_APIS.some((re) => re.test(apiPath))) return null;
+    if (ADMIN_READS.some((re) => re.test(apiPath))) return null;
+    return '未登录或登录状态已失效，请先登录数字人平台';
+}
 
 /** 返回 null 表示放行，否则返回拒绝原因。path 为去掉 /api 前缀后的路径。 */
 export function denyReason(method, path, identity) {
