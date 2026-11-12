@@ -340,17 +340,121 @@ function monthOfTimestamp(ts) {
 
 function toNumber(v) {
     if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-    const s = String(v ?? '').replace(/[%％,\s]/g, '').trim();
+    const s = String(v ?? '').replace(/^[≥≤><=\s]+/, '').replace(/[%％,\s]/g, '').trim();
     if (!s) return null;
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
 }
 
+function inferMonthFromTargetNum(targetNum, referenceTs, fallbackMonth) {
+    const m = Number(targetNum);
+    if (!Number.isFinite(m) || m < 1 || m > 12) return '';
+    const tsMonth = monthOfTimestamp(referenceTs);
+    const refYear = tsMonth
+        ? Number(tsMonth.slice(0, 4))
+        : (validMonth(fallbackMonth) ? Number(fallbackMonth.slice(0, 4)) : new Date().getUTCFullYear());
+    const tsM = tsMonth ? Number(tsMonth.slice(5)) : 0;
+    const year = (tsM && m > tsM && tsM <= 3 && m >= 10) ? refYear - 1 : refYear;
+    return `${year}-${String(m).padStart(2, '0')}`;
+}
+
+function resolveSnapshotMonth(snap, reportMonth) {
+    if (validMonth(snap?.target_period)) return snap.target_period;
+    if (snap?.target_month != null) {
+        const inferred = inferMonthFromTargetNum(snap.target_month, snap.captured_at, reportMonth);
+        if (inferred) return inferred;
+    }
+    return monthOfTimestamp(snap?.captured_at);
+}
+
+function resolveReportSnapshotMonth(snap, reportMonth) {
+    if (snap?.month != null) {
+        const inferred = inferMonthFromTargetNum(snap.month, snap.created_at, reportMonth);
+        if (inferred) return inferred;
+    }
+    return monthOfTimestamp(snap?.created_at);
+}
+
+function inferTargetRule(targetText) {
+    const t = String(targetText || '');
+    if (!t) return '';
+    if (/[≤<]|<=/.test(t)) return 'lte';
+    if (/[≥>]|>=/.test(t)) return 'gte';
+    return '';
+}
+
+async function loadReportSnapshotBundle(month) {
+    const snaps = await listReportSnapshots().catch(() => []);
+    if (!snaps.length) return { snapshot: null, allSnapshots: [], categories: [], metrics: [] };
+    const matched = validMonth(month)
+        ? snaps.filter((s) => resolveReportSnapshotMonth(s, month) === month)
+        : snaps;
+    const cur = matched[0] || null;
+    if (!cur) return { snapshot: null, allSnapshots: snaps, categories: [], metrics: [] };
+    const cond = `\`snapshot_id\` = ${sqlVal(cur.snapshot_id)}`;
+    const mem = (r) => r.snapshot_id === cur.snapshot_id && (cur.month == null || r.month == null || Number(r.month) === Number(cur.month));
+    const [categories, metrics] = await Promise.all([
+        selectTable('report_category_scores', {
+            columns: ['snapshot_id', 'month', 'cat_name', 'base_score', 'manual_score', 'final_score'],
+            whereSql: cond,
+            limit: 500,
+            memFilter: mem,
+        }).catch(() => []),
+        selectTable('report_metric_data', {
+            columns: ['snapshot_id', 'month', 'cat_name', 'metric_label', 'weight', 'target_val', 'raw_val', 'num_val', 'is_failing', 'gap', 'earned_score', 'proportional_scoring', 'completion_ratio'],
+            whereSql: cond,
+            limit: 2000,
+            memFilter: mem,
+        }).catch(() => []),
+    ]);
+    return { snapshot: cur, allSnapshots: snaps, categories, metrics };
+}
+
+function extractMatchKeywords(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return [];
+    const tokens = new Set();
+    for (const m of raw.matchAll(/[A-Za-z0-9_-]{2,}/g)) {
+        tokens.add(m[0].toLowerCase());
+    }
+    const stop = /指标|情况|看看|想要|一下|展示|月报|数据|分析|本月|统计|请问|如何|什么|可以|帮我|列出|全部/;
+    for (const seq of raw.matchAll(/[\u4e00-\u9fa5]{2,}/g)) {
+        const w = seq[0];
+        if (!stop.test(w) && w.length <= 6) tokens.add(w);
+        for (let i = 0; i <= w.length - 2; i += 1) {
+            const sub = w.slice(i, i + 2);
+            if (!stop.test(sub)) tokens.add(sub);
+        }
+    }
+    return Array.from(tokens).slice(0, 20);
+}
+
+function rankMetricsForQuery(metrics, queryText, limit = 120) {
+    if (!metrics.length) return [];
+    const keywords = extractMatchKeywords(queryText);
+    const scored = metrics.map((m, idx) => {
+        const hay = `${m.label || ''} ${m.category || ''} ${m.metricName || ''} ${m.key || ''}`.toLowerCase();
+        let score = 0;
+        for (const kw of keywords) {
+            if (hay.includes(kw)) score += kw.length >= 2 ? 10 : 4;
+        }
+        if (m.isFailing) score += 2;
+        if (!m.category) score += 1;
+        return { m, score, idx };
+    });
+    scored.sort((a, b) => b.score - a.score || a.idx - b.idx);
+    return scored.slice(0, limit).map((x) => x.m);
+}
+
 export async function listAiReportSources(month) {
     const cat = await getSourceCatalog({ days: 0 });
+    const batchMap = new Map((cat.batches || []).map((b) => [b.id, b]));
     return (cat.files || []).filter((f) => {
         if (!month) return true;
-        const m = monthOfTimestamp(f.created_at);
+        const batch = batchMap.get(f.batch_id);
+        const m = batch?.target_month != null
+            ? inferMonthFromTargetNum(batch.target_month, batch.created_at || f.created_at, month)
+            : monthOfTimestamp(f.created_at);
         return !m || m === month;
     }).map((f) => ({
         fileId: f.id,
@@ -370,48 +474,160 @@ export async function listAiReportSources(month) {
 }
 
 export async function listAiReportMetrics(month) {
-    const [cat, targetsRes] = await Promise.all([
+    const [cat, targetsRes, reportBundle] = await Promise.all([
         getSourceCatalog({ days: 0 }),
         getTargets().catch(() => ({})),
+        loadReportSnapshotBundle(month),
     ]);
     const targetItems = targetsRes.items || targetsRes || {};
     const monthNum = validMonth(month) ? Number(month.slice(5)) : new Date().getUTCMonth() + 1;
     const seen = new Map();
+    const byNameCat = new Map();
 
     for (const snap of cat.snapshots || []) {
-        const snapMonth = monthOfTimestamp(snap.captured_at) || (snap.target_month ? `${String(month || new Date().getUTCFullYear()).slice(0, 4)}-${String(snap.target_month).padStart(2, '0')}` : '');
+        const snapMonth = resolveSnapshotMonth(snap, month);
         if (month && snapMonth && snapMonth !== month) continue;
         for (const metric of snap.metrics || []) {
             const entries = [
-                metric,
-                ...(metric.subMetrics || []).map((c) => ({ ...c, key: `${metric.key}/${c.category}`, label: `${metric.label} / ${c.category}` })),
+                {
+                    key: metric.key,
+                    label: metric.label || metric.key,
+                    altLabel: '',
+                    metricName: metric.label || metric.key,
+                    category: '',
+                    value: metric.value ?? null,
+                    numValue: toNumber(metric.value),
+                    target: metric.target ?? null,
+                    isFailing: Boolean(metric.isWarn),
+                    gap: metric.gap ?? null,
+                },
+                ...(metric.subMetrics || []).map((c) => {
+                    const mName = metric.label || metric.key;
+                    const catName = String(c.category || '').trim();
+                    return {
+                        key: `${metric.key}/${catName}`,
+                        label: catName ? `${mName} / ${catName}` : mName,
+                        altLabel: catName ? `${catName} / ${mName}` : '',
+                        metricName: mName,
+                        category: catName,
+                        value: c.value ?? null,
+                        numValue: toNumber(c.value),
+                        target: c.target ?? metric.target ?? null,
+                        isFailing: Boolean(c.isWarn),
+                        gap: c.gap ?? null,
+                    };
+                }),
             ];
             for (const e of entries) {
                 if (!e.key || seen.has(e.key)) continue;
                 const tgt = targetItems[e.key.split('/')[0]];
                 const tVal = tgt?.[monthNum];
-                seen.set(e.key, {
+                const targetText = tVal != null ? `${tgt.type === 'lte' ? '≤ ' : '≥ '}${tVal}${tgt.isPercent ? '%' : ''}` : (e.target ?? null);
+                const item = {
                     key: e.key,
-                    label: e.label || e.key,
-                    value: e.value ?? null,
-                    target: tVal != null ? `${tgt.type === 'lte' ? '≤ ' : '≥ '}${tVal}${tgt.isPercent ? '%' : ''}` : (e.target ?? null),
-                    targetValue: toNumber(tVal),
-                    targetRule: tgt?.type || '',
+                    label: e.label,
+                    altLabel: e.altLabel,
+                    metricName: e.metricName,
+                    category: e.category,
+                    value: e.value,
+                    numValue: e.numValue,
+                    target: targetText,
+                    targetValue: toNumber(tVal ?? targetText),
+                    targetRule: tgt?.type || inferTargetRule(targetText),
+                    isFailing: e.isFailing,
+                    gap: e.gap,
+                    weight: null,
+                    earnedScore: null,
                     origin: snap.kind || 'extraction',
                     capturedAt: snap.captured_at,
-                });
+                };
+                seen.set(e.key, item);
+                const sig = `${String(item.metricName || '').trim().toLowerCase()}::${String(item.category || '').trim().toLowerCase()}`;
+                if (!byNameCat.has(sig)) byNameCat.set(sig, item);
             }
         }
     }
+
+    for (const r of reportBundle.metrics || []) {
+        const mName = String(r.metric_label || '').trim();
+        if (!mName) continue;
+        const catName = String(r.cat_name || '').trim();
+        const label = catName ? `${mName} / ${catName}` : mName;
+        const altLabel = catName ? `${catName} / ${mName}` : '';
+        const numValue = r.num_val != null && Number.isFinite(Number(r.num_val))
+            ? Number(r.num_val)
+            : toNumber(r.raw_val);
+        const value = r.raw_val != null && String(r.raw_val).trim() !== ''
+            ? String(r.raw_val)
+            : (numValue != null ? String(numValue) : null);
+        const targetText = r.target_val != null && String(r.target_val).trim() !== '' ? String(r.target_val) : null;
+        const sig = `${mName.toLowerCase()}::${catName.toLowerCase()}`;
+        const existing = byNameCat.get(sig);
+        if (existing) {
+            if (existing.value == null && value != null) existing.value = value;
+            if (existing.numValue == null && numValue != null) existing.numValue = numValue;
+            if (!existing.target && targetText) existing.target = targetText;
+            if (existing.targetValue == null && targetText) existing.targetValue = toNumber(targetText);
+            if (!existing.targetRule && targetText) existing.targetRule = inferTargetRule(targetText);
+            if (Number(r.is_failing) === 1) existing.isFailing = true;
+            if (existing.gap == null && r.gap != null) existing.gap = r.gap;
+            if (r.weight != null) existing.weight = Number(r.weight);
+            if (r.earned_score != null) existing.earnedScore = Number(r.earned_score);
+            continue;
+        }
+        const key = `report:${catName || 'all'}:${mName}`;
+        if (seen.has(key)) continue;
+        const item = {
+            key,
+            label,
+            altLabel,
+            metricName: mName,
+            category: catName,
+            value,
+            numValue,
+            target: targetText,
+            targetValue: toNumber(targetText),
+            targetRule: inferTargetRule(targetText),
+            isFailing: Number(r.is_failing) === 1,
+            gap: r.gap ?? null,
+            weight: r.weight != null ? Number(r.weight) : null,
+            earnedScore: r.earned_score != null ? Number(r.earned_score) : null,
+            origin: 'report_dashboard',
+            capturedAt: reportBundle.snapshot?.created_at || '',
+        };
+        seen.set(key, item);
+        byNameCat.set(sig, item);
+    }
+
     return Array.from(seen.values());
 }
 
 export async function listAiReportDatasets(month) {
-    const snaps = await listReportSnapshots();
+    const reportBundle = await loadReportSnapshotBundle(month);
     return {
         month: month || '',
         datasets: [
-            { id: 'report_snapshots', name: '报表历史快照汇总', source: 'report_snapshots', period: 'monthly', rowCount: snaps.length },
+            {
+                id: 'report_metric_data',
+                name: '月度报表考核指标明细',
+                source: 'report_metric_data',
+                period: 'monthly',
+                rowCount: reportBundle.metrics.length,
+            },
+            {
+                id: 'report_category_scores',
+                name: '月度分类得分汇总',
+                source: 'report_category_scores',
+                period: 'monthly',
+                rowCount: reportBundle.categories.length,
+            },
+            {
+                id: 'report_snapshots',
+                name: '报表历史快照汇总',
+                source: 'report_snapshots',
+                period: 'monthly',
+                rowCount: reportBundle.allSnapshots.length,
+            },
         ],
     };
 }
@@ -461,26 +677,82 @@ export async function runAiReportData({ month, recipe: rawRecipe } = {}) {
             const targets = {};
             const rules = {};
             for (const m of metrics) {
-                values[m.label] = toNumber(m.value);
-                values[m.key] = toNumber(m.value);
-                if (m.targetValue != null) targets[m.label] = m.targetValue;
-                if (m.targetRule) rules[m.label] = m.targetRule;
+                const num = m.numValue != null ? m.numValue : toNumber(m.value);
+                values[m.label] = num;
+                values[m.key] = num;
+                if (m.altLabel) values[m.altLabel] = num;
+                if (m.targetValue != null) {
+                    targets[m.label] = m.targetValue;
+                    targets[m.key] = m.targetValue;
+                    if (m.altLabel) targets[m.altLabel] = m.targetValue;
+                }
+                if (m.targetRule) {
+                    rules[m.label] = m.targetRule;
+                    rules[m.key] = m.targetRule;
+                    if (m.altLabel) rules[m.altLabel] = m.targetRule;
+                }
             }
-            const chosen = source.names.length
-                ? metrics.filter((m) => source.names.includes(m.label))
+            const wantedNames = new Set((source.names || []).map((s) => String(s).trim()).filter(Boolean));
+            const wantedKeys = new Set((source.keys || []).map((s) => String(s).trim()).filter(Boolean));
+            const chosen = (wantedNames.size || wantedKeys.size)
+                ? metrics.filter((m) => (
+                    wantedNames.has(m.label) ||
+                    (m.altLabel && wantedNames.has(m.altLabel)) ||
+                    (m.metricName && wantedNames.has(m.metricName)) ||
+                    wantedNames.has(m.key) ||
+                    wantedKeys.has(m.key)
+                ))
                 : metrics;
             if (!chosen.length) missing.push({ id: source.id, label: source.label || source.id, month: srcMonth });
             input[source.id] = { month: srcMonth, metrics: chosen, values, targets, rules };
         } else if (source.kind === 'dataset') {
-            const snaps = await listReportSnapshots();
-            input[source.id] = {
-                month: srcMonth,
-                source: 'report_snapshots',
-                name: '报表历史快照汇总',
-                period: 'monthly',
-                headers: ['snapshot_id', 'month', 'created_at', 'standard_total_score'],
-                rows: snaps,
-            };
+            const reportBundle = await loadReportSnapshotBundle(srcMonth);
+            if (source.dataset === 'report_metric_data') {
+                const rows = reportBundle.metrics.map((r) => ({
+                    snapshot_id: r.snapshot_id,
+                    month: r.month,
+                    cat_name: r.cat_name,
+                    metric_label: r.metric_label,
+                    label: r.cat_name ? `${r.metric_label} / ${r.cat_name}` : r.metric_label,
+                    weight: r.weight ?? null,
+                    target_val: r.target_val ?? null,
+                    raw_val: r.raw_val ?? null,
+                    num_val: r.num_val ?? toNumber(r.raw_val),
+                    is_failing: Number(r.is_failing) === 1 ? 1 : 0,
+                    gap: r.gap ?? null,
+                    earned_score: r.earned_score ?? null,
+                    completion_ratio: r.completion_ratio ?? null,
+                }));
+                if (!rows.length) missing.push({ id: source.id, label: source.label || source.id, month: srcMonth });
+                input[source.id] = {
+                    month: srcMonth,
+                    source: 'report_metric_data',
+                    name: '月度报表考核指标明细',
+                    period: 'monthly',
+                    headers: ['snapshot_id', 'month', 'cat_name', 'metric_label', 'label', 'weight', 'target_val', 'raw_val', 'num_val', 'is_failing', 'gap', 'earned_score', 'completion_ratio'],
+                    rows,
+                };
+            } else if (source.dataset === 'report_category_scores') {
+                const rows = reportBundle.categories;
+                if (!rows.length) missing.push({ id: source.id, label: source.label || source.id, month: srcMonth });
+                input[source.id] = {
+                    month: srcMonth,
+                    source: 'report_category_scores',
+                    name: '月度分类得分汇总',
+                    period: 'monthly',
+                    headers: ['snapshot_id', 'month', 'cat_name', 'base_score', 'manual_score', 'final_score'],
+                    rows,
+                };
+            } else {
+                input[source.id] = {
+                    month: srcMonth,
+                    source: 'report_snapshots',
+                    name: '报表历史快照汇总',
+                    period: 'monthly',
+                    headers: ['snapshot_id', 'month', 'created_at', 'standard_total_score'],
+                    rows: reportBundle.allSnapshots,
+                };
+            }
         } else {
             input[source.id] = null;
         }
@@ -685,16 +957,62 @@ async function runStructuredAiTurn(systemInstruction, userPrompt, fallbackObj) {
     return { ...(parsed && typeof parsed === 'object' ? parsed : fallbackObj), _rounds: [round] };
 }
 
+function buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText }) {
+    const ranked = rankMetricsForQuery(metrics, queryText, 120);
+    const categories = Array.from(new Set(metrics.map((m) => m.category).filter(Boolean)));
+    const failing = metrics.filter((m) => m.isFailing);
+    const activeDatasets = (datasetsRes?.datasets || []).filter((d) => d.rowCount > 0 || d.id === 'report_snapshots');
+    const metricLines = ranked.map((m) => {
+        const parts = [`${m.label}: ${m.value ?? '—'}`];
+        if (m.target) parts.push(`目标 ${m.target}`);
+        if (m.isFailing) parts.push(m.gap ? `未达标(差${m.gap})` : '未达标');
+        return parts.join(' | ');
+    });
+    const catScoresText = (reportBundle?.categories || [])
+        .map((c) => `${c.cat_name}:${c.final_score ?? c.base_score ?? '—'}`)
+        .join(', ');
+    return {
+        ranked,
+        categories,
+        failing,
+        activeDatasets,
+        hasAnyData: metrics.length > 0 || sources.length > 0 || activeDatasets.some((d) => d.rowCount > 0),
+        text: [
+            `月份: ${month}`,
+            `指标分类(${categories.length}): ${categories.join(', ') || '无'}`,
+            catScoresText ? `分类得分: ${catScoresText}` : '',
+            `可用导入表(${sources.length}): ${sources.map((s) => `${s.name}${s.sheets?.length ? `[${s.sheets.map((x) => `${x.name}:${x.rowCount}行`).join(',')}]` : ''}`).slice(0, 20).join(', ') || '无独立源文件（已直接入库指标快照）'}`,
+            `可用数据集(${activeDatasets.length}): ${activeDatasets.map((d) => `${d.id}(${d.name}, ${d.rowCount}行)`).join('; ')}`,
+            `可用指标总计 ${metrics.length} 个（未达标 ${failing.length} 个），按相关性优先列出前 ${ranked.length} 个:`,
+            metricLines.join('\n') || '暂无指标',
+        ].filter(Boolean).join('\n'),
+    };
+}
+
 export async function aiReportCellChat({ month, message, chat = [], prompt = '' } = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     if (!String(message || '').trim()) fail('请输入要问的内容');
-    const sources = await listAiReportSources(month);
-    const metrics = await listAiReportMetrics(month);
-    const sys = '你是 AI 月报格子助手。请结合当前月份可用数据源与指标返回严格 JSON：{"type":"answer|ask|ready","text":"说明","question":"提问","choices":["选项1"]}。';
-    const usr = `月份: ${month}\n可用数据源(${sources.length}): ${sources.map((s) => s.name).slice(0, 15).join(', ')}\n可用指标(${metrics.length}): ${metrics.map((m) => m.label).slice(0, 20).join(', ')}\n当前提示词: ${prompt}\n历史对话: ${JSON.stringify(chat.slice(-6))}\n用户消息: ${message}`;
+    const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
+        listAiReportSources(month),
+        listAiReportMetrics(month),
+        listAiReportDatasets(month),
+        loadReportSnapshotBundle(month),
+    ]);
+    const queryText = [message, prompt, ...(Array.isArray(chat) ? chat.slice(-4).map((c) => c?.text || '') : [])].join(' ');
+    const ctx = buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText });
+
+    const sys = [
+        '你是 AI 月报格子助手。请结合当前月份平台内已入库的数据源、数据集与指标，返回严格 JSON：{"type":"answer|ask|ready","text":"说明","question":"提问","choices":["选项1"]}。',
+        '重要约束：',
+        '1. 用户在「数据导入」和「报表看板」保存的指标已自动同步在下方上下文的「可用指标」与「可用数据集」中。',
+        '2. 只要可用指标数 > 0 或可用数据集行数 > 0，绝对禁止向用户提问“是否需要配置数据源和指标”，也禁止在 choices 中给出“去配置数据源和指标”“上传Excel/CSV文件”“尝试连接业务数据库”等引导外部导入的选项。',
+        '3. 当用户提及某个关键词（如“整改”“拓扑”“预案”“未达标”“ET/TE/VDF”）且下方存在相关指标时，优先直接返回 type:"ready" 说明已匹配到的具体指标清单与拟展示方式；只有确实存在展示维度/筛选范围歧义时，才用 type:"ask" 给出基于现有真实指标或分类的具体选项（例如“全部整改指标明细表”“仅展示未达标整改项”“按分类（ET/TE/VDF）对比柱图”）。',
+        '4. 只有当可用指标、数据集、导入表全部为空（均为 0）时，才能告知本月尚无入库数据并提示在「数据导入」或「报表看板」保存本月数据。',
+    ].join('\n');
+    const usr = `${ctx.text}\n当前提示词: ${prompt}\n历史对话: ${JSON.stringify((Array.isArray(chat) ? chat : []).slice(-6))}\n用户消息: ${message}`;
     return runStructuredAiTurn(sys, usr, {
         type: 'ready',
-        text: `已理解你的需求（${String(message).slice(0, 80)}）。当前可用指标 ${metrics.length} 个、导入表 ${sources.length} 份。`,
+        text: `已理解你的需求（${String(message).slice(0, 80)}）。当前月份已就绪指标 ${metrics.length} 个（未达标 ${ctx.failing.length} 个）、数据集行数 ${ctx.activeDatasets.reduce((s, d) => s + (d.rowCount || 0), 0)} 行。`,
     });
 }
 
@@ -730,24 +1048,114 @@ export async function aiReportCellGist({ month, items = [] } = {}) {
     return { gists };
 }
 
-export async function aiReportCellCompile({ month, prompt = '' } = {}) {
+function buildFallbackInteractiveRender(month) {
+    return `function render(result, kit) {
+  if (!result || !result.items || !result.items.length) {
+    var emptyHtml = '<div style="padding:16px;color:#64748b;font-size:13px;">当前月份（' + kit.esc('${month}') + '）暂无匹配的已入库指标数据，请检查筛选条件或先在「数据导入 / 报表看板」保存本月数据。</div>';
+    return kit.interactive({ html: emptyHtml, css: '', script: '' }, { height: 140 });
+  }
+  var rowsHtml = result.items.map(function(it) {
+    var bad = !!it.isFailing;
+    var badge = bad
+      ? '<span class="air-tag air-tag-bad">未达标' + (it.gap ? ' · 差 ' + kit.esc(it.gap) : '') + '</span>'
+      : '<span class="air-tag air-tag-ok">达标</span>';
+    return '<tr class="' + (bad ? 'air-row-bad' : '') + '">'
+      + '<td>' + kit.esc(it.category || '—') + '</td>'
+      + '<td><strong>' + kit.esc(it.metricName || it.label) + '</strong></td>'
+      + '<td class="num">' + kit.esc(it.target || '—') + '</td>'
+      + '<td class="num"><strong>' + kit.esc(it.value != null ? it.value : '—') + '</strong></td>'
+      + '<td>' + badge + '</td>'
+      + '</tr>';
+  }).join('');
+  var html = '<div class="air-fb-wrap">'
+    + '<div class="air-fb-head">'
+    + '<div class="air-fb-title">' + kit.esc(result.title || '本月指标概览') + '</div>'
+    + '<div class="air-fb-meta">共 <strong>' + result.count + '</strong> 项 · 未达标 <strong class="bad">' + result.failingCount + '</strong> 项</div>'
+    + '</div>'
+    + '<div class="air-fb-table-wrap"><table class="air-fb-table">'
+    + '<thead><tr><th>分类</th><th>指标名称</th><th class="num">目标</th><th class="num">实际值</th><th>状态</th></tr></thead>'
+    + '<tbody>' + rowsHtml + '</tbody>'
+    + '</table></div></div>';
+  var css = '.air-fb-wrap{font-family:inherit;color:#1e293b;padding:4px 2px;}'
+    + '.air-fb-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;}'
+    + '.air-fb-title{font-size:14px;font-weight:700;color:#0f172a;}'
+    + '.air-fb-meta{font-size:12px;color:#64748b;}'
+    + '.air-fb-meta .bad{color:#dc2626;}'
+    + '.air-fb-table-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:8px;}'
+    + '.air-fb-table{width:100%;border-collapse:collapse;font-size:12.5px;}'
+    + '.air-fb-table th{background:#f8fafc;color:#475569;font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid #e2e8f0;white-space:nowrap;}'
+    + '.air-fb-table td{padding:7px 10px;border-bottom:1px solid #f1f5f9;color:#1e293b;}'
+    + '.air-fb-table th.num,.air-fb-table td.num{text-align:right;font-variant-numeric:tabular-nums;}'
+    + '.air-fb-table tr.air-row-bad{background:#fff8f8;}'
+    + '.air-tag{display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;font-weight:600;}'
+    + '.air-tag-bad{background:#fee2e2;color:#b91c1c;}'
+    + '.air-tag-ok{background:#dcfce7;color:#15803d;}';
+  var h = Math.max(200, Math.min(640, result.items.length * 36 + 100));
+  return kit.interactive({ html: html, css: css, script: '' }, { height: h });
+}`;
+}
+
+export async function aiReportCellCompile({
+    month,
+    prompt = '',
+    interactive = false,
+    recipe = null,
+    previousPrompt = '',
+    error = '',
+    style = '',
+    outline = null,
+    presentation = null,
+} = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     if (!String(prompt).trim()) fail('还没有最终提示词');
-    const sources = await listAiReportSources(month);
-    const metrics = await listAiReportMetrics(month);
+    const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
+        listAiReportSources(month),
+        listAiReportMetrics(month),
+        listAiReportDatasets(month),
+        loadReportSnapshotBundle(month),
+    ]);
+    const ctx = buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText: prompt });
+    const kws = extractMatchKeywords(prompt);
+    const matched = kws.length
+        ? metrics.filter((m) => kws.some((kw) => `${m.label} ${m.category} ${m.metricName}`.toLowerCase().includes(kw)))
+        : [];
+    const fallbackNames = matched.length ? matched.slice(0, 40).map((m) => m.label) : [];
 
     const fallbackRecipe = {
         summary: { zh: prompt.slice(0, 120), en: 'AI Report Cell' },
-        sources: metrics.length
-            ? [{ id: 'm1', kind: 'metrics', label: `${month} 考核指标`, names: metrics.slice(0, 8).map((m) => m.label), monthOffset: 0 }]
+        sources: (metrics.length || reportBundle.metrics.length)
+            ? [{ id: 'm1', kind: 'metrics', label: `${month} 考核指标`, names: fallbackNames, monthOffset: 0 }]
             : [],
-        compute: `function compute(input) {\n  var m = (input && input.m1 && input.m1.metrics) || [];\n  return { count: m.length, items: m.slice(0, 10) };\n}`,
-        render: `function render(result, kit) {\n  if (!result || !result.items || !result.items.length) {\n    return kit.text('当前月份（${month}）暂无可展示指标数据，请先导入 SLA 快照。');\n  }\n  return kit.table(result.items, { title: '本月指标概览', columns: [{ key: 'label', label: '指标名称' }, { key: 'value', label: '当前值', align: 'right' }, { key: 'target', label: '目标值', align: 'right' }] });\n}`,
+        compute: `function compute(input) {\n  var all = (input && input.m1 && input.m1.metrics) || [];\n  var list = all.slice(0, 30).map(function(m) {\n    return {\n      label: m.label || '',\n      category: m.category || '',\n      metricName: m.metricName || m.label || '',\n      value: m.value,\n      numValue: m.numValue,\n      target: m.target,\n      gap: m.gap,\n      isFailing: !!m.isFailing,\n      earnedScore: m.earnedScore\n    };\n  });\n  var failingCount = list.filter(function(x) { return x.isFailing; }).length;\n  return { title: ${JSON.stringify(prompt.slice(0, 32))}, count: list.length, failingCount: failingCount, items: list };\n}`,
+        render: interactive
+            ? buildFallbackInteractiveRender(month)
+            : `function render(result, kit) {\n  if (!result || !result.items || !result.items.length) {\n    return kit.text('当前月份（${month}）暂无可展示指标数据，请先导入 SLA 快照。');\n  }\n  return kit.table(result.items, { title: '本月指标概览', columns: [{ key: 'category', label: '分类' }, { key: 'metricName', label: '指标名称' }, { key: 'target', label: '目标值', align: 'right' }, { key: 'value', label: '当前值', align: 'right' }, { key: 'gap', label: '差距', align: 'right' }] });\n}`,
         narrative: null,
     };
 
-    const sys = '你是月报配方编译器。只输出 JSON：{"recipe":{"summary":{"zh":"","en":""},"sources":[],"compute":"function compute(input){...}","render":"function render(result,kit){...}","narrative":null}}。';
-    const usr = `月份: ${month}\n最终提示词:\n${prompt}\n可用表(${sources.length}): ${JSON.stringify(sources.slice(0, 10))}\n可用指标(${metrics.length}): ${metrics.slice(0, 20).map((m) => m.label).join(', ')}`;
+    const sys = [
+        '你是月报配方编译器。只输出 JSON：{"recipe":{"summary":{"zh":"","en":""},"sources":[],"compute":"function compute(input){...}","render":"function render(result,kit){...}","narrative":null}}。',
+        '数据源规范：',
+        '- 指标源：{"id":"m1","kind":"metrics","label":"本月指标","names":[...可选，留空数组则返回全部指标],"monthOffset":0}。input.m1 包含 {month, metrics:[{key,label,altLabel,metricName,category,value,numValue,target,targetValue,targetRule,isFailing,gap,weight,earnedScore}], values:{[label]:number}, targets:{[label]:number}, rules}。',
+        '- 数据集源：{"id":"d1","kind":"dataset","dataset":"report_metric_data|report_category_scores|report_snapshots","label":"...","monthOffset":0}。report_metric_data.rows 每行含 {cat_name,metric_label,label,target_val,raw_val,num_val,is_failing,gap,weight,earned_score}；report_category_scores.rows 含 {cat_name,base_score,manual_score,final_score}。',
+        '- 导入表源：{"id":"s1","kind":"sheet","match":{"sourceKey":"...","tableName":"...","sheetName":"..."},"monthOffset":0}。',
+        '沙箱安全约束：',
+        '- compute 禁止使用示例/假数据或 Math.random()，数值计算使用 numValue / values[label] / targets[label]，不要拿带 % 的字符串做数值运算或给图表喂文本。',
+        '- 不要用不完整的简称去读 values[...]，优先遍历 input.m1.metrics 数组筛选 metricName / category / label / isFailing。',
+        '- HTML 中绝对不要出现 undefined / NaN / [object Object] / null% / **加粗**。',
+        interactive
+            ? '- 【强约束 interactive=true】：本次 render(result, kit) 必须只返回一次 kit.interactive({ html, css, script }, { height })（禁止在 kit.interactive 之外返回 kit.table/kit.bar/kit.layout），图表用内联 <svg>，且 recipe.narrative 必须为 null。'
+            : '- render(result, kit) 可返回 kit.table / kit.kpi / kit.bar / kit.line / kit.pie / kit.layout / HTML 字符串。',
+    ].join('\n');
+    const extraContext = [
+        previousPrompt ? `上次提示词:\n${previousPrompt}` : '',
+        recipe ? `现有配方参考:\n${JSON.stringify({ sources: recipe.sources, compute: recipe.compute }).slice(0, 1500)}` : '',
+        error ? `上次运行报错（必须修复该错误）:\n${error}` : '',
+        style ? `整体视觉风格:\n${String(style).slice(0, 600)}` : '',
+        outline ? `报告大纲参考:\n${JSON.stringify(outline).slice(0, 500)}` : '',
+        presentation ? `当前视图上下文:\n${JSON.stringify(presentation).slice(0, 500)}` : '',
+    ].filter(Boolean).join('\n\n');
+    const usr = `${ctx.text}\n\n最终提示词:\n${prompt}${extraContext ? `\n\n${extraContext}` : ''}`;
     const aiRes = await runStructuredAiTurn(sys, usr, { recipe: fallbackRecipe });
     let compiled;
     try {
@@ -755,6 +1163,10 @@ export async function aiReportCellCompile({ month, prompt = '' } = {}) {
     } catch {
         compiled = normalizeRecipe(fallbackRecipe);
     }
+    if (interactive && !/kit\.interactive\s*\(/.test(compiled.render || '')) {
+        compiled = normalizeRecipe(fallbackRecipe);
+    }
+    if (interactive) compiled.narrative = null;
     return { recipe: compiled, _rounds: aiRes._rounds };
 }
 

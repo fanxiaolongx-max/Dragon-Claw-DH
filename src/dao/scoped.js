@@ -14,6 +14,7 @@ import {
     rawBasePost,
     rawBaseDelete,
     requestContext,
+    summarizeSql,
 } from './base.js';
 import {
     memInsert,
@@ -74,7 +75,7 @@ const MAX_ROWS = 50_000;
 
 function warnIfTruncated(rows, limit, sql) {
     if (rows.length >= limit && limit >= 100) {
-        pushLog({ level: 'WARN', category: 'DAO', message: `查询返回行数达到 limit=${limit}，结果可能被截断`, detail: { sql: String(sql).replace(/'(?:[^'\\]|\\.)*'/g, '?').slice(0, 160) } });
+        pushLog({ level: 'WARN', category: 'DAO', message: `查询返回行数达到 limit=${limit}，结果可能被截断`, detail: { sql: summarizeSql(sql, 160) } });
     }
     return rows;
 }
@@ -364,13 +365,38 @@ function stripCachePrefix(fullKey) {
     return m ? m[1] : text;
 }
 
+let cachedCacheDsId = null;
+
+async function resolveCacheDatasourceId() {
+    if (config.appCacheDatasourceId > 0) return config.appCacheDatasourceId;
+    if (cachedCacheDsId !== null && cachedCacheDsId > 0) return cachedCacheDsId;
+    if (!endpoints.datasources) return config.appCacheDatasourceId;
+    try {
+        const res = await rawBaseGet(endpoints.datasources, 'resolve_cache_ds');
+        const list = Array.isArray(res?.data) ? res.data : (Array.isArray(res?.data?.items) ? res.data.items : []);
+        const hit = list.find((d) => (
+            String(d?.dsType || '').toUpperCase() === 'CACHE' ||
+            String(d?.dbType || '').toLowerCase() === 'redis' ||
+            String(d?.name || '').toLowerCase().includes('cache')
+        ));
+        if (hit && Number(hit.id) > 0) {
+            cachedCacheDsId = Number(hit.id);
+            return cachedCacheDsId;
+        }
+    } catch {
+        // Ignore lookup error and keep configured ID
+    }
+    return config.appCacheDatasourceId;
+}
+
 export async function cacheSet(key, value, ttlSeconds = 3600) {
     if (isMemoryMode() || !endpoints.cacheExecute) {
         memCacheSet(key, value, ttlSeconds);
         return { code: 0, data: { success: true, mode: 'memory', key } };
     }
+    const datasourceId = await resolveCacheDatasourceId();
     return rawBasePost(endpoints.cacheExecute, {
-        datasourceId: config.appCacheDatasourceId,
+        datasourceId,
         key,
         value: typeof value === 'string' ? value : JSON.stringify(value),
         ttlSeconds,
@@ -383,8 +409,9 @@ export async function cacheGet(key) {
         const val = memCacheGet(cleanKey);
         return { code: 0, data: { exists: val !== null, key: cleanKey, value: val, mode: 'memory' } };
     }
+    const datasourceId = await resolveCacheDatasourceId();
     return rawBasePost(`${endpoints.cacheQuery}/key`, {
-        datasourceId: config.appCacheDatasourceId,
+        datasourceId,
         key: cleanKey,
     }, `cache_get:${cleanKey}`);
 }
@@ -394,8 +421,9 @@ export async function cacheScan(pattern = '*', limit = 100) {
         const keys = memCacheScan(pattern, limit);
         return { code: 0, data: { keys, count: keys.length, mode: 'memory' } };
     }
+    const datasourceId = await resolveCacheDatasourceId();
     const res = await rawBasePost(endpoints.cacheQuery, {
-        datasourceId: config.appCacheDatasourceId,
+        datasourceId,
         pattern,
         limit,
     }, `cache_scan:${pattern}`);
@@ -411,8 +439,9 @@ export async function cacheDelete(key) {
         memCacheDel(cleanKey);
         return { code: 0, data: { deleted: true, key: cleanKey, mode: 'memory' } };
     }
+    const datasourceId = await resolveCacheDatasourceId();
     return rawBaseDelete(`${endpoints.cacheExecute}/key`, {
-        datasourceId: config.appCacheDatasourceId,
+        datasourceId,
         key: cleanKey,
     }, `cache_del:${cleanKey}`);
 }

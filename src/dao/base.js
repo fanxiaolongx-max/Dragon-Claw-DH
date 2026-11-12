@@ -14,9 +14,30 @@ const baseDispatcher = new Agent({
     keepAliveTimeout: 10_000,
 });
 
-function summarizeSql(sql) {
-    // 日志只留 SQL 模板：字符串字面量一律替换成 ?，不把业务数据、密钥写进日志（规范 §10.1）
-    return String(sql || '').replace(/'(?:[^'\\]|\\.)*'/g, '?').replace(/\s+/g, ' ').trim().slice(0, 200);
+export function summarizeSql(sql, maxLen = 200) {
+    // 日志只留 SQL 模板：字符串字面量一律替换成 ?，用线性扫描避免大 SQL 触发正则递归栈溢出（规范 §10.1）
+    const text = String(sql || '');
+    let out = '';
+    let prevSpace = true;
+    for (let i = 0; i < text.length && out.length < maxLen; i += 1) {
+        const ch = text[i];
+        if (ch === '\'') {
+            out += '?';
+            prevSpace = false;
+            for (i += 1; i < text.length; i += 1) {
+                if (text[i] === '\\') { i += 1; continue; }
+                if (text[i] === '\'') break;
+            }
+            continue;
+        }
+        if (/\s/.test(ch)) {
+            if (!prevSpace) { out += ' '; prevSpace = true; }
+        } else {
+            out += ch;
+            prevSpace = false;
+        }
+    }
+    return out.trimEnd();
 }
 
 async function baseRequest(url, { method = 'POST', body, timeoutMs = config.httpTimeoutMs, tag = 'base' } = {}) {
