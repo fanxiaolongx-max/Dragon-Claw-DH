@@ -629,8 +629,19 @@
             badge.className = `v2-role-badge v2-role-badge--sm${tier ? ` is-${tier}` : ''}`;
             badge.innerHTML = roleBadgeContent(tier);
         }
-        $('v2UserMeta').textContent = serviceText();
-        $('v2StatusDot').classList.toggle('is-down', serviceDown());
+        const svcText = serviceText();
+        const down = serviceDown();
+        const meta = $('v2UserMeta');
+        const dot = $('v2StatusDot');
+        if (meta) {
+            meta.hidden = Boolean(tier);
+            meta.textContent = svcText;
+        }
+        if (dot) {
+            dot.classList.toggle('is-down', down);
+            dot.setAttribute('aria-label', svcText);
+            if (dot.parentElement) dot.parentElement.title = svcText;
+        }
     }
     const syncUserUi = () => {
         renderUser();
