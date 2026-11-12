@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <script src="js/shared/dh-runtime.js"></script><script src="js/api.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="PR进展附件记录 - 审计级批量自检系统">PR进展附件记录 - 审计级批量自检系统</title>
+    <!-- 引入 SheetJS 库用于解析 Excel 文件 -->
+    <script src="js/shared/xlsx.full.min.js"></script>
+    <script src="js/shared/localforage.min.js"></script>
+    <script src="js/shared/html2canvas.min.js"></script>
+    <script src="js/shared/jspdf.umd.min.js"></script>
+    <script src="js/shared/jszip.min.js"></script>
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/pages/praudit.css">
+</head>
+
+<body>
+
+    <div class="toast-msg" id="toastMsg">操作成功</div>
+
+    <!-- 浏览器主界面区 -->
+    <div class="container no-print">
+        <h1 style="display:flex; justify-content:center; align-items:center; gap:12px; margin-bottom:20px; position:relative; font-size:24px;">
+            <div style="position:absolute; right:0; top:0; height:100%; display:flex; align-items:center; gap:8px;">
+                <button class="btn-outline btn-icon-only" style="border:none; box-shadow:none; font-size:16px;" onclick="loadMockData()" title="一键加载测试数据">🧪</button>
+            </div>
+            <span><span data-i18n="PR审计报告系统">PR审计报告系统</span></span>
+            <div style="display:flex; align-items:center; gap:4px; margin-left:8px;">
+                <select id="auditTypeSelector" style="font-size:14px; padding:6px 24px 6px 12px; border-radius:6px; border:1px solid var(--border-color); background:#fff; color:var(--primary-color); outline:none; cursor:pointer; font-weight:500;" onchange="switchAuditType()">
+                    <option value="" data-i18n="⏳ 加载配置中...">⏳ 加载配置中...</option>
+                </select>
+                <button class="btn-outline btn-icon-only" style="border:none; padding:4px;" onclick="openWizard()" title="自定义新模板"><span data-i18n="➕">➕</span></button>
+                <button class="btn-outline btn-icon-only" id="btnEditConfig" style="border:none; padding:4px; display:none;" onclick="editWizard()" title="编辑当前模板"><span data-i18n="✏️">✏️</span></button>
+                <button class="btn-outline btn-icon-only" id="btnDeleteConfig" style="border:none; padding:4px; display:none; color:var(--danger-color);" onclick="deleteWizardConfig()" title="删除当前模板"><span data-i18n="🗑️">🗑️</span></button>
+            </div>
+        </h1>
+        <div id="workspaceInfoBar" style="display:flex; justify-content:center; margin:-8px 0 14px;">
+            <div id="workspaceInfoText" style="font-size:12px; color:#5b6475; background:#f8fafc; border:1px solid #dbe5f0; border-radius:999px; padding:6px 14px; max-width:min(92vw, 980px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                当前工作区：-
+            </div>
+        </div>
+
+        <div class="toolbar">
+            <div style="display:flex; gap:10px; align-items:center;">
+                <button class="btn-success" onclick="openModal('importModal')" style="background-color: var(--primary-color);"><span data-i18n="📥 导入数据">📥 导入数据</span></button>
+                <button class="btn-outline" onclick="document.getElementById('snapshotFileInput').click()"><span data-i18n="📦 导入快照">📦 导入快照</span></button>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <button class="btn-outline" onclick="openModal('configModal')"><span data-i18n="⚙️ 显示设置">⚙️ 显示设置</span></button>
+                
+                <div class="dropdown">
+                    <button class="btn-export"><span data-i18n="📤 导出数据 ▾">📤 导出数据 ▾</span></button>
+                    <div class="dropdown-content">
+                        <button class="dropdown-item" onclick="exportPDF()"><span data-i18n="📄 导出全部为 PDF">📄 导出全部为 PDF</span></button>
+                        <button class="dropdown-item" onclick="exportPDFByGroup(this)"><span data-i18n="📚 按分组导出 PDF">📚 按分组导出 PDF</span></button>
+                        <button class="dropdown-item" onclick="exportAuditSpreadsheet()"><span data-i18n="📊 导出为表格">📊 导出为表格</span></button>
+                        <hr style="border:none; border-top:1px solid var(--border-color); margin:4px 0;">
+                        <button class="dropdown-item" onclick="exportAuditSnapshot()"><span data-i18n="📦 导出快照包">📦 导出快照包</span></button>
+                        <button class="dropdown-item" onclick="exportAuditSnapshotByGroup(this)"><span data-i18n="🧩 按分组导出快照">🧩 按分组导出快照</span></button>
+                    </div>
+                </div>
+
+                <button class="btn-outline btn-icon-only" style="margin-left:8px; border:none; box-shadow:none; color:var(--danger-color);" onclick="clearAllData()" title="清空数据"><span data-i18n="🗑️">🗑️</span></button>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table id="mainTable">
+                <thead id="tableHead"></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+        <div id="floatingTableHeader" class="floating-table-header" aria-hidden="true"></div>
+        <input type="file" id="snapshotFileInput" accept=".zip,.json,application/zip,application/json" multiple style="display:none;" onchange="importAuditSnapshot(this)">
+    </div>
+
+    <!-- 专供打印/导出PDF的隐藏区域 -->
+    <div id="printReport"></div>
+
+    <!-- 隐藏图片文件选择器 -->
+    <input type="file" id="hiddenFileInput" accept="image/*" style="display: none;">
+
+    <!-- 1. Excel 文件导入弹窗 -->
+    <div class="modal-overlay no-print" id="importModal">
+        <div class="modal-card" style="max-width: 500px;">
+            <span class="modal-close" onclick="closeModal('importModal')">&times;</span>
+            <h3 style="margin-top:0; color: var(--primary-color);" data-i18n="导入 Excel 单子数据">导入 Excel 单子数据</h3>
+            <p style="font-size: 0.85rem; color: #666;" data-i18n="请选择一个或多个包含表头的标准 Excel 文件 (.xlsx 或 .xls) 进行导入分析。">请选择一个或多个包含 <b>表头</b> 的标准 Excel 文件 (.xlsx 或 .xls) 进行导入分析。</p>
+
+            <div class="excel-upload-zone" onclick="document.getElementById('excelFileInput').click()">
+                <div style="font-size: 40px; margin-bottom: 10px;">📊</div>
+                <strong style="color: var(--accent-color); font-size: 1.1rem;" data-i18n="点击选择 Excel 文件（可多选）">点击选择 Excel 文件（可多选）</strong>
+                <div style="font-size: 0.8rem; color: #888; margin-top: 5px;" id="excelFileName" data-i18n="未选择任何文件...">未选择任何文件...</div>
+                <input type="file" id="excelFileInput" accept=".xlsx, .xls" multiple onchange="updateFileName(this)">
+            </div>
+
+            <div style="text-align: right; margin-top: 20px;">
+                <button class="btn-outline" onclick="closeModal('importModal')" style="margin-right: 10px;"><span data-i18n="取消">取消</span></button>
+                <button onclick="processExcelImport()"><span data-i18n="解析并导入">解析并导入</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. 填写未通过理由弹窗 -->
+    <div class="modal-overlay no-print" id="reasonModal">
+        <div class="modal-card" style="max-width: 560px;">
+            <h3 style="margin-top:0; color: var(--danger-color);"><span data-i18n="填写未通过理由">填写未通过理由</span></h3>
+            <p style="font-size: 0.85rem; color: #666; margin-top:-5px;" data-i18n="请简要描述该项不合格的原因，此信息将展示在看板并录入审计报告。">请简要描述该项不合格的原因，此信息将展示在看板并录入审计报告。</p>
+            <div class="reason-modal-section">
+                <span class="reason-modal-label" data-i18n="快捷理由模板">快捷理由模板</span>
+                <div id="reasonTemplatesBox" class="reason-template-box"></div>
+            </div>
+            <label class="reason-modal-label" for="reasonInput" data-i18n="手动填写或编辑理由">手动填写或编辑理由</label>
+            <textarea class="reason-box" id="reasonInput" data-i18n-ph="例如：客户邮件中未明确提及产品数量 / 缺少高层审批电子流..." placeholder="例如：客户邮件中未明确提及产品数量 / 缺少高层审批电子流..."></textarea>
+            <div class="evidence-panel">
+                <div class="evidence-header">
+                    <div>
+                        <strong data-i18n="截图证据">截图证据</strong>
+                        <div id="reasonEvidenceStatus" style="font-size:12px; color:#666; margin-top:4px;" data-i18n="未附截图证据">未附截图证据</div>
+                    </div>
+                    <div class="evidence-actions">
+                        <button type="button" class="btn-outline" style="box-shadow:none;" onclick="prepareReasonPasteEvidence()"><span data-i18n="点击后粘贴截图">点击后粘贴截图</span></button>
+                        <button type="button" class="btn-outline" style="box-shadow:none;" onclick="uploadReasonEvidence()"><span data-i18n="上传本地图片">上传本地图片</span></button>
+                    </div>
+                </div>
+                <div id="reasonEvidencePreviewBox" class="evidence-preview-box">
+                    <img id="reasonEvidencePreviewImg" alt="Screenshot evidence preview">
+                    <span class="evidence-empty-text" data-i18n="上传或粘贴后将在这里预览，导出 PDF 时会展示。">上传或粘贴后将在这里预览，导出 PDF 时会展示。</span>
+                </div>
+                <div class="evidence-footer">
+                    <button id="reasonEvidenceDeleteBtn" type="button" class="btn-outline" style="display:none; box-shadow:none; color:#c0392b; border-color:#e5b7b7;" onclick="removeReasonEvidence()"><span data-i18n="删除截图">删除截图</span></button>
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <button class="btn-outline" onclick="cancelReason()" style="margin-right: 10px;"><span data-i18n="取消选择">取消选择</span></button>
+                <button class="btn-danger" onclick="confirmReason()"><span data-i18n="确认未通过">确认未通过</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2.5 导入后抽查确认弹窗 -->
+    <div class="modal-overlay no-print" id="sampleModal">
+        <div class="modal-card" style="max-width: 560px;">
+            <span class="modal-close" onclick="cancelSampleImport()">&times;</span>
+            <h3 style="margin-top:0; color: var(--primary-color);" data-i18n="导入后抽查设置">导入后抽查设置</h3>
+            <p style="font-size: 0.85rem; color: #666;" data-i18n="可以只抽取一部分单据进入本次审计，降低首次检查压力。若模板设置了分组字段，会优先按分组均衡抽样；已有单据的历史检查状态会保留。">可以只抽取一部分单据进入本次审计，降低首次检查压力。若模板设置了分组字段，会优先按分组均衡抽样；已有单据的历史检查状态会保留。</p>
+            <div class="sample-summary" id="sampleSummary"></div>
+            <div class="sample-options" id="sampleOptions"></div>
+            <div class="sample-custom-row">
+                <label for="sampleCustomCount" data-i18n="自定义抽查数量">自定义抽查数量</label>
+                <input id="sampleCustomCount" type="number" min="1" step="1" placeholder="例如 15" data-i18n-ph="例如 15" oninput="setSampleCount(this.value)">
+                <span id="sampleRangeHint"></span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:22px;">
+                <button class="btn-outline" onclick="cancelSampleImport()"><span data-i18n="取消导入">取消导入</span></button>
+                <div>
+                    <button class="btn-outline" onclick="selectSampleAll()" style="margin-right: 10px;"><span data-i18n="全部导入">全部导入</span></button>
+                    <button class="btn-success" onclick="confirmSampleImport()"><span data-i18n="确认抽查导入">确认抽查导入</span></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. 列显示设置弹窗 -->
+    <div class="modal-overlay no-print" id="configModal">
+        <div class="modal-card">
+            <span class="modal-close" onclick="closeModal('configModal')">&times;</span>
+            <h3 style="margin-top:0;" data-i18n="主表展示列设置">主表展示列设置</h3>
+            <div class="cols-grid" id="colsGrid"></div>
+            <div style="text-align: right; border-top: 1px solid #eee; padding-top: 15px;">
+                <button onclick="saveConfig()"><span data-i18n="保存设置">保存设置</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. 单据详情弹窗 -->
+    <div class="modal-overlay no-print" id="detailModal">
+        <div class="modal-card">
+            <span class="modal-close" onclick="closeModal('detailModal')">&times;</span>
+            <h3 style="margin-top:0; color: var(--primary-color);" data-i18n="单据完整属性表">单据完整属性表</h3>
+            <div class="detail-grid" id="detailGrid"></div>
+        </div>
+    </div>
+
+    <!-- 5. 大图查看弹窗 -->
+    <div class="modal-overlay no-print" id="imageModal" onclick="closeModal('imageModal')">
+        <div class="modal-card"
+            style="background:transparent; box-shadow:none; padding:0; display:flex; justify-content:center; align-items:center; max-width:95%; max-height:95vh;">
+            <span class="modal-close" style="color:#fff; font-size:40px; top:-20px; right:-20px;"
+                onclick="closeModal('imageModal')">&times;</span>
+            <img id="modalImg" src=""
+                style="max-width:100%; max-height:95vh; border:4px solid #fff; border-radius:4px; box-shadow:0 10px 30px rgba(0,0,0,0.5);"
+                onclick="event.stopPropagation()">
+        </div>
+    </div>
+
+    <!-- 6. 自定义审计模板向导 -->
+    <div class="modal-overlay no-print" id="wizardModal">
+        <div class="modal-card wizard-modal-card">
+            <span class="modal-close" onclick="closeModal('wizardModal')">&times;</span>
+            <div class="wizard-modal-header">
+                <div class="wizard-modal-titlebox">
+                    <h3><span data-i18n="✨ 自定义新审计模板">✨ 自定义新审计模板</span></h3>
+                    <p class="wizard-modal-subtitle"><span data-i18n="建议先解析样例表头，再按主字段、分组、过滤、PDF 展示字段逐步完成模板配置。">建议先解析样例表头，再按主字段、分组、过滤、PDF 展示字段逐步完成模板配置。</span></p>
+                </div>
+                <div class="wizard-modal-actions">
+                    <button class="btn-export" onclick="wizSaveConfig()"><span data-i18n="💾 保存并生效">💾 保存并生效</span></button>
+                </div>
+            </div>
+
+            <div class="wizard-name-row">
+                <label style="font-weight:bold; font-size:13px;"><span data-i18n="📝 模板名称:">📝 模板名称:</span></label>
+                <input type="text" id="wizName" placeholder="例如：RFC 变更单审计" data-i18n-ph="例如：RFC 变更单审计" style="width:100%; padding:9px 10px; margin-top:5px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
+            </div>
+
+            <div class="wizard-main-grid">
+                <div class="wizard-primary-stack">
+                    <div class="wizard-section wizard-section-soft" style="border-style:dashed;">
+                        <h4 style="color:var(--accent-color);"><span data-i18n="第一步：上传样例 Excel (提取表头字段)">第一步：上传样例 Excel (提取表头字段)</span></h4>
+                        <p style="color:#666; margin-top:0; margin-bottom:10px;"><span data-i18n="请上传一份标准的样例数据，我们会自动提取表头供您建立字段映射。">请上传一份标准的样例数据，我们会自动提取表头供您建立字段映射。</span></p>
+                <input type="file" id="wizFileInput" accept=".xlsx, .xls, .csv">
+                        <button class="btn-outline" onclick="wizParseHeaders()" style="margin-top:10px;"><span data-i18n="⚙️ 解析表头">⚙️ 解析表头</span></button>
+                        <div id="wizHeadersBox" style="margin-top:12px; font-size:12px; color:#555; display:flex; flex-wrap:wrap; gap:6px;"></div>
+                    </div>
+
+                    <div class="wizard-section">
+                        <h4><span data-i18n="第二步：选择审计需要关注的字段">第二步：选择审计需要关注的字段</span></h4>
+                        <p style="color:#e74c3c; margin-top:0; margin-bottom:10px; font-weight:bold;"><span data-i18n="⚠️ 必看警告：请按顺序勾选！您勾选的【第一个字段】将被强制作为该审计模板的主键/单号！">⚠️ 必看警告：请按顺序勾选！您勾选的【第一个字段】将被强制作为该审计模板的主键/单号！</span></p>
+                        <div class="wizard-field-tools">
+                            <input type="text" id="wizFieldSearchInput" data-i18n-ph="搜索字段名称..." placeholder="搜索字段名称..." oninput="setWizardFieldSearch(this.value)">
+                            <button type="button" class="btn-outline" onclick="setWizardVisibleFields(true)"><span data-i18n="全选当前结果">全选当前结果</span></button>
+                            <button type="button" class="btn-outline" onclick="setWizardVisibleFields(false)"><span data-i18n="取消当前结果">取消当前结果</span></button>
+                        </div>
+                        <div id="wizFieldMeta" class="wizard-field-meta"></div>
+                        <div class="wizard-collapsible-wrap">
+                            <div id="wizFieldsGrid" class="cols-grid wizard-collapsible" data-collapse-height="228" data-collapse-rows="5" data-expand-mode="full" style="background:#fff; padding:10px; border:1px solid #f1f1f1;"><span data-i18n="暂无解析出的字段">暂无解析出的字段</span></div>
+                            <div id="wizFieldsGridFade" class="wizard-collapsible-fade"></div>
+                        </div>
+                        <div class="wizard-collapse-toggle-row">
+                            <button type="button" id="wizFieldsGridToggle" class="wizard-collapse-toggle" onclick="toggleWizardCollapse('wizFieldsGrid')"></button>
+                        </div>
+
+                        <div class="wizard-section" style="margin-top:14px; padding:12px 0 0; border:none; border-top:1px dashed #eee; border-radius:0;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px;">
+                                <div style="font-weight:bold; color:var(--accent-color); font-size:13px;">
+                                    <span data-i18n="附加：配置导入过滤条件">附加：配置导入过滤条件</span>
+                                </div>
+                                <button type="button" class="btn-outline" style="padding:5px 10px; font-size:12px;" onclick="addFilterRule()">
+                                    <span data-i18n="➕ 新增过滤条件">➕ 新增过滤条件</span>
+                                </button>
+                            </div>
+                            <div id="wizFilterRulesBox" style="font-size:13px;">
+                                <span style="color:#666;" data-i18n="未配置过滤条件">未配置过滤条件</span>
+                            </div>
+                            <div style="font-size:12px; color:#666; margin-top:6px;">
+                                <span data-i18n="多条过滤条件会同时生效；匹配值可用逗号分隔多个值。">多条过滤条件会同时生效；匹配值可用逗号分隔多个值。</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="wizard-side-stack">
+                    <div class="wizard-section">
+                        <div style="font-weight:bold; margin-bottom:6px; color:var(--accent-color); font-size:13px;">
+                            <span data-i18n="附加：选择一个字段作为审计页面分组展示依据">附加：选择一个字段作为审计页面分组展示依据</span>
+                        </div>
+                        <select id="wizGroupField" style="width:100%; padding:9px 10px; border:1px solid #cce5ff; border-radius:4px; background:#fff; color:#2c3e50; font-size:13px;">
+                            <option value="" data-i18n="不分组">不分组</option>
+                        </select>
+                        <div style="font-size:12px; color:#666; margin-top:6px;">
+                            <span data-i18n="例如选择客户群或产品线，审计表会按该字段分段展示。">例如选择客户群或产品线，审计表会按该字段分段展示。</span>
+                        </div>
+                    </div>
+
+                    <div class="wizard-section wizard-section-soft">
+                        <h4 style="color:var(--accent-color);">
+                            <span data-i18n="附加：选择最多 6 个字段在 PDF 报告卡片顶部高亮展示">附加：选择最多 6 个字段在 PDF 报告卡片顶部高亮展示</span>
+                        </h4>
+                        <p style="color:#5b6b7a; margin-top:0; margin-bottom:10px;">
+                            <span data-i18n="这部分会单独显示在 PDF 顶部信息卡中，建议挑选最关键、最适合快速浏览的字段。">这部分会单独显示在 PDF 顶部信息卡中，建议挑选最关键、最适合快速浏览的字段。</span>
+                        </p>
+                        <div class="wizard-field-tools">
+                            <input type="text" id="wizReportFieldSearchInput" data-i18n-ph="搜索已勾选字段..." placeholder="搜索已勾选字段..." oninput="setWizardReportFieldSearch(this.value)">
+                            <button type="button" class="btn-outline" onclick="setVisibleReportFields(true)"><span data-i18n="全选当前结果">全选当前结果</span></button>
+                            <button type="button" class="btn-outline" onclick="setVisibleReportFields(false)"><span data-i18n="取消当前结果">取消当前结果</span></button>
+                        </div>
+                        <div id="wizReportFieldMeta" class="wizard-field-meta"></div>
+                        <div class="wizard-collapsible-wrap">
+                            <div id="wizReportFieldsBox" class="cols-grid wizard-collapsible" data-collapse-height="196" data-collapse-rows="4" data-expand-mode="full" style="background:#f0f8ff; padding:12px; border:1px solid #cce5ff; border-radius:6px; font-size:13px;">
+                                <span style="color:#666;" data-i18n="(请先在上方勾选关注的字段)">(请先在上方勾选关注的字段)</span>
+                            </div>
+                            <div id="wizReportFieldsBoxFade" class="wizard-collapsible-fade"></div>
+                        </div>
+                        <div class="wizard-collapse-toggle-row">
+                            <button type="button" id="wizReportFieldsBoxToggle" class="wizard-collapse-toggle" onclick="toggleWizardCollapse('wizReportFieldsBox')"></button>
+                        </div>
+                        <div id="wizReportFieldsSortBox" class="report-field-sort-box"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="wizard-full-width" style="margin-bottom: 20px;">
+                <h4 style="margin-top:0; display:flex; justify-content:space-between; align-items:center; font-size:15px;">
+                    <span data-i18n="第三步：定义审计检查点 (Checkpoints)">第三步：定义审计检查点 (Checkpoints)</span>
+                    <button class="btn-success" style="padding:6px 12px; font-size:12px;" onclick="wizAddCheckpoint()"><span data-i18n="➕ 新增检查点">➕ 新增检查点</span></button>
+                </h4>
+                <div id="wizCheckpointsContainer" style="display:flex; flex-direction:column; gap:10px;">
+                </div>
+            </div>
+
+            <div class="wizard-bottom-actions">
+                <button class="btn-outline" onclick="closeModal('wizardModal')"><span data-i18n="取消">取消</span></button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/pages/praudit/main.js"></script>
+    <script src="js/shared/api.js"></script>
+    <script src="js/shared/toast.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/navbar.js"></script>
+</body>
+
+</html>

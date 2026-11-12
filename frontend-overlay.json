@@ -6,12 +6,14 @@
     "favicon.ico",
     "js/api.js",
     "js/shared/dh-debug-widget.js",
-    "js/shared/dh-runtime.js"
+    "js/shared/dh-runtime.js",
+    "pages/db-explorer.html"
   ],
   "modified": [
     "css/project-evolution.css",
     "index.html",
     "js/ai-report/sandbox.js",
+    "js/duty-roster.js",
     "js/home/dragon-claw.js",
     "js/home/workspace-panel.js",
     "js/shared/fetch-dedupe.js",
@@ -23,10 +25,14 @@
     "js/uivf12/generator.js",
     "pages/ai-report.html",
     "pages/bigscreen.html",
+    "pages/duty-roster.html",
     "pages/expedite.html",
+    "pages/frt.html",
     "pages/monthly.html",
+    "pages/praudit.html",
     "pages/report.html",
     "pages/sla.html",
+    "pages/topic-analysis.html",
     "pages/uivf12.html"
   ]
 }

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 // 测试用假基座：按真机回执模拟 {code,message,data}、不返回 lastInsertId、Redis 前缀等行为
 import http from 'node:http';
 
@@ -95,6 +96,18 @@ export async function startMockBaseServer() {
         return true;
     }
 
+    const PRIMARY_KEYS = (() => {
+        const map = new Map();
+        try {
+            const ddl = fs.readFileSync(new URL('../../db/init.sql', import.meta.url), 'utf8');
+            for (const m of ddl.matchAll(/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\(([\s\S]*?)\)\s*ENGINE/g)) {
+                const pk = /PRIMARY KEY \(([^)]+)\)/.exec(m[2]);
+                if (pk) map.set(m[1], pk[1].split(',').map((c) => c.trim().replace(/`/g, '')));
+            }
+        } catch { /* 读不到脚本时按第一列判定 */ }
+        return map;
+    })();
+
     function execMockSql(sql) {
         const clean = String(sql || '').trim();
         let m = clean.match(/^INSERT\s+(?:IGNORE\s+)?INTO\s+`?([a-zA-Z0-9_]+)`?\s*\(([^)]+)\)\s*VALUES\s*\(([\s\S]*?)\)(?:\s+ON\s+DUPLICATE\s+KEY\s+UPDATE\s+([\s\S]+))?$/i);
@@ -106,8 +119,9 @@ export async function startMockBaseServer() {
             cols.forEach((c, idx) => { row[c] = vals[idx]; });
             const list = getTable(tbl);
             if (dupStr) {
-                const keyCol = cols[0];
-                const existing = list.find((r) => String(r[keyCol]) === String(row[keyCol]));
+                // 冲突判定按建表脚本里的主键（支持联合主键）；脚本里没有这张表时退回第一列
+                const keyCols = (PRIMARY_KEYS.get(tbl) || [cols[0]]).filter((k) => cols.includes(k));
+                const existing = keyCols.length ? list.find((r) => keyCols.every((k) => String(r[k]) === String(row[k]))) : null;
                 if (existing) {
                     Object.assign(existing, row);
                     return 1;

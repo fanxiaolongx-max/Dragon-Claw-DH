@@ -27,6 +27,7 @@ import { getAutoSwitch } from '../services/ai-service.js';
 import { prepareContext, compactSession, generateTitle } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
+import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
 
 export async function aiRoutes(fastify) {
     const ownerOf = (req) => resolveRequestIdentity(req).username;
@@ -283,6 +284,21 @@ export async function aiRoutes(fastify) {
         }).catch(() => null);
         const text = String(res?.ok ? res.text : '').trim().replace(/^["“「]|["”」]$/g, '');
         return { enhanced: text || prompt, changed: Boolean(text && text !== prompt) };
+    });
+
+    // 月报中译英：保留加粗、颜色等行内格式（专题分析的中英对照用）
+    fastify.post('/translate', async (req, reply) => {
+        const text = typeof req.body?.text === 'string' ? req.body.text : '';
+        if (!text.trim()) return reply.code(400).send({ error: '缺少需要翻译的文本 (text)' });
+        const res = await callAiCompletion({
+            maxTokens: 2048,
+            messages: [
+                { role: 'system', content: TRANSLATE_SYSTEM_PROMPT },
+                { role: 'user', content: `Context: ${String(req.body?.context || 'Monthly Operations Report').slice(0, 300)}\nTranslate the following Chinese HTML snippet to English:\n${text.slice(0, 20000)}` },
+            ],
+        });
+        if (!res.ok) return reply.code(503).send({ error: res.error || 'AI 翻译失败' });
+        return { translatedText: String(res.text || '').trim().replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/, '').trim() };
     });
 
     fastify.post('/uploads', handleChatUpload);

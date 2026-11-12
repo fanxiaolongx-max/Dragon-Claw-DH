@@ -71,7 +71,7 @@ const USER_WRITES = [
     ['POST', /^\/platform-promotions\/clicks$/],
     ['POST', /^\/desktop-pet\/language$/],
     ['POST', /^\/home\/bootstrap$/],
-    ['POST', /^\/ai\/(?:proactive-alert-message|enhance-prompt|chat|uploads|compact)$/],
+    ['POST', /^\/ai\/(?:proactive-alert-message|enhance-prompt|chat|uploads|compact|translate)$/],
     ['PUT', /^\/ai\/conversation-list$/],
     ['*', /^\/ai\/sessions(?:\/.*)?$/], // 路由内校验会话归属
     ['POST', /^\/report-msg\/export$/],
@@ -81,6 +81,7 @@ const USER_WRITES = [
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
     ['*', /^\/alert-center\/events(?:\/.*)?$/], // 消息只属于本人
     ['POST', /^\/db-explorer\/query$/], // 只读查询（路由内走只读守卫）
+    ['POST', /^\/duty-roster$/], // 已识别用户可维护各月份值班表（与桌面版一致）
 ];
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/];
 

@@ -1,0 +1,71 @@
+# 每次推送到 main：跑测试 → 定版本号 → 打完整包和精简包 → 发布 Release。
+# 版本号规则见 scripts/release-version.mjs：手工升了 dragon-claw-dh.version 就用它，否则在上一个 Release 上把修订号加一。
+# 提交说明里带 [skip release] 的推送不发版（只改文档时可以用）。
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要全部标签来定版本号
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.1
+
+      # 仓库里的 .npmrc 和锁文件指向内网源（上基座用）；流水线在公网，只在安装这一步临时换成公网源，装完立刻还原，
+      # 所以打进包里的 .npmrc 和 package-lock.json 仍然是内网源的版本。
+      - name: Install dependencies
+        run: |
+          cp package-lock.json "$RUNNER_TEMP/package-lock.json"
+          cp .npmrc "$RUNNER_TEMP/npmrc"
+          sed -i 's#https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/#https://registry.npmjs.org/#g' package-lock.json .npmrc
+          npm ci --ignore-scripts --no-audit --no-fund
+          cp "$RUNNER_TEMP/package-lock.json" package-lock.json
+          cp "$RUNNER_TEMP/npmrc" .npmrc
+
+      - name: Test
+        run: npm test
+
+      - name: Decide version
+        id: version
+        run: echo "version=$(node scripts/release-version.mjs --next)" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages
+        run: |
+          npm run build
+          npm run build:lite
+          ls -la dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## 安装包"
+            echo "- \`dragon-claw-dh-${VERSION}.zip\`：完整包（先传这个）"
+            echo "- \`dragon-claw-dh-${VERSION}-lite.zip\`：精简包（内网源缺依赖、完整包装不上时用）"
+            echo
+            echo "升级前请对照 \`db/upgrade.sql\` 确认是否有新增的表。"
+            echo
+            echo "## 本次提交"
+            echo
+            git log -1 --pretty=%B
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "v${VERSION}" dist/dragon-claw-dh-${VERSION}.zip dist/dragon-claw-dh-${VERSION}.zip.md5 dist/dragon-claw-dh-${VERSION}-lite.zip dist/dragon-claw-dh-${VERSION}-lite.zip.md5 \
+            --target "$GITHUB_SHA" --title "v${VERSION}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

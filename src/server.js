@@ -23,6 +23,7 @@ import { dbRoutes, expediteRoutes } from './routes/db.js';
 import { monthlySnapshotsRoutes, reportMsgRoutes, aiReportRoutes } from './routes/monthly.js';
 import { platformShellRoutes } from './routes/platform-shell.js';
 import { alertCenterRoutes, platformLogoRoutes, agentToolsRoutes, dbExplorerRoutes, sendLogo } from './routes/platform-extras.js';
+import { frtRoutes, prauditRoutes, dutyRosterRoutes, topicSnapshotsRoutes } from './routes/business.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
 const gzipAsync = promisify(zlib.gzip);
@@ -38,15 +39,15 @@ const PHASE1_PAGES = new Map([
     ['/monthly/legacy', 'pages/monthly.html'],
     ['/bigscreen', 'pages/bigscreen.html'],
     ['/db-explorer', 'pages/db-explorer.html'],
+    ['/topic-analysis', 'pages/topic-analysis.html'],
+    ['/duty-roster', 'pages/duty-roster.html'],
+    ['/frt', 'pages/frt.html'],
+    ['/praudit', 'pages/praudit.html'],
 ]);
 
 const PHASE2_ROUTES = new Set([
-    '/praudit',
-    '/frt',
     '/storage',
     '/netcare-explorer',
-    '/topic-analysis',
-    '/duty-roster',
     '/requirements',
     '/custom-report',
 ]);
@@ -298,6 +299,10 @@ export async function createServer() {
     await app.register(platformLogoRoutes, { prefix: '/api/platform-logo' });
     await app.register(agentToolsRoutes, { prefix: '/api/agent-mcp' });
     await app.register(dbExplorerRoutes, { prefix: '/api/db-explorer' });
+    await app.register(frtRoutes, { prefix: '/api/frt' });
+    await app.register(prauditRoutes, { prefix: '/api/praudit' });
+    await app.register(dutyRosterRoutes, { prefix: '/api/duty-roster' });
+    await app.register(topicSnapshotsRoutes, { prefix: '/api/topic-snapshots' });
     await app.register(platformShellRoutes);
     // 平台标识：页面里固定引用 assets/logo.png，管理员上传过自定义图标时这里返回自定义的
     app.get('/assets/logo.png', async (_req, reply) => sendLogo(reply));
@@ -339,7 +344,7 @@ export async function createServer() {
 
     app.get('/pages/:file', async (req, reply) => {
         const file = String(req.params.file || '').replace(/[^a-zA-Z0-9_.-]/g, '');
-        const allowed = new Set(['uivf12.html', 'sla.html', 'report.html', 'expedite.html', 'monthly.html', 'ai-report.html', 'bigscreen.html', 'db-explorer.html']);
+        const allowed = new Set(['uivf12.html', 'sla.html', 'report.html', 'expedite.html', 'monthly.html', 'ai-report.html', 'bigscreen.html', 'db-explorer.html', 'topic-analysis.html', 'duty-roster.html', 'frt.html', 'praudit.html']);
         if (allowed.has(file)) {
             return sendHtmlFile(reply, `pages/${file}`);
         }

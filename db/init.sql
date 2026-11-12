@@ -479,6 +479,26 @@ CREATE TABLE IF NOT EXISTS `agent_schedules` (
   KEY `idx_sched_owner` (`owner_id`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 业务页面的统一记录表（1.7.0）：专题分析快照、值班表、FRT 核算快照、PR 稽查模板都存这里，用 kind 区分
+CREATE TABLE IF NOT EXISTS `biz_records` (
+  `kind` VARCHAR(32) NOT NULL,
+  `id` VARCHAR(96) NOT NULL,
+  `group_key` VARCHAR(64) NOT NULL DEFAULT '',
+  `name` VARCHAR(255) NOT NULL DEFAULT '',
+  `period` VARCHAR(32) NOT NULL DEFAULT '',
+  `sort_key` VARCHAR(64) NOT NULL DEFAULT '',
+  `content_hash` VARCHAR(64) NOT NULL DEFAULT '',
+  `summary_json` LONGTEXT,
+  `payload_json` LONGTEXT,
+  `payload_bytes` BIGINT NOT NULL DEFAULT 0,
+  `updated_by` VARCHAR(128) NOT NULL DEFAULT '',
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  `updated_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`kind`, `id`),
+  KEY `idx_biz_sort` (`kind`, `group_key`, `sort_key`),
+  KEY `idx_biz_hash` (`kind`, `group_key`, `content_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 可选：预置管理员。默认不需要——首位被网关识别出工号的访问者会自动成为管理员。
 -- 如果想在上线前就固定管理员（防止别人先打开应用），把下面一行取消注释，
 -- 把 工号1、工号2 换成真实工号（小写）后再交给 DBA 执行。已有名单时不会覆盖。

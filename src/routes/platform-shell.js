@@ -504,6 +504,10 @@ export async function platformShellRoutes(fastify) {
             '/monthly': 'pages/ai-report.html',
             '/bigscreen': 'pages/bigscreen.html',
             '/db-explorer': 'pages/db-explorer.html',
+            '/topic-analysis': 'pages/topic-analysis.html',
+            '/duty-roster': 'pages/duty-roster.html',
+            '/frt': 'pages/frt.html',
+            '/praudit': 'pages/praudit.html',
         };
         const out = {};
         for (const [key, rel] of Object.entries(pageFiles)) {
@@ -600,11 +604,8 @@ export async function platformShellRoutes(fastify) {
     fastify.get('/api/requirements', async () => ({ items: [] }));
     fastify.get('/api/friend-links', async () => ({ links: [] }));
     fastify.get('/api/vault', async () => ({ items: [] }));
-    fastify.get('/api/topic-snapshots', async () => []);
     fastify.get('/api/operation-incentive-snapshots', async () => []);
     fastify.get('/api/meeting-snapshots', async () => []);
-    fastify.get('/api/duty-roster', async () => ({ items: [] }));
-    fastify.get('/api/frt', async () => ({ items: [] }));
     fastify.get('/api/chat-history/status', async () => ({ enabled: false, indexedCount: 0 }));
     fastify.get('/api/distribution/catalog', async () => ({ items: [] }));
     fastify.get('/api/distribution/personal', async () => ({ entries: {} }));

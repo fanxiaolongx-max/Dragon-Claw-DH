@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <script src="js/shared/dh-runtime.js"></script><script src="js/api.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>专题分析</title>
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/topic-analysis.css">
+    <link rel="stylesheet" href="css/report-snapshot-diff.css">
+</head>
+
+<body>
+    <main class="topic-page">
+        <header class="topic-hero">
+            <div>
+                <span class="topic-eyebrow">HISTORY WORKSPACE</span>
+                <h1>专题分析</h1>
+                <p>NetCare 与 DataFab 导入快照的历史记录中心。完整 JSON 持久保存，可在任意业务页面按时间回顾。</p>
+            </div>
+            <div class="topic-hero-actions">
+                <button id="themeToggleButton" class="topic-button topic-button-secondary topic-theme-toggle" type="button" aria-label="切换主题模式" title="点击切换浅色/深色主题">
+                    <span id="themeToggleIcon">☀️</span> <span id="themeToggleText">浅色模式</span>
+                </button>
+                <a href="uivf12" class="topic-button topic-button-secondary">返回脚本仓库</a>
+                <button id="refreshButton" class="topic-button" type="button">刷新数据</button>
+            </div>
+        </header>
+
+        <section class="topic-stats" aria-label="历史快照概览">
+            <article><span>快照总数</span><strong id="totalCount">0</strong><small>本平台</small></article>
+            <article><span>NetCare</span><strong id="netcareCount">0</strong><small>已归档批次</small></article>
+            <article><span>DataFab</span><strong id="datafabCount">0</strong><small>已归档批次</small></article>
+            <article><span>最新数据时间</span><strong id="latestTime" class="topic-time">--</strong><small>以 capturedAt
+                    为准</small></article>
+        </section>
+
+        <section class="topic-panel topic-monthly-panel" aria-labelledby="eosMonthlyTitle">
+            <div class="topic-panel-head">
+                <div>
+                    <h2 id="eosMonthlyTitle">EOS 产品与版本收编 · 进展月报</h2>
+                    <p>每月采用该数据月份最后导入的一份 NetCare 快照；计划数和目标沿用该快照保存的设置。</p>
+                </div>
+                <div class="topic-monthly-controls">
+                    <label>月报专题<select id="monthlyTopic" aria-label="月报专题"><option value="eos">EOS 产品与版本收编</option></select></label>
+                    <label>报告月份<select id="eosMonthlyMonth" aria-label="EOS 月报月份"></select></label>
+                    <button id="eosCopyResetMonth" type="button" disabled>恢复本月自动文案</button>
+                    <button id="eosCopyResetFixed" type="button">恢复固定文案</button>
+                    <button id="eosToggleSourceTimeBtn" class="topic-monthly-btn" type="button" title="点击隐藏或显示月报顶部的导入时间与数据源小字">
+                        <span id="eosToggleSourceTimeIcon">👁️</span> <span id="eosToggleSourceTimeText">隐藏导入时间</span>
+                    </button>
+                    <button id="eosConfigBtn" class="topic-monthly-btn" type="button" title="配置客户名称映射规则与重点设备套数展示阈值">映射与阈值配置</button>
+                    <button id="eosExportProjectBtn" class="topic-monthly-btn" type="button" title="导出包含离线完整数据与全部中英文编辑的工程文件">📦 导出工程</button>
+                    <button id="eosImportProjectBtn" class="topic-monthly-btn" type="button" title="导入他人分享或历史备份的月报工程文件">📂 导入工程</button>
+                    <input type="file" id="eosProjectFileInput" accept=".json,.eos.json" style="display:none">
+                    <button id="eosSaveSnapshotBtn" class="topic-monthly-btn" type="button" title="将当前月报数据、定制文案与排版保存为历史快照（多设备云端同步）">📸 保存快照</button>
+                    <button id="eosManageSnapshotsBtn" class="topic-monthly-btn" type="button" title="查看、读取或管理已保存的历史月报快照">📚 月报快照库</button>
+                    <button id="eosDiffBtn" class="topic-monthly-btn topic-monthly-btn-accent" type="button" title="分屏比对两个月报版本（支持历史快照与当前月报比对，自动高亮文案、数据及格式颜色差异）">🔍 月报比对</button>
+                    <div class="topic-dropdown" id="eosPngDropdown">
+                        <button id="eosDownloadPng" class="topic-monthly-btn topic-dropdown-toggle" type="button" title="下载月报长图 PNG（点击展开选择：中文版 / 英文版 / 合一版）">下载月报 PNG ▾</button>
+                        <div class="topic-dropdown-menu" id="eosPngMenu" hidden>
+                            <button type="button" class="topic-dropdown-item" data-png-scope="cn" title="仅导出中文简报、图表与中文注脚">
+                                <span class="topic-dropdown-icon">🇨🇳</span>
+                                <div class="topic-dropdown-text">
+                                    <strong>中文版 PNG</strong>
+                                    <small>仅导出中文简报与图表</small>
+                                </div>
+                            </button>
+                            <button type="button" class="topic-dropdown-item" data-png-scope="en" title="仅导出英文简报、图表与英文注脚">
+                                <span class="topic-dropdown-icon">🇬🇧</span>
+                                <div class="topic-dropdown-text">
+                                    <strong>英文版 PNG</strong>
+                                    <small>仅导出英文简报与图表</small>
+                                </div>
+                            </button>
+                            <button type="button" class="topic-dropdown-item" data-png-scope="both" title="导出中英文完整对照长图">
+                                <span class="topic-dropdown-icon">🌐</span>
+                                <div class="topic-dropdown-text">
+                                    <strong>中英文合一 PNG</strong>
+                                    <small>导出中英文完整对照长图</small>
+                                </div>
+                            </button>
+                            <div class="topic-dropdown-divider"></div>
+                            <button type="button" class="topic-dropdown-item topic-dropdown-item-all" data-png-scope="all-three" title="依次自动下载全部 3 张图片">
+                                <span class="topic-dropdown-icon">📦</span>
+                                <div class="topic-dropdown-text">
+                                    <strong>一键下载全部（3张）</strong>
+                                    <small>依次下载中文、英文与合一图片</small>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                    <button id="eosDownloadPdf" class="topic-monthly-btn" type="button" title="下载排版精美的高清 PDF 格式月报">下载月报 PDF</button>
+                    <button id="eosDownloadHtml" class="topic-monthly-btn" type="button" title="下载排版完整且离线可交互浏览的 HTML 格式月报">下载月报 HTML</button>
+                    <button id="eosDownloadExcel" class="topic-monthly-btn topic-monthly-btn-primary" type="button" title="下载包含月报、多维度分析及详表的多 Sheet Excel">下载月报 Excel</button>
+                    <button id="eosDownloadMsg" class="topic-monthly-btn" type="button" title="下载可在 Outlook 中继续编辑的 HTML 月报邮件">下载月报 MSG</button>
+                </div>
+            </div>
+            <p class="topic-monthly-edit-hint">点击月报文字或表格可修改；选中文字可加粗或改色。当前浏览器会按平台和月份记忆动态文案与表格，按平台记忆固定文案。<span
+                    id="eosCopyStatus" role="status"></span>
+                <span id="eosSyncCapsule" class="topic-sync-capsule" role="status" hidden title="点击快速查看或定位待同步的英文内容"></span>
+            </p>
+            <div id="eosReportSheet" class="topic-report-sheet">
+                <div id="eosReportGutter" class="topic-report-gutter print-hide" data-html2canvas-ignore="true" aria-label="修改状态导航导轨"></div>
+                <a name="eos-section-cn" id="eos-section-cn" class="topic-section-anchor" data-html2canvas-ignore="true"></a>
+                <div id="eosReportNavCn" class="topic-report-nav-bar">
+                    <span class="topic-report-nav-tag">🇨🇳 中文版简报</span>
+                    <a href="#eos-section-en" class="topic-report-nav-link" title="点击跳转至下方英文版简报">Jump to English / 跳转至英文版 ➔</a>
+                </div>
+                <p id="eosMonthlySource" class="topic-monthly-source"></p>
+                <div id="eosMonthlyReport" class="topic-monthly-report" aria-live="polite">正在生成月报…</div>
+                <div class="topic-fixed-progress">
+                    <section class="topic-fixed-block" aria-labelledby="fixedProductTitle">
+                        <h3 id="fixedProductTitle" class="topic-report-item-title">➤ 风险管理进展（产品EOS）：</h3>
+                        <div class="topic-monthly-copy">
+                            <p>（请填写本月进展。可直接点击修改，或用「导入工程」载入已有的月报文案与基线数据。）</p>
+                            <p>（请填写本月进展。可直接点击修改，或用「导入工程」载入已有的月报文案与基线数据。）</p>
+                        </div>
+                        <div class="topic-table-wrap topic-report-table-wrap">
+                            <table class="topic-fixed-table" id="fixedProductTable">
+                                <thead>
+                                    <tr>
+                                        <th rowspan="2">客户</th>
+                                        <th rowspan="2">网元基线</th>
+                                        <th rowspan="2">2026 产品 EOS</th>
+                                        <th colspan="5">已闭环</th>
+                                        <th colspan="4">未闭环</th>
+                                    </tr>
+                                    <tr>
+                                        <th>小计</th>
+                                        <th>闭环率</th>
+                                        <th>停服</th>
+                                        <th>例外销售</th>
+                                        <th>退网</th>
+                                        <th>小计</th>
+                                        <th>制定计划</th>
+                                        <th>执行中</th>
+                                        <th>待确认</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" data-cust="TE">TE</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Vodafone">Vodafone</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="e&">e&amp;</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Orange">Orange</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr class="topic-monthly-total">
+                                        <th scope="row">合计</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="topic-report-caption">（表 3：产品 EOS 风险消减进展）</p>
+                    </section>
+                    <section class="topic-fixed-block" aria-labelledby="fixedVersionTitle">
+                        <h3 id="fixedVersionTitle" class="topic-report-item-title">➤ 风险管理进展（版本EOS）：</h3>
+                        <div class="topic-monthly-copy">
+                            <p>（请填写本月进展。可直接点击修改，或用「导入工程」载入已有的月报文案与基线数据。）</p>
+                            <p class="topic-fixed-version-focus">（请填写本月进展。可直接点击修改，或用「导入工程」载入已有的月报文案与基线数据。）</p>
+                        </div>
+                        <div class="topic-table-wrap topic-report-table-wrap">
+                            <table class="topic-fixed-table" id="fixedVersionTable">
+                                <thead>
+                                    <tr>
+                                        <th rowspan="2">客户</th>
+                                        <th rowspan="2">网元基线</th>
+                                        <th rowspan="2">2026 版本 EOS</th>
+                                        <th colspan="4">已闭环</th>
+                                        <th colspan="3">未闭环</th>
+                                    </tr>
+                                    <tr>
+                                        <th>小计*</th>
+                                        <th>闭环率</th>
+                                        <th>已发预警函</th>
+                                        <th>退网</th>
+                                        <th>小计</th>
+                                        <th>风险评估与发布</th>
+                                        <th>发送预警函中</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" data-cust="e&">e&amp;</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Vodafone">Vodafone</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="TE">TE</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Orange">Orange</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr class="topic-monthly-total">
+                                        <th scope="row">合计</th>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td class="topic-fixed-complete">—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="topic-report-caption">（表 4：版本 EOS 风险告知进展）</p>
+                    </section>
+                    <p class="topic-fixed-footnote">固定基线据 NetCare 官方材料整理，网元基线为年初固定值。*版本已闭环小计包含 NetCare 官方 IBMS 更新新增的 4
+                        个网元，因此小计可能高于年初基线对应的原始统计，这是数据更新后的正常现象；闭环率按整数显示为 100%。</p>
+                    <section class="topic-report-remarks-block">
+                        <h4 class="topic-report-remarks-title">备注：风险管理闭环流程</h4>
+                        <div class="topic-monthly-copy">
+                            <p>EOS产品风险处置流程：风险初评 → 发布风险 → 制定停服方案 → 停服或例外销售审批 → 客户确认 → 闭环验收；</p>
+                            <p>EOS版本风险处置流程：风险初评 → 发布风险 → 指派并发送预警函 → 确认客户收到 → 闭环验收；</p>
+                        </div>
+                    </section>
+                </div>
+                <footer class="topic-report-footer topic-report-footer-cn">
+                    <p class="topic-report-contact-copy">若您对此报告数据有疑问，请联系报告负责人，谢谢！原始数据见附件！</p>
+                    <div class="topic-report-signature">埃及网络保障与运维服务部</div>
+                    <p id="eosReportEndmark" class="topic-report-endmark"></p>
+                </footer>
+
+                <!-- English Version · 英文对照月报 -->
+                <a name="eos-section-en" id="eos-section-en" class="topic-section-anchor" data-html2canvas-ignore="true"></a>
+                <div class="topic-report-divider-en"><span class="topic-report-divider-badge">ENGLISH VERSION · 英文对照简报</span></div>
+                <div id="eosReportNavEn" class="topic-report-nav-bar topic-report-nav-bar-en">
+                    <span class="topic-report-nav-tag">🇬🇧 English Version</span>
+                    <a href="#eos-section-cn" class="topic-report-nav-link" title="点击跳转至上方中文版简报">➔ 跳转至中文版 / Jump to Chinese</a>
+                </div>
+                <div id="eosMonthlyReportEn" class="topic-monthly-report topic-monthly-report-en" aria-live="polite">正在生成英文月报…</div>
+                <div class="topic-fixed-progress topic-fixed-progress-en">
+                    <section class="topic-fixed-block" aria-labelledby="fixedProductTitleEn">
+                        <h3 id="fixedProductTitleEn" class="topic-report-item-title">➤ Risk Management Progress (Product EOS):</h3>
+                        <div class="topic-monthly-copy">
+                            <p>(Fill in this month's progress. Click to edit, or use "Import project" to load existing report copy and baseline data.)</p>
+                            <p class="topic-fixed-product-focus-en">(Fill in this month's progress. Click to edit, or use "Import project" to load existing report copy and baseline data.)</p>
+                        </div>
+                        <div class="topic-table-wrap topic-report-table-wrap">
+                            <table class="topic-fixed-table" id="fixedProductTableEn">
+                                <thead>
+                                    <tr>
+                                        <th rowspan="2">Customer</th>
+                                        <th rowspan="2">Baseline NEs</th>
+                                        <th rowspan="2">2026 Product EOS</th>
+                                        <th colspan="5">Closed</th>
+                                        <th colspan="4">Unclosed</th>
+                                    </tr>
+                                    <tr>
+                                        <th>Subtotal</th>
+                                        <th>Closure Rate</th>
+                                        <th>EOL</th>
+                                        <th>Exception Sale</th>
+                                        <th>Retirement</th>
+                                        <th>Subtotal</th>
+                                        <th>Plan Formulated</th>
+                                        <th>In Execution</th>
+                                        <th>Pending Confirmation</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" data-cust="TE">TE</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Vodafone">Vodafone</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="e&">e&amp;</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Orange">Orange</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr class="topic-monthly-total">
+                                        <th scope="row">Total</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="topic-report-caption">(Table 3: Product EOS Risk Elimination Progress)</p>
+                    </section>
+                    <section class="topic-fixed-block" aria-labelledby="fixedVersionTitleEn">
+                        <h3 id="fixedVersionTitleEn" class="topic-report-item-title">➤ Risk Management Progress (Version EOS):</h3>
+                        <div class="topic-monthly-copy">
+                            <p>(Fill in this month's progress. Click to edit, or use "Import project" to load existing report copy and baseline data.)</p>
+                            <p class="topic-fixed-version-focus-en">(Fill in this month's progress. Click to edit, or use "Import project" to load existing report copy and baseline data.)</p>
+                        </div>
+                        <div class="topic-table-wrap topic-report-table-wrap">
+                            <table class="topic-fixed-table" id="fixedVersionTableEn">
+                                <thead>
+                                    <tr>
+                                        <th rowspan="2">Customer</th>
+                                        <th rowspan="2">Baseline NEs</th>
+                                        <th rowspan="2">2026 Version EOS</th>
+                                        <th colspan="4">Closed</th>
+                                        <th colspan="3">Unclosed</th>
+                                    </tr>
+                                    <tr>
+                                        <th>Subtotal*</th>
+                                        <th>Closure Rate</th>
+                                        <th>Warning Letters</th>
+                                        <th>Retirement</th>
+                                        <th>Subtotal</th>
+                                        <th>Risk Assessment &amp; Release</th>
+                                        <th>Dispatching Warning Letters</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" data-cust="e&">e&amp;</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Vodafone">Vodafone</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="TE">TE</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" data-cust="Orange">Orange</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                    <tr class="topic-monthly-total">
+                                        <th scope="row">Total</th>
+                                        <td>—</td><td>—</td><td>—</td><td class="topic-fixed-complete">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="topic-report-caption">(Table 4: Version EOS Risk Notification Progress)</p>
+                    </section>
+                    <p class="topic-fixed-footnote">Fixed baseline is compiled according to official NetCare materials, and NE baseline is a fixed figure set at the beginning of the year. *Version closed subtotal includes 4 new NEs added from NetCare official IBMS updates, which may be slightly higher than the initial baseline; closure rate is displayed as 100%.</p>
+                    <section class="topic-report-remarks-block">
+                        <h4 class="topic-report-remarks-title">Remarks: Risk Management Closed-Loop Process</h4>
+                        <div class="topic-monthly-copy">
+                            <p>Product EOS Risk Handling Process: Initial Risk Assessment → Risk Release → Retirement Solution Formulation → EOL or Exception Sale Approval → Customer Confirmation → Closed-Loop Acceptance;</p>
+                            <p>Version EOS Risk Handling Process: Initial Risk Assessment → Risk Release → Assign &amp; Dispatch Warning Letter → Customer Receipt Confirmation → Closed-Loop Acceptance;</p>
+                        </div>
+                    </section>
+                </div>
+                <footer class="topic-report-footer topic-report-footer-en">
+                    <p class="topic-report-contact-copy">If you have any questions regarding this report, please contact the report owner. Thank you! Raw data attached.</p>
+                    <div class="topic-report-signature">Egypt Network Assurance &amp; Maintenance Service Dept</div>
+                    <p id="eosReportEndmarkEn" class="topic-report-endmark"></p>
+                </footer>
+            </div>
+        </section>
+
+        <section class="topic-panel">
+            <div class="topic-panel-head">
+                <div>
+                    <h2 id="analysisTitle">专题历史分析</h2>
+                    <p id="metricDefinition">选择专题后，按同一指标口径比较每次归档时的历史状态。</p>
+                </div>
+                <div class="topic-filters">
+                    <label>分析专题<select id="topicFilter"></select></label>
+                    <label>趋势指标<select id="metricFilter"></select></label>
+                </div>
+            </div>
+            <div id="topicKpis" class="topic-dynamic-kpis" aria-label="专题关键指标"></div>
+            <div id="trendChart" class="topic-chart" aria-label="专题快照数据量趋势"></div>
+            <div class="topic-chart-legend"><span><i class="netcare"></i>NetCare</span><span><i
+                        class="datafab"></i>DataFab</span><em>每个点代表一次已归档快照</em></div>
+        </section>
+
+        <section class="topic-panel">
+            <div class="topic-panel-head">
+                <div>
+                    <h2>历史快照</h2>
+                    <p>查看摘要、下载原始 JSON，或清理不再需要的快照。</p>
+                </div><span id="loadStatus" class="topic-status">正在读取…</span>
+            </div>
+            <div class="topic-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>数据时间</th>
+                            <th>来源</th>
+                            <th>周期</th>
+                            <th id="metricColumnTitle">当前指标</th>
+                            <th>导入时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody"></tbody>
+                </table>
+            </div>
+            <div id="emptyState" class="topic-empty" hidden>还没有快照。请在 UIVF12 脚本仓库打开“模拟浮窗”并导入正式站点导出的 JSON。</div>
+        </section>
+
+        <section class="topic-panel topic-api-panel">
+            <div>
+                <h2>跨页面引用预留</h2>
+                <p>其他页面可以直接读取本平台的已归档数据，无需重复解析本地文件。</p>
+            </div>
+            <div class="topic-api-grid">
+                <code>GET /api/topic-snapshots</code><code>GET /api/topic-snapshots/series</code><code>GET /api/topic-snapshots/latest?platform=netcare</code><code>GET /api/topic-snapshots/:id</code>
+            </div>
+        </section>
+    </main>
+
+    <div id="detailModal" class="topic-modal" hidden>
+        <div class="topic-modal-card" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+            <div class="topic-modal-head">
+                <div>
+                    <h2 id="detailTitle">专题详表</h2>
+                    <p id="detailSummary"></p>
+                </div>
+                <div class="topic-modal-actions"><button id="downloadDetail" type="button">下载详表</button><button
+                        id="viewRaw" type="button">原始 JSON</button><button id="toggleDetailFullscreen"
+                        type="button">全屏</button><button id="closeDetail" type="button" aria-label="关闭">×</button></div>
+            </div>
+            <div id="detailTools" class="topic-detail-tools"><input id="detailSearch" type="search" placeholder="筛选全部列…"
+                    aria-label="筛选详表"><label>每页<select id="detailPageSize">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select></label><span>排序：</span><select id="detailSortColumn" aria-label="排序列"></select><button
+                    id="detailSortDirection" type="button">升序</button></div>
+            <div id="detailTable" class="topic-detail-table-wrap"></div>
+            <pre id="detailJson"></pre>
+        </div>
+    </div>
+
+    <div id="eosMappingModal" class="topic-modal" hidden>
+        <div class="topic-modal-card topic-mapping-modal-card" role="dialog" aria-modal="true" aria-labelledby="eosMappingTitle">
+            <div class="topic-modal-head">
+                <div>
+                    <h2 id="eosMappingTitle">客户名称映射与显示阈值配置</h2>
+                    <p>配置月报表格与文案中自动替换的客户映射规则，以及重点设备最小套数展示阈值。</p>
+                </div>
+                <div class="topic-modal-actions">
+                    <button id="closeEosMappingModal" type="button" aria-label="关闭">×</button>
+                </div>
+            </div>
+            <div class="topic-mapping-modal-body">
+                <div class="topic-mapping-section">
+                    <div class="topic-mapping-section-title">📊 重点关注设备展示阈值</div>
+                    <p class="topic-mapping-tip">在文案中展开列出设备具体型号时，仅显示数量大于或等于该阈值的条目，避免显示过多碎小项。</p>
+                    <div class="topic-mapping-threshold-row">
+                        <label for="eosMinThresholdInput">最小设备套数展示阈值：</label>
+                        <input id="eosMinThresholdInput" type="number" min="0" max="9999" value="10" step="1">
+                        <span class="topic-mapping-unit">套（默认 10 套，小于该值的型号自动折叠）</span>
+                    </div>
+                </div>
+                <div class="topic-mapping-section">
+                    <div class="topic-mapping-section-head">
+                        <div class="topic-mapping-section-title">🏷️ 客户名称映射表（自动替换表格与文案客户名）</div>
+                        <button id="eosResetDefaultMappingsBtn" class="topic-mapping-btn-small" type="button">恢复默认映射</button>
+                    </div>
+                    <p class="topic-mapping-tip">原始名称匹配成功后，将在中文月报表格、英文月报表格及所有动态文案中自动替换为映射显示名称。</p>
+                    <div class="topic-mapping-table-wrap">
+                        <table class="topic-mapping-table">
+                            <thead>
+                                <tr>
+                                    <th>原始客户名称 (Original)</th>
+                                    <th>映射显示名称 (Display)</th>
+                                    <th style="width:70px;text-align:center">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="eosMappingTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="topic-mapping-add-row">
+                        <input id="eosNewMapKey" type="text" placeholder="原始客户名称，如 Etisalat Misr" aria-label="原始客户名称">
+                        <span class="topic-mapping-arrow">➔</span>
+                        <input id="eosNewMapVal" type="text" placeholder="映射显示名称，如 e&" aria-label="映射显示名称">
+                        <button id="eosAddMappingBtn" type="button">添加映射</button>
+                    </div>
+                </div>
+            </div>
+            <div class="topic-mapping-modal-foot">
+                <span id="eosMappingStatusMsg" class="topic-mapping-status-msg"></span>
+                <div class="topic-mapping-actions">
+                    <button id="eosSaveMappingConfigBtn" class="topic-monthly-btn topic-monthly-btn-primary" type="button">保存并应用</button>
+                    <button id="eosCancelMappingConfigBtn" class="topic-monthly-btn" type="button">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="eosTextToolbar" class="topic-text-toolbar" role="toolbar" aria-label="EOS 月报文字格式" hidden>
+        <button type="button" data-eos-format="bold" title="加粗" aria-label="加粗"><strong>B</strong></button>
+        <button type="button" data-eos-color="#0f172a" style="--swatch:#0f172a" title="黑色" aria-label="黑色"></button>
+        <button type="button" data-eos-color="#1d4ed8" style="--swatch:#1d4ed8" title="蓝色" aria-label="蓝色"></button>
+        <button type="button" data-eos-color="#dc2626" style="--swatch:#dc2626" title="红色" aria-label="红色"></button>
+        <button type="button" data-eos-color="#16a34a" style="--swatch:#16a34a" title="绿色" aria-label="绿色"></button>
+        <button type="button" data-eos-color="#d97706" style="--swatch:#d97706" title="橙色" aria-label="橙色"></button>
+        <button type="button" data-eos-color="#7c3aed" style="--swatch:#7c3aed" title="紫色" aria-label="紫色"></button>
+    </div>
+
+    <script src="js/shared/api.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/navbar.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <script src="js/shared/html2canvas.min.js"></script>
+    <script src="js/shared/jspdf.umd.min.js"></script>
+    <script src="js/shared/exceljs.min.js"></script>
+    <script src="js/shared/report-msg-export.js"></script>
+    <script src="js/shared/topic-monthly-engine.js"></script>
+    <script src="js/shared/report-snapshot-diff.js"></script>
+    <script src="js/topic-analysis.js"></script>
+</body>
+
+</html>

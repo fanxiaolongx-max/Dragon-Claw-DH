@@ -80,3 +80,23 @@ CREATE TABLE IF NOT EXISTS `agent_schedules` (
   KEY `idx_sched_owner` (`owner_id`, `updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- ===== 1.6.0：没有新增表（消息中心、用量趋势、工具开关、技能历史都存 sys_kv_store，自定义 Logo 存 dh_blob_assets）=====
+
+-- ===== 1.7.0：业务页面的统一记录表（专题分析、值班表、FRT 核算、PR 稽查共用）=====
+CREATE TABLE IF NOT EXISTS `biz_records` (
+  `kind` VARCHAR(32) NOT NULL,
+  `id` VARCHAR(96) NOT NULL,
+  `group_key` VARCHAR(64) NOT NULL DEFAULT '',
+  `name` VARCHAR(255) NOT NULL DEFAULT '',
+  `period` VARCHAR(32) NOT NULL DEFAULT '',
+  `sort_key` VARCHAR(64) NOT NULL DEFAULT '',
+  `content_hash` VARCHAR(64) NOT NULL DEFAULT '',
+  `summary_json` LONGTEXT,
+  `payload_json` LONGTEXT,
+  `payload_bytes` BIGINT NOT NULL DEFAULT 0,
+  `updated_by` VARCHAR(128) NOT NULL DEFAULT '',
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  `updated_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`kind`, `id`),
+  KEY `idx_biz_sort` (`kind`, `group_key`, `sort_key`),
+  KEY `idx_biz_hash` (`kind`, `group_key`, `content_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
