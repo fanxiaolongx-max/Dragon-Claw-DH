@@ -96,6 +96,24 @@ npm test         # 接口、权限与浏览器端到端测试
 
 接真实基座联调：复制 `.env.example` 为 `.env`，填入基座地址并设 `LOCAL_DEV_MEMORY=0`。
 
+## 启动与排障
+
+`run.js` 是一个 CommonJS 启动器，应用代码在 `src/`（由 `src/package.json` 声明 ESM）。
+
+**为什么根目录不是 ESM**：基座启动应用时会在应用目录里放一个它自己的 CommonJS 文件 `dh-identity-loader.js` 并预加载。根目录的 `package.json` 如果声明 `"type": "module"`，Node 会把它当成 ES 模块，报 `require is not defined in ES module scope`，应用还没运行就退出（1.0.0 在基座上就是这样失败的）。`npm run check` 会拦住这种写法。
+
+**启动日志**（stdout，JSON，一行一条，`category` 为 `BOOT`）：
+
+| 日志 | 内容 |
+| --- | --- |
+| `boot: 启动环境` | Node 版本、工作目录、启动参数、预加载的模块、应用目录里的文件（标出不属于本包的）、各依赖是否装上、环境变量是否注入（只报有无，不打印取值） |
+| `boot: 这些环境变量没有注入` | 缺了哪些基座地址类变量 |
+| `boot: 加载应用模块` / `模块加载完成` / `启动完成` | 各阶段耗时 |
+| `启动失败（阶段）` | 错误信息、错误码、堆栈前 12 行，以及针对常见原因的处理提示；同时写到 stderr |
+| `server started` | 开始监听 |
+
+启动环境快照也会出现在调试面板的「实时后端日志」里。
+
 ## 与规范的对应
 
 | 规范要求 | 实现 |

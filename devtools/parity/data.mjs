@@ -1,6 +1,6 @@
 // 对标数据：桌面版 Dragon Claw ↔ 数字人 Web 版 ↔ 基座 Node 规范。
 // 改这里，再运行 node devtools/parity/gen.mjs 重新生成 docs/对标与规划.xlsx 和 .md。
-export const VERSION = '1.4.0';
+export const VERSION = '1.4.1';
 export const DATE = '2026-11-12';
 
 // 现状：已对齐 / 部分 / 未做 / 不适用
@@ -127,7 +127,8 @@ export const TOOLS = [
 
 export const SPEC = [
     // 条款, 要求, 现状, 结论, 备注
-    ['§1.1', 'Node 22.21.1、ESM', '符合', '✅', 'engines、.nvmrc、app.json 一致'],
+    ['§1.1', 'Node 22.21.1', '符合', '✅', 'engines、.nvmrc、app.json 一致'],
+    ['§1.2', '统一 ESM，根目录 package.json 声明 "type": "module"', '偏离', '⚠️', '基座启动时会在应用根目录放一个 CommonJS 文件 dh-identity-loader.js 并预加载；根目录声明 ESM 会报 “require is not defined in ES module scope”，应用起不来（1.0.0 实测）。因此根目录保持 CommonJS（run.js 是启动器），应用代码全部在 src/ 下并由 src/package.json 声明 ESM。建议平台把加载器改名为 .cjs，届时可改回'],
     ['§2.1', '扁平 zip，run.js 与 app.json 在根目录', '符合', '✅', '构建时自检'],
     ['§4.1', '无原生模块、无安装脚本、无直连库驱动、无自带登录、无 eval / child_process', '符合', '✅', 'npm run check 机检'],
     ['§4.1', '无前端框架与构建工具、无公网 CDN', '符合', '✅', ''],
@@ -166,6 +167,7 @@ export const SPEC = [
 
 export const ROADMAP = [
     // 批次, 事项, 价值, 工作量, 状态
+    ['1.4.1', '修复基座上启动失败（平台注入的 CommonJS 加载器与 ESM 冲突），新增启动诊断日志', '能在真实基座上启动', 'S', '已完成'],
     ['本轮（1.4.0）', '规范对齐：环境变量集中、路由分层、启动日志、升级脚本、tests 入包', '避免送检被打回', 'S', '已完成'],
     ['本轮（1.4.0）', '任务清单、选项提问', '多步任务可见、可控', 'S', '已完成'],
     ['本轮（1.4.0）', '精确计算工具', '占比、增减幅、工作日不再靠模型心算', 'S', '已完成'],

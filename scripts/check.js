@@ -64,7 +64,13 @@ export async function runCheck() {
         if (BANNED_AUTH_PKGS.has(dep)) errors.push(`R2 违规：package.json 禁止包含自建登录鉴权依赖 ${dep}`);
     }
     if (pkg.engines?.node !== '22.21.1') errors.push(`package.json engines.node 必须精确为 22.21.1，当前: ${pkg.engines?.node}`);
-    if (pkg.type !== 'module') errors.push('package.json 必须声明 "type": "module"');
+    // 基座会在应用根目录放一个 CommonJS 文件（dh-identity-loader.js）并预加载：根目录声明 ESM 会让它加载失败、应用起不来。
+    // 所以根目录保持 CommonJS（run.js 是启动器），应用代码在 src/ 下由 src/package.json 声明 ESM。
+    if (pkg.type === 'module') errors.push('根目录 package.json 不能声明 "type": "module"（会导致基座注入的 CommonJS 加载器启动失败）');
+    try {
+        if (JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'package.json'), 'utf8')).type !== 'module') errors.push('src/package.json 必须声明 "type": "module"');
+    } catch { errors.push('缺少 src/package.json（声明 src 下的代码为 ESM）'); }
+    if (/^\s*(?:import\s[^(]|export\s)/m.test(fs.readFileSync(path.join(ROOT, 'run.js'), 'utf8'))) errors.push('run.js 必须是 CommonJS 启动器，不能使用 import / export 语句');
     for (const [file, expect] of [['.nvmrc', '22.21.1']]) {
         const p = path.join(ROOT, file);
         if (!fs.existsSync(p) || fs.readFileSync(p, 'utf8').trim() !== expect) errors.push(`${file} 内容必须为 ${expect}`);
@@ -134,7 +140,8 @@ export async function runCheck() {
             errors.push(`R4 违规 (${rel(file)})：疑似硬编码 UUID 字面量`);
         }
         // 规范 §6.1：环境变量只在 src/config.js 读取一次
-        if (rel(file) !== `src${path.sep}config.js` && /process\.env\b/.test(src)) {
+        // run.js 例外：它要在加载任何应用模块之前打印启动环境（只报告是否注入，不打印取值）
+        if (rel(file) !== `src${path.sep}config.js` && rel(file) !== 'run.js' && /process\.env\b/.test(src)) {
             errors.push(`§6.1 违规 (${rel(file)})：环境变量只能在 src/config.js 读取`);
         }
         // 规范 §5.1：routes 只调 service，不直接引用数据访问层

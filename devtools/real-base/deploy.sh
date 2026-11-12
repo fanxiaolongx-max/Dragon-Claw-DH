@@ -40,10 +40,14 @@ docker run -d --name dh-base --restart unless-stopped --network dh-net -p ${DH_P
   -e MYSQL_HOST=dh-mysql -e MYSQL_PASSWORD="$MYSQL_ROOT_PASSWORD" -e APP_SCHEMA="$SCHEMA" -e APP_UUID="$UUID" \
   -e APP_UPSTREAM=http://dh-web:5400 -e INIT_SQL=/base/init.sql -e GATEWAY_STRIP="${GATEWAY_STRIP:-1}" $NODE_IMG node server.mjs >/dev/null
 
+# 模拟基座行为：往应用目录放一个 CommonJS 的 dh-identity-loader.js 并预加载。
+# 根目录 package.json 一旦声明 "type": "module"，这里就会像真实基座上一样启动失败。
+{ for i in $(seq 1 15); do echo "// platform identity loader (emulated) line $i"; done; echo 'const http = require("http");'; echo 'void http;'; } > "$APP/dh-identity-loader.js"
+
 docker run -d --name dh-web --restart unless-stopped --network dh-net -v "$APP:/app" -w /app \
   -e PORT=5400 -e APP_UUID="$UUID" -e APP_SCHEMA="$SCHEMA" -e APP_DATASOURCE_ID=2 \
   -e BASE_QUERY_URL=http://dh-base:5401/query -e BASE_EXECUTE_URL=http://dh-base:5401/execute \
-  ${DH_ADMIN_USERS:+-e DH_ADMIN_USERS="$DH_ADMIN_USERS"} $NODE_IMG node run.js >/dev/null
+  ${DH_ADMIN_USERS:+-e DH_ADMIN_USERS="$DH_ADMIN_USERS"} $NODE_IMG node -r ./dh-identity-loader.js run.js >/dev/null
 
 for i in $(seq 1 60); do curl -sf -m 3 "http://127.0.0.1:${DH_PORT}/digital-human/dh/${UUID}/api/healthz" >/dev/null 2>&1 && break; sleep 2; done
 docker logs --tail 4 dh-base
