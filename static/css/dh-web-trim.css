@@ -4,9 +4,8 @@
  * 由 js/shared/dh-runtime.js 注入，并在 <html> 上加 dh-web 类。
  */
 
-/* 首页左侧导航：频道会话、定时任务、资料库（知识图谱）、运维待办 */
+/* 首页左侧导航：频道会话、资料库（知识图谱）、运维待办 */
 html.dh-web .v2-nav-item[data-v2-action="channels"],
-html.dh-web .v2-nav-item[data-v2-action="schedule"],
 html.dh-web .v2-nav-item[data-v2-action="library"],
 html.dh-web .v2-nav-item[data-v2-action="opsDrafts"],
 /* 「更多」菜单里的桌面版入口 */
@@ -14,9 +13,8 @@ html.dh-web .v2-pop-item[data-v2-action="requirements"],
 html.dh-web .v2-pop-item[data-v2-action="promotions"],
 html.dh-web .v2-pop-item[data-v2-action="links"],
 html.dh-web #homeKnowledgeGraphEntry,
-/* 快速提问里依赖已隐藏能力的场景：知识图谱、定时任务 */
+/* 快速提问里依赖已隐藏能力的场景：知识图谱 */
 html.dh-web .v2-scenes [data-scene="graph"],
-html.dh-web .v2-scenes [data-scene="schedule"],
 /* 对话区：内嵌浏览器、语音输入 */
 html.dh-web #dcBrowserToggle,
 html.dh-web #dcVoice,

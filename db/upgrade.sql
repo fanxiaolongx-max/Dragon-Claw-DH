@@ -56,3 +56,26 @@ CREATE TABLE IF NOT EXISTS `ai_chat_uploads` (
   KEY `idx_ai_uploads_owner` (`owner_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ===== 1.5.0：定时任务 =====
+CREATE TABLE IF NOT EXISTS `agent_schedules` (
+  `id` VARCHAR(64) NOT NULL,
+  `owner_id` VARCHAR(128) NOT NULL,
+  `instruction` TEXT,
+  `kind` VARCHAR(16) NOT NULL DEFAULT 'once',
+  `rule_json` VARCHAR(1024) NULL,
+  `timezone` VARCHAR(64) NOT NULL DEFAULT '',
+  `session_id` VARCHAR(128) NOT NULL DEFAULT '',
+  `model_id` VARCHAR(128) NOT NULL DEFAULT '',
+  `status` VARCHAR(16) NOT NULL DEFAULT 'active',
+  `next_run_at` BIGINT NULL,
+  `last_run_at` BIGINT NULL,
+  `last_status` VARCHAR(16) NOT NULL DEFAULT '',
+  `last_error` VARCHAR(512) NOT NULL DEFAULT '',
+  `last_reply` TEXT,
+  `run_count` INT NOT NULL DEFAULT 0,
+  `created_at` BIGINT NOT NULL DEFAULT 0,
+  `updated_at` BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_sched_due` (`status`, `next_run_at`),
+  KEY `idx_sched_owner` (`owner_id`, `updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -76,6 +76,8 @@ const USER_WRITES = [
     ['*', /^\/ai\/sessions(?:\/.*)?$/], // 路由内校验会话归属
     ['POST', /^\/report-msg\/export$/],
     ['POST', /^\/custom-tools$/], // 普通用户发布的工具只有自己可见
+    ['POST', /^\/agent-workspace\/approvals\/[^/]+$/], // 只能批自己发起的（路由内校验）
+    ['*', /^\/ai\/schedules(?:\/[^/]+)?$/], // 定时任务只属于创建者（服务内校验）
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
 ];
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/];

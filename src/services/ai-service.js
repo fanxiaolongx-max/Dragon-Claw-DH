@@ -102,10 +102,21 @@ export async function getPublicSettings() {
         activeProfileId: active.id,
         profiles: profiles.map(publicProfile),
         modelAliases: (await kvGet('ai_model_aliases', {})) || {},
+        autoSwitchEnabled: await getAutoSwitch(),
     };
 }
 
+// 主模型异常时自动切换到其他方案（全局开关，设置页「AI 助手」里）
+export async function getAutoSwitch() {
+    return Boolean(await kvGet('ai_auto_switch', false));
+}
+
 export async function saveProfile(input = {}, idOverride = '') {
+    if (typeof input.autoSwitchEnabled === 'boolean') {
+        await kvSet('ai_auto_switch', input.autoSwitchEnabled);
+        // 只改开关（锁定方案时前端只发这一项）：不动方案本身
+        if (Object.keys(input).every((k) => ['autoSwitchEnabled', 'profileId'].includes(k))) return getPublicSettings();
+    }
     const existingList = await listProfiles();
     const targetId = String(idOverride || input.id || '').trim() || `profile-${crypto.randomUUID().slice(0, 8)}`;
     const existing = existingList.find((p) => p.id === targetId);

@@ -6,6 +6,8 @@ import {
 } from '../services/skill-service.js';
 import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool } from '../services/custom-tool-service.js';
 import { saveChatUpload, readChatUpload } from '../services/chat-upload-service.js';
+import { decideApproval } from '../agent/approvals.js';
+import { runSelect, toolByName } from '../agent/tools.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const overridesFrom = (body) => {
@@ -128,8 +130,30 @@ export async function handleChatUpload(req, reply) {
     return { files };
 }
 
-// 自定义工具页面：外壳页 + 沙箱 iframe。工具代码拿不到平台的 Cookie，也调不了平台接口。
-const SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads';
+// 写操作审批：对话里确认卡上的「允许 / 拒绝」
+export async function agentWorkspaceRoutes(fastify) {
+    fastify.post('/approvals/:id', async (req, reply) => {
+        const ok = decideApproval(req.params.id, req.userIdentity.username, req.body?.decision);
+        if (!ok) return reply.code(404).send({ error: '这个确认已经失效（超时、已处理，或不是你发起的）' });
+        return { success: true };
+    });
+}
+
+// 自定义工具页面：外壳页 + 沙箱 iframe。
+//   - iframe 不带 allow-same-origin：拿不到平台的 Cookie 和本地存储；
+//   - CSP 禁止一切网络请求和弹窗：工具无法把数据发到外面；
+//   - 需要平台数据时经外壳页的只读数据桥（DH.query / DH.report / DH.me），权限与当前查看者相同。
+const SANDBOX = 'allow-scripts allow-forms allow-modals allow-downloads';
+const TOOL_CSP = `sandbox ${SANDBOX}; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'`;
+// 注入到工具页面最前面的数据桥客户端
+const BRIDGE_CLIENT = `<script>(function(){var seq=0,wait={};window.addEventListener('message',function(e){var d=e.data;if(!d||d.__dh!==1||!wait[d.id])return;var w=wait[d.id];delete wait[d.id];if(d.ok)w[0](d.data);else w[1](new Error(d.error||'请求失败'));});function call(m,p){return new Promise(function(res,rej){var id=++seq;wait[id]=[res,rej];parent.postMessage({__dh:1,id:id,method:m,params:p||{}},'*');setTimeout(function(){if(wait[id]){delete wait[id];rej(new Error('平台没有响应'));}},60000);});}window.DH={query:function(sql,limit){return call('query',{sql:sql,limit:limit});},report:function(snapshotId){return call('report',{snapshot_id:snapshotId});},me:function(){return call('me');}};})();</script>`;
+function withBridge(html) {
+    const m = /<head[^>]*>/i.exec(html);
+    if (m) return html.slice(0, m.index + m[0].length) + BRIDGE_CLIENT + html.slice(m.index + m[0].length);
+    return BRIDGE_CLIENT + html;
+}
+// 外壳页里的数据桥服务端：只转发白名单方法
+const BRIDGE_SHELL = `<script>(function(){var f=document.querySelector('iframe');window.addEventListener('message',function(e){if(e.source!==f.contentWindow)return;var d=e.data;if(!d||d.__dh!==1)return;fetch('bridge',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:d.method,params:d.params})}).then(function(r){return r.json().then(function(j){return r.ok?{ok:true,data:j}:{ok:false,error:j.error||('HTTP '+r.status)};});}).catch(function(err){return{ok:false,error:err.message};}).then(function(reply){reply.__dh=1;reply.id=d.id;f.contentWindow.postMessage(reply,'*');});});})();</script>`;
 
 export function registerCustomToolPages(app, phase2Html) {
     const identityOf = async (req) => {
@@ -140,10 +164,30 @@ export function registerCustomToolPages(app, phase2Html) {
     app.get('/custom-tools/:slug/raw', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
         if (!tool) return reply.code(404).type('text/plain; charset=utf-8').send('工具不存在');
-        reply.header('Content-Security-Policy', `sandbox ${SANDBOX}`);
+        reply.header('Content-Security-Policy', TOOL_CSP);
         reply.header('X-Content-Type-Options', 'nosniff');
         reply.header('Cache-Control', 'private, no-store');
-        return reply.type('text/html; charset=utf-8').send(tool.html);
+        return reply.type('text/html; charset=utf-8').send(withBridge(tool.html));
+    });
+    app.post('/custom-tools/:slug/bridge', async (req, reply) => {
+        const identity = await identityOf(req);
+        const tool = await getCustomTool(req.params.slug, identity);
+        if (!tool) return reply.code(404).send({ error: '工具不存在' });
+        const method = String(req.body?.method || '');
+        const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {};
+        reply.header('Cache-Control', 'no-store');
+        if (method === 'me') return { username: identity.username, displayName: identity.displayName, isAdmin: Boolean(identity.isAdmin) };
+        if (method === 'query') {
+            const out = await runSelect({ sql: String(params.sql || ''), limit: params.limit });
+            if (!out.ok) return reply.code(400).send({ error: out.content });
+            return JSON.parse(out.content);
+        }
+        if (method === 'report') {
+            const out = await toolByName.get('get_report_overview').run({ snapshot_id: params.snapshot_id }, { identity });
+            if (!out.ok) return reply.code(400).send({ error: out.content });
+            try { return JSON.parse(out.content); } catch { return { message: out.content }; }
+        }
+        return reply.code(400).send({ error: `不支持的方法：${method}（可用：query、report、me）` });
     });
     const page = async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
@@ -156,7 +200,7 @@ header{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#fff
 header a{color:#1f6feb;text-decoration:none}header b{font-size:15px}header small{color:#6b7480;margin-left:auto}
 iframe{flex:1;width:100%;border:0;background:#fff}</style></head>
 <body><header><a href="../../">← 返回首页</a><span>${esc(tool.icon)}</span><b>${esc(tool.name)}</b><small>自定义工具 · 在隔离沙箱中运行</small></header>
-<iframe src="raw" sandbox="${SANDBOX}" title="${esc(tool.name)}"></iframe></body></html>`;
+<iframe src="raw" sandbox="${SANDBOX}" title="${esc(tool.name)}"></iframe>${BRIDGE_SHELL}</body></html>`;
     };
     // 服务端忽略末尾斜杠，两种地址是同一条路由；页面里用相对地址取 raw，所以没有斜杠时先补上
     app.get('/custom-tools/:slug', async (req, reply) => {

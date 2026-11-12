@@ -29,6 +29,8 @@ export async function debugRoutes(fastify) {
             service: config.appName,
             version: config.appVersion,
             nodeVersion: process.version,
+            // 启动时的环境快照与依赖检查（环境变量只含“是否注入”，不含取值）
+            boot: globalThis.__dhBootReport || null,
             pid: process.pid,
             uptimeSec: Math.round(process.uptime()),
             memoryMode: isMemoryMode(),

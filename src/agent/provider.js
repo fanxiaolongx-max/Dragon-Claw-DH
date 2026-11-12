@@ -24,6 +24,14 @@ function toOpenAiMessages(system, messages) {
                 content: m.content || null,
                 tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args || {}) } })),
             });
+        } else if (m.images?.length) {
+            out.push({
+                role: m.role,
+                content: [
+                    { type: 'text', text: m.content || '' },
+                    ...m.images.map((img) => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } })),
+                ],
+            });
         } else out.push({ role: m.role, content: m.content || '' });
     }
     return out;
@@ -43,7 +51,12 @@ function toAnthropicMessages(messages) {
             if (m.content) blocks.push({ type: 'text', text: m.content });
             for (const c of m.toolCalls || []) blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args || {} });
             if (blocks.length) push('assistant', blocks);
-        } else if (m.content) push('user', [{ type: 'text', text: m.content }]);
+        } else if (m.content || m.images?.length) {
+            push('user', [
+                ...(m.content ? [{ type: 'text', text: m.content }] : []),
+                ...(m.images || []).map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.base64 } })),
+            ]);
+        }
     }
     return out;
 }
@@ -73,6 +86,12 @@ function parseArgs(raw) {
     } catch {
         return { __invalid: String(raw).slice(0, 400) };
     }
+}
+
+function httpError(status, text) {
+    const error = new BusinessError(`模型服务 HTTP ${status}: ${String(text || '').slice(0, 300)}`, 502);
+    error.httpStatus = status;
+    return error;
 }
 
 // 限流、网关抖动、连接被重置这类瞬时故障：在还没开始输出之前重试一次（间隔 1.2 秒）
@@ -110,7 +129,7 @@ export async function streamModel({ settings, system, messages, tools = [], sign
         if (typeof body.temperature !== 'number') delete body.temperature;
         if (tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
         const resp = await post(spec.url, spec.headers, body, signal);
-        if (!resp.ok) throw new BusinessError(`模型服务 HTTP ${resp.status}: ${(await resp.text().catch(() => '')).slice(0, 300)}`, 502);
+        if (!resp.ok) throw httpError(resp.status, await resp.text().catch(() => ''));
         const blocks = new Map();
         for await (const ev of sseEvents(resp.body)) {
             if (ev.type === 'message_start') usage.inputTokens += Number(ev.message?.usage?.input_tokens || 0);
@@ -150,11 +169,11 @@ export async function streamModel({ settings, system, messages, tools = [], sign
         resp = await post(spec.url, spec.headers, body, signal);
         used = attempt;
         if (resp.ok) break;
-        lastError = `模型服务 HTTP ${resp.status}: ${(await resp.text().catch(() => '')).slice(0, 300)}`;
+        lastError = httpError(resp.status, await resp.text().catch(() => ''));
         // 只有“请求格式不被接受”才值得换一种格式重试；鉴权、限流、服务端错误直接报
         if (![400, 404, 422].includes(resp.status)) break;
     }
-    if (!resp.ok) throw new BusinessError(lastError, 502);
+    if (!resp.ok) throw lastError;
 
     const calls = new Map();
     for await (const ev of sseEvents(resp.body)) {

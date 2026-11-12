@@ -4,12 +4,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
-import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, sqlVal, isMemoryMode } from '../dao/scoped.js';
+import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
 import { listSkills, getSkill, saveSkill } from '../services/skill-service.js';
 import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
-import { listScripts, saveScripts, listCategories } from '../services/uiv-service.js';
+import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory } from '../services/uiv-service.js';
+import { sendExpediteNotification } from '../services/report-service.js';
+import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
 
 // ── 应用库目录：模型能查的业务表（其余表——对话、密钥、配置、附件——一律不可查）──
@@ -103,7 +105,7 @@ function shapeRows(rows, maxRows = 200, maxChars = 24_000) {
     return { rows: out, total, truncated: out.length < total };
 }
 
-async function runSelect({ database, sql, limit }) {
+export async function runSelect({ database, sql, limit }) {
     const isApp = !database || database === APP_DB || database === config.appSchema;
     if (!isApp && !hasBusinessDatasource()) return { ok: false, summary: '数据库不存在', content: `没有名为 ${database} 的数据库。可用：${APP_DB}` };
     const guarded = guardSelect(sql, { appDb: isApp });
@@ -123,6 +125,52 @@ async function runSelect({ database, sql, limit }) {
     } catch (error) {
         return { ok: false, summary: '查询失败', content: `查询失败：${error.message}。请检查表名、列名和语法（MySQL 8）后重试。`, output: `${finalSql}\n\n✗ ${error.message}` };
     }
+}
+
+
+// ── 写操作的边界 ──
+// 只开放业务配置类的表；导入快照、归档文件这类大表和系统表不开放写入
+const WRITABLE = new Set(['report_metric_data', 'report_category_scores', 'bigscreen_owners', 'sla_targets', 'sla_categories', 'sla_groups', 'sla_group_items', 'uiv_categories'].filter((t) => SCHEMA.has(t)));
+const MAX_WRITE_ROWS = 200;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function imageMime(name, mime) {
+    if (/^image\/(png|jpe?g|webp|gif)$/i.test(String(mime || ''))) return String(mime).toLowerCase().replace('jpg', 'jpeg');
+    const ext = /\.([a-z0-9]+)$/i.exec(String(name || ''))?.[1]?.toLowerCase();
+    return { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || '';
+}
+export { imageMime, MAX_IMAGE_BYTES };
+
+function checkWritable(table, ctx) {
+    if (!ctx.identity.isAdmin) return { error: '修改数据需要管理员权限' };
+    const t = String(table || '').replace(/`/g, '').toLowerCase();
+    if (!WRITABLE.has(t)) return { error: `表 ${t} 不允许通过对话修改。可写的表：${[...WRITABLE].join('、')}` };
+    return { table: t };
+}
+function checkColumns(table, values) {
+    if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length) return { error: 'values 不能为空' };
+    const known = new Set(SCHEMA.get(table).map((c) => c.name));
+    const bad = Object.keys(values).filter((k) => !known.has(k) || k === 'id');
+    if (bad.length) return { error: `这些列不能写：${bad.join('、')}（列不存在或是自增主键）。可写的列：${[...known].filter((c) => c !== 'id').join('、')}` };
+    return {};
+}
+async function countWhere(table, where) {
+    const w = String(where || '').trim();
+    if (!w) return { error: '必须提供 where 条件' };
+    if (/^\s*(1\s*=\s*1|true)\s*$/i.test(w)) return { error: '不允许对整张表操作' };
+    const guarded = guardSelect(`SELECT COUNT(*) AS n FROM \`${table}\` WHERE ${w}`, { appDb: true });
+    if (guarded.error) return { error: `where 条件不合法：${guarded.error}` };
+    const rows = await scopedQuery(guarded.sql, 1);
+    const count = Number(rows[0]?.n || 0);
+    if (count > MAX_WRITE_ROWS) return { error: `符合条件的有 ${count} 行，超过单次上限 ${MAX_WRITE_ROWS} 行，请缩小条件` };
+    return { count };
+}
+const shortValue = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s.length > 120 ? `${s.slice(0, 120)}…` : s; };
+function normalizeRecipients(list) {
+    return [...new Set((Array.isArray(list) ? list : String(list || '').split(/[,，;；\s]+/))
+        .map((x) => String(x || '').trim().replace(/^email:/i, ''))
+        .filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x))
+        .map((x) => `email:${x}`))];
 }
 
 const PLATFORM_TOOLS = [
@@ -292,7 +340,7 @@ export const TOOLS = [
     },
     {
         name: 'publish_html_tool',
-        description: '把一个自包含的单页 HTML 发布为平台里的自定义工具，返回访问链接。只有用户确认要发布时才调用。HTML 必须内联全部样式和脚本，不依赖外部资源；工具在沙箱里运行，不能访问平台接口和登录信息。',
+        description: '把一个自包含的单页 HTML 发布为平台里的自定义工具，返回访问链接。只有用户确认要发布时才调用。HTML 必须内联全部样式和脚本；工具在沙箱里运行，不能发起任何网络请求，也拿不到登录信息。需要平台数据时在页面脚本里调用内置的只读接口：await DH.query(sql, limit) 查业务表、await DH.report() 取最新报表概览、await DH.me() 取当前用户。',
         parameters: {
             type: 'object',
             properties: {
@@ -434,6 +482,168 @@ export const TOOLS = [
             const all = await saveScripts([{ ...(args.id ? { id: String(args.id) } : {}), name: String(args.name).slice(0, 120), category: args.category, url: String(args.url), method: String(args.method || 'GET').toUpperCase(), code: String(args.code || '').slice(0, 60_000), source: 'chat', createdBy: ctx.identity.username }]);
             const saved = args.id ? all.find((s) => String(s.id) === String(args.id)) : all.find((s) => !before.has(String(s.id)));
             return { ok: true, summary: `已保存「${args.name}」`, content: JSON.stringify({ saved: true, id: saved?.id, name: args.name, linkHint: '可在 [数据抓取](/uivf12) 页面查看和运行' }) };
+        },
+    },
+
+// ── 看图与表格分析 ──
+    {
+        name: 'view_image',
+        description: '看一张用户在对话里上传的图片（png / jpg / webp / gif，路径形如 uploads/…）。图片会附在下一条消息里给你看；question 写你想从图里了解什么。当前模型不支持看图时会告诉你。',
+        parameters: { type: 'object', properties: { path: { type: 'string', description: '附件路径' }, question: { type: 'string', description: '想从图里了解什么（可选）' } }, required: ['path'] },
+        async run(args, ctx) {
+            const file = await readChatUpload(String(args.path || ''), ctx.identity.username, { withData: true });
+            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（只能读取当前用户在对话里上传的文件）。' };
+            const mimeType = imageMime(file.name, file.mimeType);
+            if (!mimeType) return { ok: false, summary: '不是图片', content: `${file.name} 不是 png / jpg / webp / gif 图片，请用 read_file 或 query_data 读取。` };
+            if (file.buffer.length > MAX_IMAGE_BYTES) return { ok: false, summary: '图片太大', content: `图片 ${Math.round(file.buffer.length / 1024)}KB，超过 ${MAX_IMAGE_BYTES / 1024 / 1024}MB，请让用户截一张小一点的图。` };
+            ctx.attachImage({ name: file.name, mimeType, base64: file.buffer.toString('base64') });
+            return { ok: true, summary: file.name, content: `图片「${file.name}」已附在下一条消息里，请直接查看。` };
+        },
+    },
+    {
+        name: 'query_data',
+        description: '分析用户上传的 Excel / CSV 附件：在服务端筛选、分组、聚合，只返回结果，适合上千行的大表。先不带条件调用一次看各列的情况（列名、类型、取值分布、样例行），再按需查询。条件 op 支持 = != > >= < <= contains not_contains starts_with in not_in empty not_empty；聚合 fn 支持 count count_non_empty count_distinct sum avg min max。百分比按数字比较（91.2% 记作 91.2）。',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: '附件路径（uploads/…）' },
+                sheet: { type: 'string', description: '工作表名，默认第一个有数据的' },
+                select: { type: 'array', items: { type: 'string' }, description: '要返回的列（不分组时）' },
+                where: { type: 'array', description: '筛选条件，全部满足', items: { type: 'object', properties: { column: { type: 'string' }, op: { type: 'string' }, value: {} }, required: ['column', 'op'] } },
+                group_by: { type: 'array', items: { type: 'string' }, description: '分组列' },
+                aggregates: { type: 'array', description: '聚合', items: { type: 'object', properties: { fn: { type: 'string' }, column: { type: 'string' }, as: { type: 'string' } }, required: ['fn'] } },
+                order_by: { type: 'array', description: '排序', items: { type: 'object', properties: { column: { type: 'string' }, desc: { type: 'boolean' } }, required: ['column'] } },
+                limit: { type: 'integer', description: '最多返回多少行，默认 50，上限 500' },
+                offset: { type: 'integer', description: '从第几行开始（翻页）' },
+                describe: { type: 'boolean', description: 'true 时返回各列概况' },
+            },
+            required: ['path'],
+        },
+        async run(args, ctx) {
+            const file = await readChatUpload(String(args.path || ''), ctx.identity.username, { withData: true });
+            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（只能读取当前用户在对话里上传的文件）。' };
+            try {
+                const sheets = await loadTables(file);
+                const out = runQuery(sheets, args);
+                let content = JSON.stringify(out);
+                if (content.length > 28_000) content = JSON.stringify({ ...out, rows: out.rows?.slice(0, 40), note: '结果太长，只保留前 40 行；请加条件或改成聚合' });
+                const summary = out.mode === 'describe' ? `${out.rowCount} 行 × ${out.columns.length} 列` : `${out.resultRows} 行结果`;
+                return { ok: true, summary, content };
+            } catch (error) {
+                return { ok: false, summary: '查询失败', content: `表格查询失败：${error.message}` };
+            }
+        },
+    },
+
+    // ── 写操作（仅管理员，执行前需要用户在对话里确认）──
+    {
+        name: 'insert_database_row',
+        description: `往应用库的业务表插入一行。仅管理员可用，执行前会请用户确认。可写的表：${[...WRITABLE].join('、')}。`,
+        parameters: { type: 'object', properties: { table: { type: 'string' }, values: { type: 'object', description: '列名 → 值' } }, required: ['table', 'values'] },
+        kind: 'write',
+        async approval(args, ctx) {
+            const t = checkWritable(args.table, ctx);
+            if (t.error) return t;
+            const cols = checkColumns(t.table, args.values);
+            if (cols.error) return cols;
+            return { preview: { title: `向 ${t.table} 插入 1 行`, impact: '新增数据', fields: Object.entries(args.values).map(([k, v]) => ({ label: k, value: shortValue(v) })) } };
+        },
+        async run(args) {
+            const n = await insertRow(String(args.table).toLowerCase(), args.values);
+            return { ok: true, summary: `已插入 ${n} 行`, content: `已向 ${args.table} 插入 ${n} 行。` };
+        },
+    },
+    {
+        name: 'update_database_rows',
+        description: `修改应用库业务表里符合条件的行。必须带 where 条件，一次最多影响 ${MAX_WRITE_ROWS} 行。仅管理员可用，执行前会请用户确认（会显示将影响多少行）。可写的表：${[...WRITABLE].join('、')}。`,
+        parameters: { type: 'object', properties: { table: { type: 'string' }, values: { type: 'object', description: '要改成的值：列名 → 值' }, where: { type: 'string', description: 'WHERE 条件（不含 WHERE 关键字），如 id = 12' } }, required: ['table', 'values', 'where'] },
+        kind: 'write',
+        async approval(args, ctx) {
+            const t = checkWritable(args.table, ctx);
+            if (t.error) return t;
+            const cols = checkColumns(t.table, args.values);
+            if (cols.error) return cols;
+            const n = await countWhere(t.table, args.where);
+            if (n.error) return n;
+            return { preview: { title: `修改 ${t.table} 中 ${n.count} 行`, impact: `条件：${args.where}`, fields: Object.entries(args.values).map(([k, v]) => ({ label: k, value: `→ ${shortValue(v)}` })) }, count: n.count };
+        },
+        async run(args) {
+            const n = await updateRows(String(args.table).toLowerCase(), args.values, { whereSql: args.where });
+            return { ok: true, summary: `已修改 ${n} 行`, content: `已修改 ${args.table} 中 ${n} 行。` };
+        },
+    },
+    {
+        name: 'delete_database_rows',
+        description: `删除应用库业务表里符合条件的行。必须带 where 条件，一次最多 ${MAX_WRITE_ROWS} 行。仅管理员可用，执行前会请用户确认。可写的表：${[...WRITABLE].join('、')}。`,
+        parameters: { type: 'object', properties: { table: { type: 'string' }, where: { type: 'string', description: 'WHERE 条件（不含 WHERE 关键字）' } }, required: ['table', 'where'] },
+        kind: 'destructive',
+        async approval(args, ctx) {
+            const t = checkWritable(args.table, ctx);
+            if (t.error) return t;
+            const n = await countWhere(t.table, args.where);
+            if (n.error) return n;
+            if (!n.count) return { error: '没有符合条件的行，不需要删除' };
+            return { preview: { title: `删除 ${t.table} 中 ${n.count} 行`, impact: `条件：${args.where}（不可恢复）`, fields: [] }, count: n.count };
+        },
+        async run(args) {
+            const n = await deleteRows(String(args.table).toLowerCase(), { whereSql: args.where });
+            return { ok: true, summary: `已删除 ${n} 行`, content: `已删除 ${args.table} 中 ${n} 行。` };
+        },
+    },
+    {
+        name: 'send_notification',
+        description: '通过基座通知接口发送邮件提醒（例如未达标指标催办）。仅管理员可用，执行前会请用户确认收件人和内容。收件人写邮箱地址；只有用户明确要求发送时才调用。',
+        parameters: {
+            type: 'object',
+            properties: { to: { type: 'array', items: { type: 'string' }, description: '收件人邮箱，最多 50 个' }, title: { type: 'string' }, content: { type: 'string', description: '正文（纯文本）' } },
+            required: ['to', 'title', 'content'],
+        },
+        kind: 'external',
+        async approval(args, ctx) {
+            if (!ctx.identity.isAdmin) return { error: '发送通知需要管理员权限' };
+            const to = normalizeRecipients(args.to);
+            if (!to.length) return { error: '收件人为空或格式不对（需要邮箱地址）' };
+            if (to.length > 50) return { error: '一次最多发给 50 人' };
+            if (!String(args.title || '').trim() || !String(args.content || '').trim()) return { error: '标题和正文都不能为空' };
+            return { preview: { channel: '基座邮件通知', targets: to.map((x) => x.replace(/^email:/, '')).join('、'), message: `${String(args.title).slice(0, 200)}\n\n${String(args.content).slice(0, 4000)}` } };
+        },
+        async run(args) {
+            const to = normalizeRecipients(args.to);
+            const res = await sendExpediteNotification({ recipients: to, title: String(args.title).slice(0, 200), content: String(args.content).slice(0, 4000) });
+            const delivered = res?.baseResult?.code === 0 || res?.baseResult?.data?.success;
+            return { ok: Boolean(delivered), summary: delivered ? `已发送给 ${to.length} 人` : '发送失败', content: delivered ? `已通过基座通知发送给 ${to.length} 人。` : `基座通知接口返回：${JSON.stringify(res?.baseResult || {}).slice(0, 300)}` };
+        },
+    },
+    {
+        name: 'move_uiv_script',
+        description: '把数据抓取脚本移到另一个分类。仅管理员可用。',
+        parameters: { type: 'object', properties: { id: { type: 'string' }, category: { type: 'string' } }, required: ['id', 'category'] },
+        kind: 'write',
+        async approval(args, ctx) {
+            if (!ctx.identity.isAdmin) return { error: '管理抓取脚本需要管理员权限' };
+            const script = (await listScripts()).find((x) => String(x.id) === String(args.id));
+            if (!script) return { error: `没有 id 为 ${args.id} 的脚本` };
+            return { preview: { title: `移动脚本「${script.name}」`, impact: `${script.category} → ${args.category}`, fields: [] } };
+        },
+        async run(args) {
+            await moveScriptCategory(String(args.id), String(args.category).slice(0, 60));
+            return { ok: true, summary: `已移到「${args.category}」`, content: `已把脚本移到分类「${args.category}」。` };
+        },
+    },
+    {
+        name: 'delete_uiv_script',
+        description: '删除一个数据抓取脚本。仅管理员可用，执行前会请用户确认。',
+        parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+        kind: 'destructive',
+        async approval(args, ctx) {
+            if (!ctx.identity.isAdmin) return { error: '管理抓取脚本需要管理员权限' };
+            const script = (await listScripts()).find((x) => String(x.id) === String(args.id));
+            if (!script) return { error: `没有 id 为 ${args.id} 的脚本` };
+            return { preview: { title: `删除脚本「${script.name}」`, impact: `分类：${script.category}（不可恢复）`, fields: [] } };
+        },
+        async run(args) {
+            await deleteScript(String(args.id));
+            return { ok: true, summary: '已删除', content: '脚本已删除。' };
         },
     },
 ];

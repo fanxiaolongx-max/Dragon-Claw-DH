@@ -28,6 +28,7 @@ export async function startMockBaseServer() {
     const aiRequests = [];
     const sqlErrors = [];
     const aiScript = [];
+    const options = { rejectImages: false };
 
     function getTable(name) {
         if (!tables.has(name)) tables.set(name, []);
@@ -162,6 +163,8 @@ export async function startMockBaseServer() {
         if (/FROM\s+demo_base_test/i.test(clean)) {
             return [{ id: 1, msg: 'init.sql 初始化数据', create_time: '2026-10-20T14:09:08' }];
         }
+        const cnt = clean.match(/^SELECT\s+COUNT\(\*\)\s+AS\s+(\w+)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+LIMIT\s+\d+)?$/i);
+        if (cnt) return [{ [cnt[1]]: getTable(cnt[2]).filter((r) => matchesWhere(r, cnt[3])).length }];
         const m = clean.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+ORDER\s+BY\s+([\s\S]+?))?$/i);
         if (!m) return [];
         const [, _cols, tbl, whereStr] = m;
@@ -194,6 +197,9 @@ export async function startMockBaseServer() {
         // OpenAI chat completion mock endpoint
         if (url.pathname === '/v1/chat/completions') {
             aiRequests.push(body);
+            if (options.rejectImages && JSON.stringify(body.messages || []).includes('image_url')) {
+                return sendJson({ error: { message: 'image input is not supported by this model' } }, 400);
+            }
             // 用例可以预先排好模型的每一轮输出：{ text } 或 { toolCalls: [{ name, args }] }
             const scripted = body.stream && aiScript.length ? aiScript.shift() : null;
             if (scripted) {
@@ -292,6 +298,7 @@ export async function startMockBaseServer() {
                 aiRequests,
                 sqlErrors,
                 aiScript,
+                options,
                 realBase: Boolean(REAL_BASE),
                 close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }),
             });

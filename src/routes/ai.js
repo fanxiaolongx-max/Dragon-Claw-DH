@@ -23,6 +23,10 @@ import {
 import { runAgent } from '../agent/loop.js';
 import { handleChatUpload } from './agent-extras.js';
 import { listSkills } from '../services/skill-service.js';
+import { getAutoSwitch } from '../services/ai-service.js';
+import { prepareContext, compactSession, generateTitle } from '../services/conversation-service.js';
+import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
+import { config } from '../config.js';
 
 export async function aiRoutes(fastify) {
     const ownerOf = (req) => resolveRequestIdentity(req).username;
@@ -118,7 +122,9 @@ export async function aiRoutes(fastify) {
             if (existing && existing.owner !== ownerId) return reply.code(404).send({ error: '会话不存在' });
         }
 
+        let createdNow = false;
         if (persist && !sessionId) {
+            createdNow = true;
             const created = await saveSession({
                 ownerId,
                 // 标题只取用户的话，不带附件清单
@@ -189,23 +195,40 @@ export async function aiRoutes(fastify) {
         if (stream && sessionId) write({ type: 'start', sessionId });
 
         try {
+            // 新对话：和回答并行地让模型起一个短标题
+            const titlePromise = createdNow && userText ? generateTitle({ settings: selected, text: userText.split('📎 附件：')[0] }) : null;
+            const context = persist && sessionId
+                ? await prepareContext({ sessionId, history, settings: selected, emit: write })
+                : { history, summary: '' };
             const res = await runAgent({
                 settings: selected,
                 identity: req.userIdentity || resolveRequestIdentity(req),
-                history,
+                history: context.history,
+                summary: context.summary,
                 skillIds: Array.isArray(body.skills) ? body.skills : [],
                 language: body.uiLanguage || 'zh',
                 emit: write,
                 signal: abort.signal,
+                profiles,
+                autoSwitch: await getAutoSwitch(),
+                secrets: [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean),
             });
+            const usedModel = res.model || selected;
             if (persist && sessionId && (res.text || res.events.length)) {
-                await appendMessage(sessionId, 'model', res.text, { modelName: selected.model, ...(res.events.length ? { events: res.events } : {}) });
+                await appendMessage(sessionId, 'model', res.text, { modelName: usedModel.model, ...(res.events.length ? { events: res.events } : {}) });
             }
             addUsage(res.usage);
+            if (titlePromise) {
+                const title = await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))]);
+                if (title) {
+                    await saveSession({ id: sessionId, title });
+                    write({ type: 'title', title, sessionId });
+                }
+            }
             return sendDone({
                 reply: res.text,
                 sessionId,
-                model: { id: selected.id, name: selected.model },
+                model: { id: usedModel.id, name: usedModel.model },
                 tokens: res.usage.inputTokens + res.usage.outputTokens,
                 usage: res.usage,
             });
@@ -226,10 +249,26 @@ export async function aiRoutes(fastify) {
         }
     });
 
-    fastify.post('/compact', async (req) => {
-        const msgs = await listMessages(String(req.body?.sessionId || ''));
-        return { success: true, summary: `已整理历史对话 ${msgs.length} 条记录` };
+    fastify.post('/compact', async (req, reply) => {
+        const sessionId = String(req.body?.sessionId || '');
+        const session = await getSession(sessionId);
+        if (!session || session.owner !== ownerOf(req)) return reply.code(404).send({ error: '会话不存在' });
+        const profiles = await listProfiles();
+        const settings = profiles.find((p) => p.id === req.body?.modelId) || profiles.find((p) => p.isActive) || profiles[0];
+        if (!settings?.apiKey) return reply.code(400).send({ error: '还没有配置模型，无法压缩对话' });
+        return compactSession({ sessionId, settings });
     });
+
+    // 定时任务：只能查看 / 创建 / 取消自己的
+    fastify.get('/schedules', async (req) => listSchedules(ownerOf(req), { since: typeof req.query?.since === 'string' ? req.query.since : '' }));
+    fastify.post('/schedules', async (req, reply) => reply.code(201).send({ item: await createSchedule({
+        owner: ownerOf(req),
+        text: String(req.body?.text || '').slice(0, 4200),
+        sessionId: typeof req.body?.sessionId === 'string' ? req.body.sessionId : '',
+        timezone: typeof req.body?.timezone === 'string' ? req.body.timezone.slice(0, 64) : '',
+        modelId: req.body?.modelId,
+    }) }));
+    fastify.delete('/schedules/:id', async (req) => ({ item: await cancelSchedule(req.params.id, ownerOf(req)) }));
 
     // 增强提示词：把一句口语化的问题改写成清楚、可执行的提问；没配模型或失败时原样返回
     fastify.post('/enhance-prompt', async (req) => {
@@ -257,7 +296,6 @@ export async function aiRoutes(fastify) {
     fastify.post('/proactive-alert-message', async () => ({ success: true }));
     fastify.get('/knowledge/status', async () => ({ ready: false, count: 0, message: '二期接入' }));
     fastify.get('/knowledge/graph', async () => ({ nodes: [], edges: [] }));
-    fastify.get('/schedules', async () => ({ items: [] }));
     fastify.get('/tool-local-keys', async () => ({ keys: [] }));
 }
 

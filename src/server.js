@@ -22,7 +22,7 @@ import { uploadRoutes } from './routes/upload.js';
 import { dbRoutes, expediteRoutes } from './routes/db.js';
 import { monthlySnapshotsRoutes, reportMsgRoutes, aiReportRoutes } from './routes/monthly.js';
 import { platformShellRoutes } from './routes/platform-shell.js';
-import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, registerCustomToolPages } from './routes/agent-extras.js';
+import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
 const gzipAsync = promisify(zlib.gzip);
 const DH_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+(?=\/|$|\?)/i;
@@ -290,6 +290,7 @@ export async function createServer() {
     await app.register(agentSkillsRoutes, { prefix: '/api/agent-skills' });
     await app.register(customToolsRoutes, { prefix: '/api/custom-tools' });
     await app.register(agentFilesRoutes, { prefix: '/api/agent-files' });
+    await app.register(agentWorkspaceRoutes, { prefix: '/api/agent-workspace' });
     await app.register(platformShellRoutes);
 
     // ── 静态资源前缀兼容（确保 /pages/*.html 与 /monthly/legacy 下相对资源与无前缀资源一致）─

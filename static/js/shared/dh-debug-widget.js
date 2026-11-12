@@ -353,6 +353,12 @@
                 ['APP_DATASOURCE_ID', String(data.env?.APP_DATASOURCE_ID ?? '-')],
                 ['Node / 版本', `${data.nodeVersion} / v${data.version}`],
             ];
+            const dep = data.boot?.dependencies;
+            if (dep) {
+                const missing = [...(dep.required || []), ...(dep.optional || [])].filter((d) => d.have === '未安装').map((d) => d.name);
+                cards.push(['依赖检查', `${dep.ok ? '通过' : '不通过'} · ${dep.profile}${missing.length ? ` · 未安装：${missing.join('、')}` : ''}${(dep.problems || []).length ? ` · ${dep.problems.length} 条提示` : ''}`]);
+            }
+            if (data.boot?.package?.notFromPackage?.length) cards.push(['平台注入的文件', data.boot.package.notFromPackage.join('、')]);
             for (const [k, v] of cards) {
                 const kv = el('div', 'dh-dbg-kv');
                 kv.append(el('small', '', k), el('code', '', v));
