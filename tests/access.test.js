@@ -63,6 +63,23 @@ test('首位已识别用户成为管理员，其余用户按桌面版规则只�
         assert.equal((await fetch(`${app.url}/api/auth/admins`, { method: 'PUT', headers: json(as('alice')), body: JSON.stringify({ users: ['alice', 'Bob'] }) })).status, 200);
         assert.equal((await (await fetch(`${app.url}/api/auth/me`, { headers: as('bob') })).json()).isAdmin, true);
 
+        // 管理员工号兼容大小写及省略首字母（如 z00569258 / 00569258、dwx1545337 / WX1545337）
+        assert.equal((await fetch(`${app.url}/api/auth/admins`, {
+            method: 'PUT',
+            headers: json(as('alice')),
+            body: JSON.stringify({ users: ['alice', 'z00569258', 'dwx1545337', 'z00548379'] }),
+        })).status, 200);
+        for (const emp of ['Z00569258', '00569258', 'WX1545337', 'wx1545337', 'DWX1545337', 'Z00548379']) {
+            assert.equal((await (await fetch(`${app.url}/api/auth/me`, { headers: as(emp) })).json()).isAdmin, true, `${emp} 应判定为管理员`);
+        }
+        assert.equal((await (await fetch(`${app.url}/api/auth/me`, { headers: as('cwx1545337') })).json()).isAdmin, false, '不同首字母工号不应误判');
+        assert.equal((await (await fetch(`${app.url}/api/auth/me`, { headers: as('lice') })).json()).isAdmin, false, '普通英文名不应去掉首字母匹配');
+        assert.equal((await fetch(`${app.url}/api/auth/admins`, {
+            method: 'PUT',
+            headers: json(as('WX1545337')),
+            body: JSON.stringify({ users: ['alice', 'z00569258', 'dwx1545337', 'z00548379'] }),
+        })).status, 200, '缺首字母登录态提交含完整工号名单时不应报移出自己');
+
         // 会话只属于创建者（carol 是普通用户，可以对话）
         const chat = await fetch(`${app.url}/api/ai/chat`, { method: 'POST', headers: json(as('carol')), body: JSON.stringify({ messages: [{ role: 'user', content: '你好' }] }) });
         assert.equal(chat.status, 200);

@@ -1,6 +1,6 @@
 import { BusinessError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
-import { listAdmins, saveAdmins } from '../core/access.js';
+import { hasAdminMatch, listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
@@ -45,9 +45,9 @@ export async function authRoutes(fastify) {
         const me = resolveRequestIdentity(req);
         const users = Array.isArray(req.body?.users) ? req.body.users : [];
         const next = users.map((u) => String(u || '').trim().toLowerCase()).filter(Boolean);
-        if (me.identified && !next.includes(me.username.toLowerCase())) {
+        if (me.identified && !hasAdminMatch(next, me.username)) {
             const { env } = await listAdmins();
-            if (!env.includes(me.username.toLowerCase())) throw new BusinessError('不能把自己移出管理员名单', 400);
+            if (!hasAdminMatch(env, me.username)) throw new BusinessError('不能把自己移出管理员名单', 400);
         }
         const stored = await saveAdmins(next);
         pushLog({ level: 'WARN', category: 'AUTH', message: `管理员名单已更新（${stored.length} 人）`, userId: me.username });

@@ -14,6 +14,27 @@ let bootstrapping = null;
 
 const norm = (v) => String(v || '').trim().toLowerCase();
 
+function stripFirstLetter(id) {
+    const s = norm(id);
+    // 工号去掉可选首字母（如 z00569258 -> 00569258、dwx1545337 -> wx1545337），避免误匹配普通英文名
+    const m = /^[a-z]((?:[a-z]{1,2})?\d{4,})$/.exec(s);
+    return m ? m[1] : '';
+}
+
+export function isSameUserId(a, b) {
+    const x = norm(a);
+    const y = norm(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const sx = stripFirstLetter(x);
+    const sy = stripFirstLetter(y);
+    return Boolean((sx && sx === y) || (sy && sy === x));
+}
+
+export function hasAdminMatch(list, username) {
+    return Array.isArray(list) && list.some((entry) => isSameUserId(entry, username));
+}
+
 async function storedAdmins(force = false) {
     if (!force && cache.list && Date.now() - cache.at < CACHE_MS) return cache.list;
     try {
@@ -41,9 +62,9 @@ export async function resolveAdmin(identity) {
     if (isMemoryMode() || config.openAdmin) return true;
     if (!identity.identified) return false;
     const me = norm(identity.username);
-    if (config.adminUsers.includes(me)) return true;
+    if (hasAdminMatch(config.adminUsers, me)) return true;
     const stored = await storedAdmins();
-    if (stored.includes(me)) return true;
+    if (hasAdminMatch(stored, me)) return true;
     if (config.adminUsers.length || stored.length) return false;
     // 还没有任何管理员：首位已识别用户自动成为管理员
     if (!bootstrapping) {
@@ -55,7 +76,7 @@ export async function resolveAdmin(identity) {
             return list;
         })().catch(() => []).finally(() => { bootstrapping = null; });
     }
-    return (await bootstrapping).includes(me);
+    return hasAdminMatch(await bootstrapping, me);
 }
 
 const USER_WRITES = [

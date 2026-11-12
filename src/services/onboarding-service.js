@@ -207,8 +207,8 @@ export async function ensureQuickStartSeeded() {
                 return;
             }
             const [hasTargets, hasPrefs, hasScripts] = await Promise.all([
-                selectTable('sla_targets', { columns: ['id'], limit: 1 }),
-                selectTable('sla_config_items', { columns: ['id'], whereSql: "`scope_key` = 'sla_pref'", limit: 1, memFilter: (r) => r.scope_key === 'sla_pref' }),
+                selectTable('sla_targets', { columns: ['target_key'], limit: 1 }),
+                selectTable('sla_config_items', { columns: ['item_key'], whereSql: "`scope_key` = 'sla_pref'", limit: 1, memFilter: (r) => r.scope_key === 'sla_pref' }),
                 selectTable('uiv_scripts', { columns: ['id'], limit: 1 }),
             ]);
             if (hasTargets.length || hasPrefs.length || hasScripts.length) {

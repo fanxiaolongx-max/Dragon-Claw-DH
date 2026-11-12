@@ -1,6 +1,20 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 // 测试用假基座：按真机回执模拟 {code,message,data}、不返回 lastInsertId、Redis 前缀等行为
 import http from 'node:http';
+
+const SCHEMA_COLS = (() => {
+    const map = new Map();
+    try {
+        const initSql = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../db/init.sql'), 'utf8');
+        for (const m of initSql.matchAll(/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\(([\s\S]*?)\)\s*ENGINE/g)) {
+            const cols = new Set([...m[2].matchAll(/^\s*`(\w+)`\s+/gm)].map((c) => c[1]));
+            if (cols.size) map.set(m[1], cols);
+        }
+    } catch { /* ignore */ }
+    return map;
+})();
 
 // 设了 DH_REAL_BASE（devtools/real-base 的地址）时，/query 与 /execute 不再用下面的正则模拟，
 // 而是转给真实 MySQL 8 执行——同一套用例顺带验证每条 SQL 在真库上能跑。
@@ -182,6 +196,19 @@ export async function startMockBaseServer() {
         const m = clean.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+ORDER\s+BY\s+([\s\S]+?))?$/i);
         if (!m) return [];
         const [, _cols, tbl, whereStr] = m;
+        if (_cols.trim() !== '*' && SCHEMA_COLS.has(tbl)) {
+            const valid = SCHEMA_COLS.get(tbl);
+            for (const part of _cols.split(',')) {
+                const colExpr = part.trim();
+                if (!colExpr || /\(|\bAS\b/i.test(colExpr)) continue;
+                const colName = colExpr.replace(/`/g, '').trim();
+                if (colName && !valid.has(colName)) {
+                    const err = new Error(`Unknown column '${colName}' in 'field list'`);
+                    err.sqlError = true;
+                    throw err;
+                }
+            }
+        }
         let rows = getTable(tbl).filter((r) => matchesWhere(r, whereStr));
         if (/ORDER\s+BY\s+.*DESC/i.test(clean)) rows = [...rows].reverse();
         return rows.slice(0, limit);
@@ -261,8 +288,16 @@ export async function startMockBaseServer() {
                 if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
                 return sendJson(out);
             }
-            const rows = queryMockSql(body.sql, body.limit || 200);
-            return sendJson({ code: 0, message: 'ok', data: { datasourceId: body.datasourceId, schema: body.schema, rows, rowCount: rows.length } });
+            try {
+                const rows = queryMockSql(body.sql, body.limit || 200);
+                return sendJson({ code: 0, message: 'ok', data: { datasourceId: body.datasourceId, schema: body.schema, rows, rowCount: rows.length } });
+            } catch (err) {
+                if (err.sqlError) {
+                    sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: err.message });
+                    return sendJson({ code: 500, message: err.message, data: null });
+                }
+                throw err;
+            }
         }
         if (url.pathname === '/execute') {
             if (body.schema === 'netcare') {
