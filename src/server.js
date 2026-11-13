@@ -23,7 +23,10 @@ import { dbRoutes, expediteRoutes } from './routes/db.js';
 import { monthlySnapshotsRoutes, reportMsgRoutes, aiReportRoutes } from './routes/monthly.js';
 import { platformShellRoutes } from './routes/platform-shell.js';
 import { alertCenterRoutes, platformLogoRoutes, agentToolsRoutes, dbExplorerRoutes, sendLogo } from './routes/platform-extras.js';
-import { frtRoutes, prauditRoutes, dutyRosterRoutes, topicSnapshotsRoutes } from './routes/business.js';
+import { frtRoutes, prauditRoutes, dutyRosterRoutes, topicSnapshotsRoutes, requirementsRoutes, surveysRoutes, meetingSnapshotsRoutes, operationIncentiveSnapshotsRoutes } from './routes/business.js';
+import { rewardProgramRoutes } from './routes/reward-routes.js';
+import { departmentRewardPenaltyRoutes } from './routes/department-reward-penalty.js';
+import { friendLinksRoutes, platformPromotionsRoutes } from './routes/home-extras.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
 const gzipAsync = promisify(zlib.gzip);
@@ -43,12 +46,12 @@ const PHASE1_PAGES = new Map([
     ['/duty-roster', 'duty-roster.html'],
     ['/frt', 'frt.html'],
     ['/praudit', 'praudit.html'],
+    ['/requirements', 'requirements.html'],
 ]);
 
 const PHASE2_ROUTES = new Set([
     '/storage',
     '/netcare-explorer',
-    '/requirements',
     '/custom-report',
 ]);
 
@@ -322,6 +325,15 @@ export async function createServer() {
     await app.register(prauditRoutes, { prefix: '/api/praudit' });
     await app.register(dutyRosterRoutes, { prefix: '/api/duty-roster' });
     await app.register(topicSnapshotsRoutes, { prefix: '/api/topic-snapshots' });
+    await app.register(requirementsRoutes, { prefix: '/api/requirements' });
+    await app.register(surveysRoutes, { prefix: '/api/surveys' });
+    await app.register(meetingSnapshotsRoutes, { prefix: '/api/meeting-snapshots' });
+    await app.register(operationIncentiveSnapshotsRoutes, { prefix: '/api/operation-incentive-snapshots' });
+    await app.register(operationIncentiveSnapshotsRoutes, { prefix: '/api/incentive-snapshots' }); // 别名
+    await app.register(departmentRewardPenaltyRoutes, { prefix: '/api/department-reward-penalty' });
+    await app.register(rewardProgramRoutes, { prefix: '/api/reward-program' });
+    await app.register(friendLinksRoutes, { prefix: '/api/friend-links' });
+    await app.register(platformPromotionsRoutes, { prefix: '/api/platform-promotions' });
     await app.register(platformShellRoutes);
     // 平台标识：页面里固定引用 assets/logo.png，管理员上传过自定义图标时这里返回自定义的
     app.get('/assets/logo.png', async (_req, reply) => sendLogo(reply));
@@ -353,7 +365,7 @@ export async function createServer() {
     app.get('/', async (req, reply) => {
         if (req.raw._dhNeedsTrailingSlash) {
             const tail = path.posix.basename(req.raw._dhRawPath);
-            return reply.redirect(302, `${tail}/${req.raw._dhRawSearch || ''}`);
+            return reply.redirect(`${tail}/${req.raw._dhRawSearch || ''}`, 302);
         }
         return sendProtectedHtml(req, reply, 'index.html');
     });
@@ -365,7 +377,7 @@ export async function createServer() {
 
     app.get('/ai-report', async (req, reply) => {
         const search = req.raw._dhRawSearch || '';
-        return reply.redirect(302, `monthly${search}`);
+        return reply.redirect(`monthly${search}`, 302);
     });
 
     app.get('/pages/:file', async (req, reply) => {
@@ -383,6 +395,7 @@ export async function createServer() {
             'duty-roster.html': 'duty-roster.html',
             'frt.html': 'frt.html',
             'praudit.html': 'praudit.html',
+            'requirements.html': 'requirements.html',
         };
         if (Object.hasOwn(legacyMap, file)) {
             return sendProtectedHtml(req, reply, legacyMap[file]);
@@ -398,10 +411,9 @@ export async function createServer() {
         });
     }
 
-    app.get('/tools/*', async (req, reply) => {
-        reply.type('text/html; charset=utf-8');
-        return phase2PlaceholderHtml(`内置工具 (${req.params['*']})`);
-    });
+    // 桌面版的工具地址 /tools/<标识>：统一交给工具外壳页（内置工具直接打开，用户发布的工具进沙箱）
+    app.get('/tools/:slug', async (req, reply) => reply.redirect(`../custom-tool.html?slug=${encodeURIComponent(String(req.params.slug || '').toLowerCase())}`, 302));
+    app.get('/custom-tool.html', async (req, reply) => sendProtectedHtml(req, reply, 'custom-tool.html'));
 
     registerCustomToolPages(app, phase2PlaceholderHtml);
 

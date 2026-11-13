@@ -7,6 +7,7 @@ import { pushLog, listLogs } from '../core/log-ring.js';
 import { getSetting as kvGet, saveSetting as kvSet } from '../services/system-service.js';
 import { getOnboardingStatus, applyOnboardingDecision } from '../services/onboarding-service.js';
 import { listScripts as listUivScripts } from '../services/uiv-service.js';
+import { platformSummary, trackToolOpen } from '../services/platform-metrics-service.js';
 
 const DEFAULT_IDENTITY = {
     platformName: 'Dragon Claw',
@@ -376,58 +377,13 @@ export async function platformShellRoutes(fastify) {
         return layout;
     });
 
-    // ── Platform Promotions / Metrics ───────────────────────
-    fastify.get('/api/platform-promotions', async (_req, reply) => {
+    // ── Platform Metrics（友情链接、平台推广见 routes/home-extras.js）──
+    fastify.get('/api/platform-metrics/summary', async (req, reply) => {
         reply.header('Cache-Control', 'no-store');
-        const stored = await kvGet('platform_promotions_config', null);
-        if (stored && typeof stored === 'object') return stored;
-        return {
-            enabled: true,
-            maxLinks: 3,
-            rotateSeconds: 30,
-            desktopStack: false,
-            videos: [],
-            links: [
-                {
-                    id: 'netcare',
-                    name: 'NetCare',
-                    nameEn: 'NetCare',
-                    badge: 'NetCare',
-                    badgeEn: 'NetCare',
-                    description: '维护作战地图',
-                    descriptionEn: 'Maintenance Operation Map',
-                    url: 'https://netcare.huawei.com',
-                    color: 'teal',
-                    coverImage: 'assets/promotions/netcare-operation-map.svg',
-                    builtin: true,
-                    enabled: true,
-                },
-            ],
-        };
+        return platformSummary({ identity: req.userIdentity });
     });
 
-    fastify.get('/api/platform-promotions/desktop', async (_req, reply) => {
-        reply.header('Cache-Control', 'no-store');
-        return { enabled: false, supported: false, cards: [] };
-    });
-
-    fastify.post('/api/platform-promotions/clicks', async () => ({ success: true, counted: true }));
-
-    fastify.get('/api/platform-metrics/summary', async (_req, reply) => {
-        reply.header('Cache-Control', 'no-store');
-        const counters = await kvGet('platform_tool_opens', {});
-        const totalOpens = Object.values(counters || {}).reduce((acc, n) => acc + (Number(n) || 0), 0);
-        return { totalOpens, tools: counters || {}, period: 'all' };
-    });
-
-    fastify.post('/api/platform-metrics/open', async (req) => {
-        const key = String(req.body?.toolKey || '').trim().slice(0, 120);
-        if (!key) return { success: true };
-        const counters = (await kvGet('platform_tool_opens', {})) || {};
-        counters[key] = (Number(counters[key]) || 0) + 1;
-        await kvSet('platform_tool_opens', counters);
-        return { success: true, count: counters[key] };
-    });
+    fastify.post('/api/platform-metrics/open', async (req) => ({ success: true, ...(await trackToolOpen(req.body?.toolKey)) }));
 
     fastify.get('/api/platform-metrics/service-status', async () => ({
         healthy: true,
@@ -660,12 +616,7 @@ export async function platformShellRoutes(fastify) {
         }
     });
 
-    fastify.get('/api/requirements/catalog-updates', async () => ({ updates: [], pendingCount: 0 }));
-    fastify.get('/api/requirements', async () => ({ items: [] }));
-    fastify.get('/api/friend-links', async () => ({ links: [] }));
     fastify.get('/api/vault', async () => ({ items: [] }));
-    fastify.get('/api/operation-incentive-snapshots', async () => []);
-    fastify.get('/api/meeting-snapshots', async () => []);
     fastify.get('/api/chat-history/status', async () => ({ enabled: false, indexedCount: 0 }));
     fastify.get('/api/distribution/catalog', async () => ({ items: [] }));
     fastify.get('/api/distribution/personal', async () => ({ entries: {} }));

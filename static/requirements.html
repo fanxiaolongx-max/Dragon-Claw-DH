@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <script src="js/shared/dh-runtime.js"></script><script src="js/api.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="需求管理 - Dragon Claw">需求管理 - Dragon Claw</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico?v=20261006">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icon.png">
+    <link rel="apple-touch-icon" href="assets/icon-mac.png">
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/requirements.css">
+    <link rel="stylesheet" href="css/light/requirements.css">
+    <link rel="stylesheet" href="css/requirements-appearance.css">
+</head>
+<body>
+    <div id="navbar-placeholder"></div>
+
+    <div class="req-container">
+        <header class="req-header">
+            <div>
+                <h1><svg class="req-line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span data-i18n="需求管理广场">需求管理广场</span> <span style="font-size:14px;color:#94a3b8;font-weight:normal;margin-left:8px;">v1.3.0</span></h1>
+                <p data-i18n="提交、追踪和管理平台新功能与优化需求">提交、追踪和管理平台新功能与优化需求</p>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <select id="reqSortSelect" class="form-control" style="width: auto; background: rgba(15, 23, 42, 0.8);" onchange="ReqApp.changeSort()">
+                    <option value="progress" data-i18n="默认排序：按进度优先">默认排序：按进度优先</option>
+                    <option value="updated" data-i18n="排序：最近更新时间">排序：最近更新时间</option>
+                    <option value="created" data-i18n="排序：最近创建时间">排序：最近创建时间</option>
+                </select>
+                <button class="btn btn-primary" onclick="ReqApp.openCreateModal()" data-i18n="+ 提交新需求">+ 提交新需求</button>
+            </div>
+        </header>
+
+        <section class="req-stats-top" id="reqStatsTop" aria-label="需求概览统计"></section>
+        <div class="req-stats-rail-row">
+            <aside class="req-stats-rail req-stats-left" id="reqStatsLeft" aria-label="需求流程统计"></aside>
+            <aside class="req-stats-rail req-stats-right" id="reqStatsRight" aria-label="需求分类统计"></aside>
+        </div>
+
+        <div class="req-board" id="reqBoard">
+            <!-- 需求卡片会动态渲染在这里 -->
+        </div>
+        <nav class="req-pagination" id="reqPagination" aria-label="需求列表分页"></nav>
+    </div>
+
+    <!-- 需求详情/编辑/流转 Modal -->
+    <div class="modal-overlay" id="reqModal" onclick="if(event.target === this) ReqApp.closeModal()">
+        <div class="modal-content req-detail-modal">
+            <div class="modal-header">
+                <h2 id="modalTitle" data-i18n="需求详情">需求详情</h2>
+                <button class="close-btn" onclick="ReqApp.closeModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- 流程图 (仅查看详情时显示) -->
+                <div class="flowchart-container" id="flowchartContainer" style="display: none;">
+                    <div class="flow-step" data-status="提交">
+                        <div class="step-circle">1</div>
+                        <div class="step-label" data-i18n="提交">提交</div>
+                    </div>
+                    <div class="step-line"></div>
+                    <div class="flow-step" data-status="需求接受">
+                        <div class="step-circle">2</div>
+                        <div class="step-label" data-i18n="接受">接受</div>
+                    </div>
+                    <div class="step-line"></div>
+                    <div class="flow-step" data-status="需求实现中">
+                        <div class="step-circle">3</div>
+                        <div class="step-label" data-i18n="实现中">实现中</div>
+                    </div>
+                    <div class="step-line"></div>
+                    <div class="flow-step" data-status="需求完成">
+                        <div class="step-circle">4</div>
+                        <div class="step-label" data-i18n="完成">完成</div>
+                    </div>
+                    <div class="step-line"></div>
+                    <div class="flow-step" data-status="验收完成">
+                        <div class="step-circle">5</div>
+                        <div class="step-label" data-i18n="验收">验收</div>
+                    </div>
+                    <div class="step-line"></div>
+                    <div class="flow-step" data-status="需求评价">
+                        <div class="step-circle">6</div>
+                        <div class="step-label" data-i18n="评价">评价</div>
+                    </div>
+                </div>
+
+                <!-- 表单区 -->
+                <div class="form-row">
+                    <div class="form-group" style="flex: 2;">
+                        <label><span data-i18n="需求标题">需求标题</span> <span class="required">*</span></label>
+                        <input type="text" id="reqTitleInput" class="form-control" data-i18n-ph="简短描述需求的核心目的" placeholder="简短描述需求的核心目的">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label><span data-i18n="页面分类">页面分类</span> <span class="required">*</span></label>
+                        <select id="reqCategorySelect" class="form-control">
+                            <option value="" disabled selected data-i18n="请选择分类...">请选择分类...</option>
+                            <option value="全局通用" data-i18n="全局通用">全局通用</option>
+                            <option value="新增页面" data-i18n="新增页面">新增页面</option>
+                            <option value="工具中台首页" data-i18n="工具中台首页">工具中台首页</option>
+                            <option value="数据抓取(UIVF12)" data-i18n="数据抓取(UIVF12)">数据抓取(UIVF12)</option>
+                            <option value="数据导入(SLA)" data-i18n="数据导入(SLA)">数据导入(SLA)</option>
+                            <option value="报表看板" data-i18n="报表看板">报表看板</option>
+                            <option value="一键催办" data-i18n="一键催办">一键催办</option>
+                            <option value="月报页面" data-i18n="月报页面">月报页面</option>
+                            <option value="需求管理" data-i18n="需求管理">需求管理</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="reqDescInput" data-i18n="需求详情描述">需求详情描述</label>
+                    <textarea id="reqDescInput" class="form-control" rows="4" aria-describedby="reqDescMeta" data-i18n-ph="详细说明背景、期望效果等" placeholder="详细说明背景、期望效果等"></textarea>
+                    <div class="req-description-meta" id="reqDescMeta">
+                        <span data-i18n="未设字数上限">未设字数上限</span>
+                        <span id="reqDescCount" role="status" aria-live="polite" aria-atomic="true">已输入 0 字 · 还可输入：不限</span>
+                    </div>
+                </div>
+
+                <section class="form-group req-publication" id="reqSkillPublication" hidden>
+                    <strong id="reqSkillPublicationTitle"></strong>
+                    <p id="reqSkillPublicationStatus"></p>
+                    <pre id="reqSkillPublicationContent" hidden></pre>
+                    <p><a id="reqUpdateFile" download hidden></a></p>
+                    <button type="button" class="btn btn-primary" id="reqApproveSkill" onclick="ReqApp.approveSkill()" data-i18n="允许发布" hidden>允许发布</button>
+                </section>
+
+                <div class="form-group req-images-form-group" id="reqImagesSection">
+                    <div class="req-upload-header">
+                        <label class="req-upload-label" for="reqImagesInput">
+                            <span data-i18n="上传图片">上传图片</span>
+                            <span class="req-upload-count" id="reqImagesCount">(0/6)</span>
+                        </label>
+                        <span class="req-upload-tips" data-i18n="支持 PNG/JPG/WebP/GIF，单张最大 20MB（自动压缩），最多 6 张">支持 PNG/JPG/WebP/GIF，单张最大 20MB（自动压缩），最多 6 张</span>
+                    </div>
+                    <div class="req-upload-dropzone" id="reqUploadDropzone">
+                        <div class="req-image-list" id="reqImagesList"></div>
+                        <label id="reqImagesPicker" for="reqImagesInput" class="req-upload-picker" tabindex="0" role="button" aria-label="上传图片">
+                            <input id="reqImagesInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+                            <div class="req-picker-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                            </div>
+                            <span class="req-picker-text" data-i18n="点击添加">点击添加</span>
+                            <span class="req-picker-subtext" data-i18n="支持拖拽或粘贴">支持拖拽或粘贴</span>
+                        </label>
+                    </div>
+                </div>
+
+                <label class="urgent-toggle" for="reqUrgentInput">
+                    <input type="checkbox" id="reqUrgentInput">
+                    <span class="urgent-toggle-icon"><svg class="req-line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg></span>
+                    <span>
+                        <strong data-i18n="紧急需求">紧急需求</strong>
+                        <small data-i18n="在需求广场中优先展示并高亮提醒">在需求广场中优先展示并高亮提醒</small>
+                    </span>
+                </label>
+
+                <div class="form-row" id="manageRow" style="display: none;">
+                    <div class="form-group half">
+                        <label data-i18n="当前状态">当前状态</label>
+                        <select id="reqStatusSelect" class="form-control">
+                            <option value="提交" data-i18n="1. 提交 (待接受)">1. 提交 (待接受)</option>
+                            <option value="需求接受" data-i18n="2. 需求接受 (评估中)">2. 需求接受 (评估中)</option>
+                            <option value="需求实现中" data-i18n="3. 需求实现中 (开发中)">3. 需求实现中 (开发中)</option>
+                            <option value="需求完成" data-i18n="4. 需求完成 (待上线)">4. 需求完成 (待上线)</option>
+                            <option value="验收完成" data-i18n="5. 验收完成 (已上线)">5. 验收完成 (已上线)</option>
+                            <option value="需求评价" data-i18n="6. 需求评价 (归档)">6. 需求评价 (归档)</option>
+                            <option value="已拒绝" data-i18n="已拒绝 (暂不采纳)">已拒绝 (暂不采纳)</option>
+                        </select>
+                    </div>
+                    <div class="form-group half">
+                        <label data-i18n="责任人 (Assignee)">责任人 (Assignee)</label>
+                        <input type="text" id="reqAssigneeInput" class="form-control" data-i18n-ph="留空或填写负责人" placeholder="留空或填写负责人">
+                    </div>
+                </div>
+
+                <div class="form-group" id="remarkGroup" style="display: none;">
+                    <label data-i18n="过点备注 (流转日志)">过点备注 (流转日志)</label>
+                    <input type="text" id="reqRemarkInput" class="form-control" data-i18n-ph="流转状态时，建议填写备注" placeholder="流转状态时，建议填写备注">
+                </div>
+
+                <!-- 日志流转区 -->
+                <div class="logs-section" id="logsSection" style="display: none;">
+                    <h3><span class="icon">🕒</span> <span data-i18n="流转日志">流转日志</span></h3>
+                    <div class="logs-timeline" id="logsTimeline"></div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-danger" id="btnDeleteReq" style="display:none; margin-right:auto;" onclick="ReqApp.deleteReq()" data-i18n="删除需求">删除需求</button>
+                <button class="btn btn-secondary" onclick="ReqApp.closeModal()" data-i18n="取消">取消</button>
+                <button class="btn btn-primary" id="btnSaveReq" onclick="ReqApp.saveReq()" data-i18n="保存">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 优雅图片大图预览弹窗 (Lightbox) -->
+    <div class="req-preview-overlay" id="reqPreviewModal" style="display: none;" onclick="if(event.target === this) ReqApp.closePreviewModal()">
+        <div class="req-preview-container">
+            <div class="req-preview-header">
+                <span class="req-preview-filename" id="reqPreviewFilename" data-i18n="图片预览">图片预览</span>
+                <span class="req-preview-index" id="reqPreviewIndex">1 / 1</span>
+                <button type="button" class="req-preview-close" onclick="ReqApp.closePreviewModal()" aria-label="关闭预览" title="关闭 (Esc)">&times;</button>
+            </div>
+            <div class="req-preview-viewport">
+                <button type="button" class="req-preview-nav prev" id="reqPreviewPrev" onclick="ReqApp.prevPreviewImage()" aria-label="上一张" title="上一张 (←)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div class="req-preview-img-box">
+                    <img id="reqPreviewImage" src="" alt="大图预览">
+                </div>
+                <button type="button" class="req-preview-nav next" id="reqPreviewNext" onclick="ReqApp.nextPreviewImage()" aria-label="下一张" title="下一张 (→)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/shared/api.js"></script>
+    <script src="js/shared/toast.js"></script>
+    <script src="js/shared/platform-logo-upload.js"></script>
+    <script src="js/shared/navbar.js"></script>
+    <script src="js/shared/app-dialog.js"></script>
+    <script src="js/shared/requirements-client.js"></script>
+    <script src="js/requirements.js"></script>
+</body>
+</html>

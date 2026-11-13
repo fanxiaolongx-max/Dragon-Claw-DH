@@ -11,9 +11,9 @@
     if (window.__dhRuntimeInstalled) return;
     window.__dhRuntimeInstalled = true;
 
-    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|custom-tool)(?:\.html)?|pages|favicon\.ico|healthz|ping|tools|custom-tools|storage|netcare-explorer|requirements|custom-report)(?:\/|\?|$)/i;
-    const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|(?:index|uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|custom-tool)\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|(?:tools|custom-tools)\/.*)$/;
-    const PHASE2_RE = /^\/(?:storage|netcare-explorer|requirements|custom-report|tools\/)/i;
+    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|builtin-tools|(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|requirements|custom-tool)(?:\.html)?|pages|favicon\.ico|healthz|ping|tools|custom-tools|storage|netcare-explorer|requirements|custom-report)(?:\/|\?|$)/i;
+    const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|(?:index|uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|requirements|custom-tool)\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|custom-report|(?:tools|custom-tools)\/.*)$/;
+    const PHASE2_RE = /^\/(?:storage|netcare-explorer|custom-report)/i;
     const STATIC_PAGE_MAP = {
         '/uivf12': '/uivf12.html',
         '/sla': '/sla.html',
@@ -28,6 +28,7 @@
         '/duty-roster': '/duty-roster.html',
         '/frt': '/frt.html',
         '/praudit': '/praudit.html',
+        '/requirements': '/requirements.html',
         '/pages/uivf12.html': '/uivf12.html',
         '/pages/sla.html': '/sla.html',
         '/pages/report.html': '/report.html',
@@ -41,6 +42,7 @@
         '/pages/duty-roster.html': '/duty-roster.html',
         '/pages/frt.html': '/frt.html',
         '/pages/praudit.html': '/praudit.html',
+        '/pages/requirements.html': '/requirements.html',
     };
 
     // 底座 Nginx 只把 /api/* 转给 Node，无后缀页面和 /custom-tools/:slug/ 会回落到 static/index.html 造成套娃；
@@ -56,7 +58,7 @@
         const normalized = cleanPath.length > 1 ? cleanPath.replace(/\/+$/, '') : cleanPath;
         const mapped = STATIC_PAGE_MAP[normalized.toLowerCase()];
         if (mapped) return mapped + search + hash;
-        const customMatch = cleanPath.match(/^\/custom-tools\/([^/]+)\/?(?:index\.html)?$/i);
+        const customMatch = cleanPath.match(/^\/(?:custom-tools|tools)\/([^/]+)\/?(?:index\.html)?$/i);
         if (customMatch && customMatch[1].toLowerCase() !== 'f12-to-extension') {
             const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : '');
             params.set('slug', decodeURIComponent(customMatch[1]));
@@ -74,7 +76,7 @@
             if (cs) {
                 const sp = new URL(cs, window.location.href).pathname;
                 const marker = sp.indexOf('/js/shared/dh-runtime.js');
-                if (marker > 0) {
+                if (marker >= 0) {
                     const candidate = sp.slice(0, marker);
                     if (/\/monthly\/legacy\/?$/i.test(p) && /\/monthly$/i.test(candidate)) {
                         return candidate.replace(/\/monthly$/i, '');
@@ -83,7 +85,8 @@
                 }
             }
         } catch (_) { /* ignore */ }
-        const stripped = p.replace(APP_ROUTE_TAIL_RE, '').replace(/\/+$/, '');
+        // 内置工具页面在 builtin-tools/<标识>/ 下，基址是它上面两层
+        const stripped = p.replace(/\/builtin-tools\/.*$/i, '').replace(APP_ROUTE_TAIL_RE, '').replace(/\/+$/, '');
         return stripped === '/' ? '' : stripped;
     }
 

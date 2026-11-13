@@ -1,6 +1,9 @@
 // 自定义 HTML 工具：自包含的 HTML 页面（单文件，或导入时由压缩包合成），存应用库，在沙箱里运行。
 // 可见性：管理员发布的对所有人可见（public），普通用户发布的只有自己可见（private）。
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { STATIC_DIR } from '../config.js';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { selectTable, upsertRow, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import { optionalDep } from '../core/optional.js';
@@ -98,6 +101,27 @@ const toItem = (row) => ({
     updatedAt: row.updated_at ? new Date(Number(row.updated_at)).toISOString() : '',
 });
 
+// ── 内置工具：随安装包发布在 static/builtin-tools/<标识>/ 下，是平台自己的页面（与平台同源，可调平台接口），
+// 不经过沙箱；清单在 static/builtin-tools/manifest.json，由 devtools/port/port-builtin-tool.py 维护。──
+const BUILTIN = (() => {
+    const map = new Map();
+    try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(STATIC_DIR, 'builtin-tools', 'manifest.json'), 'utf8'));
+        for (const tool of manifest.tools || []) {
+            if (!SLUG_RE.test(String(tool.slug || '').toLowerCase().replace(/_/g, '-'))) continue;
+            if (!fs.existsSync(path.join(STATIC_DIR, 'builtin-tools', tool.slug, 'index.html'))) continue;
+            map.set(tool.slug, {
+                slug: tool.slug, name: tool.name || tool.slug, nameEn: tool.nameEn || '', description: tool.description || '', descriptionEn: tool.descriptionEn || '',
+                icon: tool.icon || '🧩', tags: Array.isArray(tool.tags) ? tool.tags : [], href: `/custom-tools/${tool.slug}/`,
+                builtIn: true, entry: `builtin-tools/${tool.slug}/index.html`, owner: '', visibility: 'public', shared: false, createdAt: '', updatedAt: '',
+            });
+        }
+    } catch { /* 没有内置工具清单时只有用户发布的工具 */ }
+    return map;
+})();
+export const builtinTool = (slug) => BUILTIN.get(String(slug || '')) || null;
+export const listBuiltinTools = () => [...BUILTIN.values()];
+
 const LIST_COLS = ['slug', 'owner_id', 'visibility', 'name', 'name_en', 'description', 'description_en', 'icon', 'tags_json', 'created_at', 'updated_at'];
 const canSee = (row, identity) => row.visibility === 'public' || identity?.isAdmin || row.owner_id === identity?.username;
 
@@ -108,7 +132,7 @@ export async function listCustomTools(identity) {
         limit: 500,
         memSort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
     });
-    return rows.filter((r) => canSee(r, identity)).map(toItem);
+    return [...listBuiltinTools(), ...rows.filter((r) => canSee(r, identity) && !BUILTIN.has(r.slug)).map(toItem)];
 }
 
 async function getRow(slug, columns = ['*']) {
@@ -119,6 +143,7 @@ async function getRow(slug, columns = ['*']) {
 }
 
 export async function getCustomTool(slug, identity) {
+    if (BUILTIN.has(String(slug || ''))) return { ...BUILTIN.get(String(slug)), html: '' };
     const row = await getRow(slug);
     if (!row || !canSee(row, identity)) return null;
     return { ...toItem(row), html: row.html || '' };
@@ -133,6 +158,7 @@ export async function saveCustomTool(input = {}, identity) {
     const name = clip(input.name, 80) || clip(/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1], 80) || '未命名工具';
 
     let slug = slugify(input.slug) || slugify(input.nameEn) || slugify(name);
+    if (BUILTIN.has(slug)) slug = '';
     const existing = slug ? await getRow(slug, LIST_COLS) : null;
     const mine = existing && (identity.isAdmin || existing.owner_id === identity.username);
     if (existing && !(mine && (input.overwrite === true || slugify(input.slug) === slug))) slug = '';
@@ -158,6 +184,7 @@ export async function saveCustomTool(input = {}, identity) {
 }
 
 export async function deleteCustomTool(slug, identity) {
+    if (BUILTIN.has(String(slug || ''))) throw new BusinessError('内置工具随安装包发布，不能删除', 400);
     const row = await getRow(slug, LIST_COLS);
     if (!row || !canSee(row, identity)) throw new NotFoundError('工具不存在');
     if (!identity.isAdmin && row.owner_id !== identity.username) throw new BusinessError('只能删除自己发布的工具', 403);

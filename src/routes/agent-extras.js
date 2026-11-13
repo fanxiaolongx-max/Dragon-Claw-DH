@@ -97,6 +97,7 @@ const identityOf = async (req) => {
 async function sendCustomToolRaw(req, reply) {
     const tool = await getCustomTool(req.params.slug, await identityOf(req));
     if (!tool) return reply.code(404).type('text/plain; charset=utf-8').send('工具不存在');
+    if (tool.builtIn) return reply.code(404).type('text/plain; charset=utf-8').send('内置工具请从工具页面打开');
     reply.header('Content-Security-Policy', TOOL_CSP);
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Cache-Control', 'private, no-store');
@@ -131,13 +132,13 @@ export async function customToolsRoutes(fastify) {
     fastify.get('/:slug/meta', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
         if (!tool) return reply.code(404).send({ error: '这个工具不存在，或者你没有查看它的权限' });
-        return { slug: tool.slug, name: tool.name, nameEn: tool.nameEn, icon: tool.icon, description: tool.description };
+        return { slug: tool.slug, name: tool.name, nameEn: tool.nameEn, icon: tool.icon, description: tool.description, ...(tool.builtIn ? { builtIn: true, entry: tool.entry } : {}) };
     });
     fastify.get('/:slug/raw', sendCustomToolRaw);
     fastify.post('/:slug/bridge', handleCustomToolBridge);
     fastify.get('/:slug/export', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, req.userIdentity);
-        if (!tool) return reply.code(404).send({ error: '工具不存在' });
+        if (!tool || tool.builtIn) return reply.code(404).send({ error: tool ? '内置工具依赖平台接口，不能导出成单个文件' : '工具不存在' });
         reply.header('Content-Type', 'text/html; charset=utf-8');
         reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(`${tool.slug}.html`)}"`);
         return reply.send(tool.html);
@@ -214,6 +215,8 @@ export function registerCustomToolPages(app, phase2Html) {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
         reply.type('text/html; charset=utf-8').header('Cache-Control', 'private, no-store');
         if (!tool) return reply.code(404).send(phase2Html('自定义工具').replace(/Web 版暂未开放[^<]*/g, '这个工具不存在，或者你没有查看它的权限'));
+        // 内置工具是平台自己的页面：用统一的外壳页打开（不进沙箱）
+        if (tool.builtIn) return reply.redirect(`../../custom-tool.html?slug=${encodeURIComponent(tool.slug)}`, 302);
         return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(tool.name)} · Dragon Claw</title>
 <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column;font:14px/1.4 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f6f7f9;color:#1c2430}
@@ -225,7 +228,7 @@ iframe{flex:1;width:100%;border:0;background:#fff}</style></head>
     };
     // 服务端忽略末尾斜杠，两种地址是同一条路由；页面里用相对地址取 raw，所以没有斜杠时先补上
     app.get('/custom-tools/:slug', async (req, reply) => {
-        if (!String(req.url).split('?')[0].endsWith('/')) return reply.redirect(302, `${encodeURIComponent(req.params.slug)}/`);
+        if (!String(req.url).split('?')[0].endsWith('/')) return reply.redirect(`${encodeURIComponent(req.params.slug)}/`, 302);
         return page(req, reply);
     });
 }

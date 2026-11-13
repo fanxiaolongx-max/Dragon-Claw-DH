@@ -96,7 +96,7 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         const catalog = (await call('alice', 'GET', '/api/agent-mcp/catalog')).data;
         assert.equal(catalog.manage, true);
         const allTools = catalog.groups.flatMap((g) => g.tools);
-        assert.equal(allTools.length, 25);
+        assert.equal(allTools.length, 34); // 含 NetCare 数据探查 4 个、跟进任务 4 个、工具使用说明 1 个
         assert.equal(allTools.find((t) => t.name === 'calculate').calls, 1);
         assert.equal((await call('bob', 'GET', '/api/agent-mcp/catalog')).data.manage, false);
         assert.equal((await call('bob', 'PATCH', '/api/agent-mcp/catalog/access', { scope: 'tool', id: 'calculate', enabled: false })).status, 403);
@@ -204,13 +204,14 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal(btw.some((e) => e.type === 'start'), false);
         assert.equal((await call('bob', 'GET', '/api/ai/sessions')).data.items.length, sessionsBefore);
 
-        // ── 9. 数据探索：只读查询业务表；写语句、系统表一律拒绝；普通用户也能查 ──
-        assert.equal((await fetch(`${url}/db-explorer`, { headers: as('bob') })).status, 200);
-        const tables = (await call('bob', 'GET', '/api/db-explorer/tables')).data.tables;
+        // ── 9. 数据探索：仅管理员；只读查询业务表；写语句、系统表一律拒绝 ──
+        assert.equal((await call('bob', 'GET', '/api/db-explorer/tables')).status, 403, '普通用户看不到数据探索');
+        assert.equal((await call('bob', 'POST', '/api/db-explorer/query', { sql: 'SELECT name FROM sla_categories' })).status, 403);
+        const tables = (await call('alice', 'GET', '/api/db-explorer/tables')).data.tables;
         assert.ok(tables.some((t) => t.name === 'report_metric_data'));
         assert.equal(tables.some((t) => t.name === 'ai_settings_profiles'), false, '密钥表不在目录里');
         assert.equal(tables.find((t) => t.name === 'sla_snapshots').columns.find((c) => c.name === 'payload_json').heavy, true);
-        const queried = await call('bob', 'POST', '/api/db-explorer/query', { sql: 'SELECT name, sort_order FROM sla_categories' });
+        const queried = await call('alice', 'POST', '/api/db-explorer/query', { sql: 'SELECT name, sort_order FROM sla_categories' });
         assert.equal(queried.status, 200);
         assert.ok(Array.isArray(queried.data.rows));
         for (const sql of ['DELETE FROM sla_categories', 'SELECT * FROM ai_settings_profiles', 'SELECT 1; DROP TABLE sla_categories']) {

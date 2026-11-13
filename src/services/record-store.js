@@ -35,13 +35,13 @@ function scope(kind, { group = '', id = '', hash = '' } = {}) {
 // 新的在前：先按排序键，再按标识
 const newestFirst = (a, b) => String(b.sort_key || '').localeCompare(String(a.sort_key || '')) || String(b.id).localeCompare(String(a.id));
 
-/** 列出某类记录（默认不带正文，新的在前） */
-export async function listRecords(kind, { group = '', withPayload = false, limit = 200, offset = 0 } = {}) {
+/** 列出某类记录（默认不带正文，新的在前）；一次最多 1000 条，导出这类确实要全量的场景用 maxRows 放宽 */
+export async function listRecords(kind, { group = '', withPayload = false, limit = 200, offset = 0, maxRows = 1000 } = {}) {
     const rows = await selectTable(TABLE, {
         columns: withPayload ? ['*'] : META_COLS,
         ...scope(kind, { group }),
         orderBySql: '`sort_key` DESC, `id` DESC',
-        limit: Math.min(1000, Number(offset) + Number(limit)) || 200,
+        limit: Math.min(maxRows, Number(offset) + Number(limit)) || 200,
         memSort: newestFirst,
     });
     return rows.slice(Number(offset) || 0).map(toRecord);

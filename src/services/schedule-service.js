@@ -1,5 +1,6 @@
 // 定时任务（/schedule）：到点以创建者身份让智能体执行一次指令，结果写进对话。
 // 多实例与重启安全：执行前用“带旧 next_run_at 的条件更新”抢占，只有抢到的实例执行。
+import { remindDueFollowups } from './followup-service.js';
 import crypto from 'node:crypto';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { pushLog } from '../core/log-ring.js';
@@ -205,6 +206,8 @@ export function startScheduler() {
         running = true;
         try {
             await runDueSchedules();
+            // 跟进任务的提醒借同一个调度器：到点发到消息中心
+            await remindDueFollowups();
         } catch (error) {
             // 基座不可用时每 10 分钟最多记一条，避免刷屏
             if (Date.now() - lastErrorLogAt > 600_000) {

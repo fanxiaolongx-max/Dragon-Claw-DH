@@ -4,7 +4,7 @@
     const bridge=window.DragonBrowser;
     const L=(zh,en)=>/^en/.test(window.ToolsI18n?.getLanguage?.()||localStorage.getItem('tools_lang')||'')?en:zh;
     const esc=value=>String(value||'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-    let panel,surface,toggle,address,tabsNode,hint,image,status,statusBadge,statusTextNode,agentStatusNode,controlBox,textInput,operatorBanner,aiPresence,aiPointer;
+    let panel,surface,toggle,address,tabsNode,hint,image,status,statusBadge,statusTextNode,agentStatusNode,controlBox,textInput,operatorBanner,aiPresence,aiPointer,zoomHud,zoomHudTimer=null,lastZoomPercent=100;
     let menu='',menuSignature='',closedTabs=[],draggedTab=null,lastTheme='',pendingTab=null,tabSequence=0,tabScrollTimer=null,lastVisibleTab='';
     let intentUntil=0,lastActivity=0,activitySent=0,idleRelease=false;
     let open=false,connected=false,docked=false,raf=0,readingVisible=false,previousMenu=null;
@@ -140,8 +140,37 @@
     function bounds(){
         raf=0;positionMenu();if(!bridge||!connected)return;
         const modal=[...document.querySelectorAll('[aria-modal="true"],.app-dialog,.modal.open')].some(node=>node.getClientRects().length&&getComputedStyle(node).visibility!=='hidden');
-        if(!open||suspended.size||document.hidden||document.body.classList.contains('dc-sidebar-resizing')||modal||panel?.classList.contains('is-swarm-canvas'))return bridge.bounds(null);
+        if(!open||suspended.size||document.hidden||document.body.classList.contains('dc-sidebar-resizing')||modal||panel?.classList.contains('is-swarm-canvas')){sendDownloadAnchor(null);return bridge.bounds(null);}
         const rect=surface.getBoundingClientRect();bridge.bounds(rect.width>0&&rect.height>0?{x:rect.x,y:rect.y,width:rect.width,height:rect.height}:null);
+        sendDownloadAnchor(rect.width>0&&rect.height>0?downloadAnchor():null);
+    }
+    // 桌面端下载横幅挂在原生置顶视图里，需要知道「下载」按钮的位置（按钮被折叠时退到「更多」）。
+    let downloadAnchorSignature='';
+    function downloadAnchor(){
+        let button=panel.querySelector('.dc-browser-toolbar-actions [data-browser=downloads]');
+        if(!button?.getClientRects().length)button=panel.querySelector('[data-browser=more]');
+        const r=button?.getBoundingClientRect();
+        return r&&r.width>0?{right:Math.round(r.right),bottom:Math.round(r.bottom)}:null;
+    }
+    function sendDownloadAnchor(anchor){
+        const signature=JSON.stringify(anchor);if(signature===downloadAnchorSignature)return;
+        downloadAnchorSignature=signature;bridge.action('download-anchor',anchor);
+    }
+    // 新下载开始或完成时让「下载」按钮轻弹一下；首次同步只记录基线，不为历史记录动画。
+    let downloadSeen=null;
+    function watchDownloads(items){
+        const list=Array.isArray(items)?items:[],next=new Map(list.map(item=>[item.id,item.state]));
+        let pulse=false;
+        if(downloadSeen)for(const[id,value]of next){
+            const before=downloadSeen.get(id);
+            if(before===undefined?(value==='progressing'||(!bridge&&value==='completed')):(before!=='completed'&&value==='completed'))pulse=true;
+        }
+        downloadSeen=next;
+        const button=panel?.querySelector('.dc-browser-toolbar-actions [data-browser=downloads]');if(!button)return;
+        button.classList.toggle('is-downloading',list.some(item=>item.state==='progressing'));
+        if(!pulse||!open||reduceMotion())return;
+        button.classList.remove('is-download-pulse');void button.offsetWidth;button.classList.add('is-download-pulse');
+        if(!button.dataset.pulseBound){button.dataset.pulseBound='1';button.addEventListener('animationend',event=>{if(event.target===button&&event.animationName==='dcBrowserDownloadPulse')button.classList.remove('is-download-pulse');});}
     }
     function layout(){if(!raf)raf=requestAnimationFrame(bounds);}
     function visibility(){
@@ -249,6 +278,7 @@
         if(!bridge&&Date.now()<vaultNotice.until){hint.hidden=false;hint.textContent=vaultNotice.text;}
         const blank=!url||url==='about:blank';surface.classList.toggle('is-empty',blank);if(!bridge&&blank){image.hidden=true;status.textContent=L('输入网址或搜索关键词开始浏览','Enter a URL or search to start browsing');}
         renderOperator();
+        renderZoomHud();
         controlBox.hidden=Boolean(bridge)||!manualToken||menu!=='keyboard';
         controlBox.querySelector('label').textContent=L('先点网页输入框，再在这里输入','Click a page field, then type here');
         textInput.placeholder=L('内容直接发送到网页','Send directly to the page');textInput.setAttribute('aria-label',L('网页输入','Page input'));textInput.disabled=busy;
@@ -264,6 +294,22 @@
         panel.querySelector('[data-find-input]').placeholder=L('在页面中查找','Find in page');panel.querySelector('[data-find-input]').setAttribute('aria-label',L('在页面中查找','Find in page'));
         if(bridge&&state.find?.open)panel.querySelector('[data-find-count]').textContent=`${state.find.activeMatch||0} / ${state.find.matches||0}`;
         panel.querySelector('[data-browser=keyboard]').hidden=Boolean(bridge)||blank;layout();
+    }
+    function renderZoomHud(){
+        if(!zoomHud)return;
+        if(bridge||!state.available){zoomHud.hidden=true;return;}
+        const percent=Math.max(10,Math.round((state.zoom||1)*100));
+        zoomHud.querySelector('.dc-browser-zoom-pct').textContent=`${percent}%`;
+        zoomHud.querySelector('[data-browser="zoom-out"]').setAttribute('aria-label',L('缩小','Zoom out'));
+        zoomHud.querySelector('[data-browser="zoom-in"]').setAttribute('aria-label',L('放大','Zoom in'));
+        const resetBtn=zoomHud.querySelector('[data-browser="zoom-reset"]');
+        resetBtn.textContent=L('重置','Reset');resetBtn.hidden=percent===100;
+        clearTimeout(zoomHudTimer);
+        if(percent!==100){lastZoomPercent=percent;zoomHud.hidden=false;}
+        else if(lastZoomPercent!==100){
+            lastZoomPercent=100;zoomHud.hidden=false;
+            zoomHudTimer=setTimeout(()=>{if(zoomHud&&Math.round((state.zoom||1)*100)===100)zoomHud.hidden=true;},1400);
+        }else{zoomHud.hidden=true;}
     }
     function renderOperator(){
         if(!operatorBanner||bridge)return;
@@ -314,7 +360,7 @@
         if((gesture&&!gesture.remote)||(busy&&streaming&&!gesture?.remote))return;
         if(data.error){status.textContent=data.error;return;}
         if(pendingTab&&!pendingTab.pending){if(!data.tabs?.some(tab=>tab.id===pendingTab.id))return;pendingTab=null;}
-        if(!data.manual?.active&&!busy)remember('');state={...data,tabs:data.tabs||[]};
+        if(!data.manual?.active&&!busy)remember('');state={...data,tabs:data.tabs||[]};watchDownloads(state.downloads);
         // 保险箱提示：登录时自动保存 / 更新、打开登录页自动填写。只显示打码后的账号，不含密码。
         if(data.vault?.at&&data.vault.at!==vaultNotice.at){
             let host=data.vault.origin;try{host=new URL(data.vault.origin).host;}catch{}
@@ -513,6 +559,7 @@
         aiPresence=document.createElement('div');aiPresence.className='browser-ai-presence';aiPresence.setAttribute('aria-hidden','true');aiPresence.innerHTML='<div class="browser-ai-halo"></div><div class="browser-ai-orb"><i></i></div>';surface.append(aiPresence);
         operatorBanner=document.createElement('div');operatorBanner.className='dc-browser-operator';operatorBanner.hidden=true;operatorBanner.setAttribute('role','status');operatorBanner.innerHTML='<span></span><button type="button" data-browser="stop-and-control"></button>';surface.append(operatorBanner);
         aiPointer=document.createElement('div');aiPointer.className='dc-browser-ai-pointer';aiPointer.hidden=true;aiPointer.innerHTML='<svg width="24" height="28" viewBox="0 0 24 28" aria-hidden="true"><path d="M2 2L20 17L12 18L8 26Z" fill="currentColor" stroke="white" stroke-width="2"/></svg><span>AI</span>';surface.append(aiPointer);
+        zoomHud=document.createElement('div');zoomHud.className='dc-browser-zoom-hud';zoomHud.hidden=true;zoomHud.setAttribute('role','status');zoomHud.innerHTML='<button type="button" data-browser="zoom-out">−</button><span class="dc-browser-zoom-pct">100%</span><button type="button" data-browser="zoom-in">+</button><button type="button" class="dc-browser-zoom-reset" data-browser="zoom-reset"></button>';surface.append(zoomHud);
         setInterval(()=>{
             if(bridge||!open)return;renderOperator();
             if(manualToken&&!busy&&!keySending&&!keyQueue.length&&!gesture&&!idleRelease&&Date.now()-lastActivity>=5000){idleRelease=true;api('release').then(()=>refresh(true)).catch(()=>{}).finally(()=>{idleRelease=false;});}
@@ -541,6 +588,7 @@
             if(key==='t'){event.preventDefault();action(event.shiftKey?'reopen-tab':'new-tab');}
             if(key==='w'){event.preventDefault();const tab=state.tabs.find(tab=>tab.id===state.activeId);if(tab)panel.querySelector(`[data-close-tab="${CSS.escape(tab.id)}"]`)?.click();}
             if(key==='f'&&bridge){event.preventDefault();bridge.action('find-open');panel.querySelector('[data-find-input]').focus();}
+            if(bridge&&(['+','=','-','_','0'].includes(key)||['Equal','Minus','Digit0','NumpadAdd','NumpadSubtract','Numpad0'].includes(event.code))){event.preventDefault();bridge.action(key==='0'||event.code==='Digit0'||event.code==='Numpad0'?'zoom-reset':key==='-'||key==='_'||event.code==='Minus'||event.code==='NumpadSubtract'?'zoom-out':'zoom-in');}
         });
         document.addEventListener('pointerdown',event=>{if(menu&&!event.target.closest('.dc-browser-popup,.dc-browser-toolbar-actions,[data-browser=tabs]')){menu='';renderMenu();layout();}});
         new MutationObserver(()=>{syncTheme();render();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
@@ -598,7 +646,7 @@
                 if(window.HomeToolFrame?.open(url.pathname+url.search))close();
             }catch{}
         });
-        if(bridge){bridge.onState(value=>{const before=state.tabs.find(tab=>tab.id===state.activeId)?.url,after=value.tabs.find(tab=>tab.id===value.activeId)?.url;if(before!==after){autoFit=true;pageWidth=0;}state=value;if(open&&!state.tabs.length)close();else{render();requestAnimationFrame(fit);}});bridge.onReveal(()=>{if(innerWidth>860||open)show({createEmpty:false});});bridge.onFocusUrl(()=>{address.focus();address.select();});bridge.onPoppedOut(()=>{docked=false;close();});bridge.connect().then(value=>{connected=value;docked=value;layout();}).catch(()=>{});}
+        if(bridge){bridge.onState(value=>{const before=state.tabs.find(tab=>tab.id===state.activeId)?.url,after=value.tabs.find(tab=>tab.id===value.activeId)?.url;if(before!==after){autoFit=true;pageWidth=0;}state=value;watchDownloads(value.downloads);if(open&&!state.tabs.length)close();else{render();requestAnimationFrame(fit);}});bridge.onReveal(()=>{if(innerWidth>860||open)show({createEmpty:false});});bridge.onFocusUrl(()=>{address.focus();address.select();});bridge.onPoppedOut(()=>{docked=false;close();});bridge.connect().then(value=>{connected=value;docked=value;layout();}).catch(()=>{});}
         render();window.DragonBrowserSidebar={open:show,close,showAgentView:show,isOpen:()=>open};
     }
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();

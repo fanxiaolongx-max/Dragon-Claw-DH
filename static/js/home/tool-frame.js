@@ -34,7 +34,7 @@
         if (leaveConfirming) return false;
         leaveConfirming = true;
         try {
-            const hostConfirm = message => window.AppDialog
+            const hostConfirm = message => window.AppDialog?.confirm
                 ? window.AppDialog.confirm(message, {
                     title: L('有未保存的修改', 'Unsaved changes'),
                     tone: 'warning',
@@ -116,6 +116,8 @@
         if (staticNav) return Boolean(staticNav.resolveTool(url));
         const p = typeof window.dhStripBase === 'function' ? window.dhStripBase(url.pathname) : url.pathname;
         if (url.origin !== location.origin || p === '/' || p === '/index.html' || /^\/(api|login|downloads?)\b/.test(p)) return false;
+        // 需求广场在菜单和顶栏里有固定入口，不在异步加载的工具目录里
+        if (['/requirements', '/requirements.html', '/pages/requirements.html'].includes(p)) return true;
         if (/^\/(tools|custom-tools|apps)\//.test(p) || p === '/custom-tool.html') return true;
         const target = normalizeToolTarget(url).split('?')[0];
         return knownPaths().some(path => {

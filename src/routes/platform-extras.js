@@ -1,6 +1,6 @@
 // 消息中心、平台标识（Logo）、智能体工具清单的接口。
 import { BusinessError } from '../core/errors.js';
-import { listAlerts, alertSummary, markAlertsRead, removeAlerts } from '../services/alert-service.js';
+import { listAlerts, alertSummary, markAlertsRead, removeAlerts, backfillAlertSummaries } from '../services/alert-service.js';
 import { logoStatus, logoImage, saveLogo, resetLogo } from '../services/logo-service.js';
 import { toolCatalog, setToolAccess } from '../services/tool-catalog-service.js';
 import { runSelect, tableCatalog } from '../agent/tools.js';
@@ -16,6 +16,7 @@ export async function alertCenterRoutes(fastify) {
     fastify.put('/events/archive-all', async (req) => removeAlerts(me(req)));
     fastify.post('/events/clear-all', async (req) => removeAlerts(me(req)));
     fastify.delete('/events/:id', async (req) => removeAlerts(me(req), req.params.id));
+    fastify.post('/ai/backfill', async (req) => backfillAlertSummaries(me(req), { limit: Math.min(Number(req.body?.limit) || 50, 120) }));
 }
 
 export async function platformLogoRoutes(fastify) {

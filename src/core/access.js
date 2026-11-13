@@ -102,10 +102,21 @@ const USER_WRITES = [
     ['*', /^\/ai\/schedules(?:\/[^/]+)?$/], // 定时任务只属于创建者（服务内校验）
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
     ['*', /^\/alert-center\/events(?:\/.*)?$/], // 消息只属于本人
-    ['POST', /^\/db-explorer\/query$/], // 只读查询（路由内走只读守卫）
+    ['POST', /^\/alert-center\/ai\/backfill$/], // 只补本人消息的 AI 摘要
     ['POST', /^\/duty-roster$/], // 已识别用户可维护各月份值班表（与桌面版一致）
+    ['POST', /^\/surveys\/submissions$/], // 填问卷
+    // 奖励申报：申报人维护自己的草稿、发布、提交、传证据，公示期提异议；归属和状态在路由内校验
+    ['POST', /^\/reward-program\/(?:applications(?:\/[^/]+\/(?:save|submit|publish|objections))?|evidence)$/],
+    ['DELETE', /^\/reward-program\/applications\/[^/]+$/],
+    // 负向事件：普通用户可提交草稿、传证据、删自己的草稿；发布和归属在路由内校验
+    ['POST', /^\/department-reward-penalty\/(?:records|evidence)$/],
+    ['DELETE', /^\/department-reward-penalty\/records\/[^/]+$/],
+    ['*', /^\/meeting-snapshots(?:\/.*)?$/], // 已识别用户可维护会议考勤快照与名单设置（与主线版一致）
+    ['*', /^\/(?:operation-incentive-snapshots|incentive-snapshots)(?:\/[^/]+)?$/], // 已识别用户可维护操作激励快照
+    ['*', /^\/requirements(?:\/.*)?$/], // 提需求、改自己的需求；流转与指派在服务内校验管理员
 ];
-const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/auth\/admins$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
+// 数据探索只给管理员（基座 Web 版的管理员就是超级管理员，与主线版「仅超级管理员」一致）；对话里的查库工具不受影响
+const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
 const ANON_ALLOWED_APIS = [/^\/auth\/(?:me|logout)$/, /^\/platform-logo\/image$/, /^\/(?:healthz|health|ping)$/];
 
 /** 生产环境（已注入基座 API 且未开启免鉴权/内存模式）强制要求已识别身份。 */

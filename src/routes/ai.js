@@ -203,6 +203,7 @@ export async function aiRoutes(fastify) {
                 : { history, summary: '' };
             const res = await runAgent({
                 settings: selected,
+                sessionId: persist ? sessionId : '',
                 identity: req.userIdentity || resolveRequestIdentity(req),
                 history: context.history,
                 summary: context.summary,

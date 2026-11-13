@@ -8,10 +8,8 @@
 html.dh-web .v2-nav-item[data-v2-action="channels"],
 html.dh-web .v2-nav-item[data-v2-action="library"],
 html.dh-web .v2-nav-item[data-v2-action="opsDrafts"],
-/* 「更多」菜单里的桌面版入口 */
-html.dh-web .v2-pop-item[data-v2-action="requirements"],
+/* 「更多」菜单里的桌面版入口：平台推广在首页打开的是介绍视频，视频不随 Web 版发布 */
 html.dh-web .v2-pop-item[data-v2-action="promotions"],
-html.dh-web .v2-pop-item[data-v2-action="links"],
 html.dh-web #homeKnowledgeGraphEntry,
 /* 快速提问里依赖已隐藏能力的场景：知识图谱 */
 html.dh-web .v2-scenes [data-scene="graph"],
@@ -20,13 +18,10 @@ html.dh-web #dcBrowserToggle,
 html.dh-web #dcVoice,
 /* 左下角：扫码使用 */
 html.dh-web #v2ScanBtn,
-/* 账号菜单与顶部导航：需求管理、意见反馈、检查更新、告警台；退出登录（身份由数字人门户管理，应用内退出没有意义） */
-html.dh-web .v2-account-list [data-v2-do="requirements"],
-html.dh-web .v2-account-list [data-v2-do="feedback"],
+/* 账号菜单与顶部导航：检查更新；退出登录（身份由数字人门户管理，应用内退出没有意义） */
 html.dh-web .v2-account-list [data-v2-do="checkUpdate"],
 html.dh-web .v2-account-list [data-v2-do="logout"],
 html.dh-web .v2-account-list .v2-pop-sep,
-html.dh-web .nav-actions .req-btn,
 html.dh-web .nav-actions .nav-logout-link,
 /* 全局设置：保留菜单布局、AI 助手、平台标识、智能体工具 */
 html.dh-web .nav-settings-tab[data-tab="vault"],
@@ -37,7 +32,6 @@ html.dh-web .nav-settings-tab[data-tab="backup"],
 html.dh-web .nav-settings-tab[data-tab="snapshotPublish"],
 html.dh-web .nav-settings-tab[data-tab="initialize"],
 html.dh-web .nav-settings-tab[data-tab="media"],
-html.dh-web .nav-settings-tab[data-tab="promotions"],
 html.dh-web .nav-settings-tab[data-tab="customBackup"],
 html.dh-web .nav-settings-tab[data-tab="accounts"],
 html.dh-web .nav-settings-tab[data-tab="security"],

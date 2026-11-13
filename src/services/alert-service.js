@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { kvGet, kvSet } from '../dao/scoped.js';
 import { listAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
+import { enqueueAlertAnalysis, registerAlertStore } from './alert-ai-service.js';
 
 const MAX_ITEMS = 200;
 const DEDUPE_MS = 10 * 60 * 1000;
@@ -30,6 +31,8 @@ function buildEvent(input) {
         object_type: clip(input.objectType, 40),
         object_id: clip(input.objectId, 80),
         detail: input.detail && typeof input.detail === 'object' ? input.detail : null,
+        // 同一条消息发给多人时各存一份，用它关联（AI 摘要一次生成、各份一起写回）
+        group_id: crypto.randomUUID(),
         status: 'unread',
         created_at: new Date().toISOString(),
     };
@@ -41,6 +44,7 @@ export async function pushAlert(users, input) {
     const event = buildEvent(input || {});
     if (!event.title) return 0;
     let sent = 0;
+    const delivered = [];
     for (const user of targets) {
         try {
             const items = await load(user);
@@ -49,12 +53,25 @@ export async function pushAlert(users, input) {
             if (dup) continue;
             await save(user, [{ ...event, id: crypto.randomUUID() }, ...items]);
             sent += 1;
+            delivered.push(user);
         } catch (error) {
             pushLog({ level: 'WARN', category: 'ALERT', message: `消息写入失败：${error.message}`, userId: user });
         }
     }
+    enqueueAlertAnalysis(event, delivered);
     return sent;
 }
+
+/** 按 group_id 改某人的那一份消息（AI 摘要写回用） */
+async function updateByGroup(user, groupId, patch) {
+    const items = await load(user);
+    const item = items.find((x) => x.group_id === groupId);
+    if (!item) return false;
+    Object.assign(item, patch);
+    await save(user, items);
+    return true;
+}
+registerAlertStore({ update: updateByGroup });
 
 export async function pushAdminAlert(input) {
     try {
@@ -102,4 +119,17 @@ export async function removeAlerts(user, id = null) {
     const next = id ? items.filter((x) => x.id !== String(id)) : [];
     if (next.length !== items.length) await save(user, next);
     return { success: true, removed: items.length - next.length };
+}
+
+/** 补做 AI 摘要：本人还没有摘要的警告及以上消息重新排队（最多 limit 条） */
+export async function backfillAlertSummaries(user, { limit = 50 } = {}) {
+    const items = await load(user);
+    let queued = 0;
+    for (const item of items) {
+        if (queued >= limit) break;
+        if (item.ai_summary) continue;
+        if (!item.group_id) { item.group_id = crypto.randomUUID(); await save(user, items); }
+        if (enqueueAlertAnalysis(item, [user])) queued += 1;
+    }
+    return { success: true, queued };
 }

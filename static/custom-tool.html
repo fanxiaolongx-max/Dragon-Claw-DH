@@ -52,7 +52,7 @@
                 errText.textContent = msg || '这个工具不存在，或者你没有查看它的权限。';
                 errBox.hidden = false;
             }
-            if (!/^[a-z0-9][a-z0-9-]{1,48}$/.test(slug)) {
+            if (!/^[a-z0-9][a-z0-9_-]{1,48}$/.test(slug)) {
                 showError('缺少或无效的自定义工具标识。');
                 return;
             }
@@ -71,6 +71,17 @@
                     document.getElementById('toolIcon').textContent = body.icon || '🧩';
                     document.getElementById('toolTitle').textContent = body.name || slug;
                     frame.title = body.name || slug;
+                    if (body.builtIn && /^builtin-tools\/[a-z0-9_-]+\/index\.html$/.test(body.entry || '')) {
+                        // 内置工具是平台自己的页面：与平台同源，直接调平台接口，不进沙箱
+                        // 沙箱标志在 iframe 创建时就定了，去掉属性不可靠：换一个全新的、不带沙箱的 iframe
+                        const plain = document.createElement('iframe');
+                        plain.id = 'toolFrame';
+                        plain.title = body.name || slug;
+                        frame.replaceWith(plain);
+                        header.querySelector('small').textContent = '内置工具';
+                        plain.src = `${base}/${body.entry}${window.location.hash || ''}`;
+                        return;
+                    }
                     frame.src = apiUrl('/raw');
                 })
                 .catch(() => showError('加载自定义工具元数据失败。'));

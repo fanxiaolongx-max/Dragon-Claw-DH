@@ -198,11 +198,13 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const pub = pubEvents.find((e) => e.type === 'tool_result');
         assert.equal(pub.ok, true);
         assert.doesNotMatch(JSON.stringify(pubEvents.find((e) => e.type === 'tool_start').args), /<script>/, '工具行里不回显整段 HTML');
-        const mine = await (await fetch(`${url}/api/custom-tools`, { headers: as('bob') })).json();
+        // 工具清单里还有随包发布的内置工具，这里只看用户发布的
+        const published = async (user) => (await (await fetch(`${url}/api/custom-tools`, { headers: as(user) })).json()).filter((t) => !t.builtIn);
+        const mine = await published('bob');
         assert.equal(mine.length, 1);
         assert.equal(mine[0].name, '百分比计算器');
         assert.equal(mine[0].visibility, 'private');
-        assert.equal((await (await fetch(`${url}/api/custom-tools`, { headers: as('carol') })).json()).length, 0);
+        assert.equal((await published('carol')).length, 0);
         const page = await fetch(`${url}${mine[0].href}`, { headers: as('bob') });
         assert.equal(page.status, 200);
         assert.match(await page.text(), /<iframe src="raw" sandbox="allow-scripts/);
@@ -346,6 +348,30 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         });
         assert.equal(denyEvents.find((e) => e.type === 'approval_result').decision, 'deny');
         assert.equal((await dao.selectTable('report_metric_data', { whereSql: "`snapshot_id` = 'snap-oct'", limit: 10, memFilter: () => true })).length, 2, '拒绝后数据不变');
+        // 「本次会话不再询问」：同一对话里同一工具后面直接执行；换个对话、换个工具仍要确认
+        const writeCall = (value) => ({ toolCalls: [{ name: 'update_database_rows', args: { table: 'report_metric_data', values: { target_val: value }, where: "metric_label = '整改闭环率'" } }] });
+        mock.aiScript.push(writeCall('94%'), { text: '已修改。' });
+        let alwaysCard = null;
+        const alwaysEvents = await chatLive('alice', { messages: [{ role: 'user', content: '改成 94%' }] }, async (ev) => {
+            if (ev.type !== 'approval') return;
+            alwaysCard = ev;
+            await fetch(`${url}/api/agent-workspace/approvals/${ev.id}`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ decision: 'always' }) });
+        });
+        assert.equal(alwaysCard.noAlways, undefined, '保存的对话里提供「不再询问」');
+        assert.equal(alwaysEvents.find((e) => e.type === 'approval_result').decision, 'always');
+        assert.equal(alwaysEvents.find((e) => e.type === 'tool_result').ok, true);
+        const sessionId = alwaysEvents.find((e) => e.type === 'start').sessionId;
+        mock.aiScript.push(writeCall('95%'), { text: '已修改。' });
+        const silentEvents = await chat('alice', { sessionId, messages: [{ role: 'user', content: '再改成 95%' }] });
+        assert.ok(!silentEvents.some((e) => e.type === 'approval'), '同一对话不再弹卡');
+        assert.equal(silentEvents.find((e) => e.type === 'approval_result').auto, true);
+        assert.equal((await dao.selectTable('report_metric_data', { whereSql: "`metric_label` = '整改闭环率'", limit: 1, memFilter: () => true }))[0].target_val, '95%');
+        mock.aiScript.push(writeCall('96%'), { text: '取消。' });
+        const otherSession = await chatLive('alice', { messages: [{ role: 'user', content: '改成 96%' }] }, async (ev) => {
+            if (ev.type === 'approval') await fetch(`${url}/api/agent-workspace/approvals/${ev.id}`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ decision: 'deny' }) });
+        });
+        assert.ok(otherSession.some((e) => e.type === 'approval'), '换个对话仍要确认');
+        assert.equal((await dao.selectTable('report_metric_data', { whereSql: "`metric_label` = '整改闭环率'", limit: 1, memFilter: () => true }))[0].target_val, '95%');
         // 越界：不在可写范围的表、整表条件
         mock.aiScript.push({ toolCalls: [{ name: 'delete_database_rows', args: { table: 'sys_kv_store', where: "kv_key = 'dh_admins'" } }, { name: 'delete_database_rows', args: { table: 'report_metric_data', where: '1=1' } }] }, { text: '不行。' });
         const guardEvents = await chat('alice', { messages: [{ role: 'user', content: '清空' }] });

@@ -1,13 +1,15 @@
 {
   "说明": "static/ 相对桌面版 tools-platform/frontend 的差异清单：added 为数字人专用文件，modified 为同名但内容有改动的文件，其余文件应与桌面版一致。",
   "added": [
+    "builtin-tools/manifest.json",
     "css/dh-debug-widget.css",
     "css/dh-web-trim.css",
     "favicon.ico",
     "js/api.js",
     "js/shared/dh-debug-widget.js",
     "js/shared/dh-runtime.js",
-    "pages/db-explorer.html"
+    "pages/db-explorer.html",
+    "requirements.html"
   ],
   "modified": [
     "css/project-evolution.css",
@@ -15,6 +17,8 @@
     "js/ai-report/sandbox.js",
     "js/duty-roster.js",
     "js/home/dragon-claw.js",
+    "js/home/product-tour.js",
+    "js/home/tool-frame.js",
     "js/home/workspace-panel.js",
     "js/shared/fetch-dedupe.js",
     "js/shared/navbar.js",

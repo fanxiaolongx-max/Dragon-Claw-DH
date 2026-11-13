@@ -13,6 +13,8 @@ import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCateg
 import { sendExpediteNotification } from '../services/report-service.js';
 import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
+import { NETCARE_TOOLS } from './netcare-tools.js';
+import { FOLLOWUP_TOOLS } from './followup-tools.js';
 
 // ── 应用库目录：模型能查的业务表（其余表——对话、密钥、配置、附件——一律不可查）──
 const TABLE_NOTES = {
@@ -178,6 +180,11 @@ function normalizeRecipients(list) {
         .map((x) => `email:${x}`))];
 }
 
+// 平台页面与内置工具的使用说明（来自主线版，只保留本版有的）
+const TOOL_GUIDES = (() => {
+    try { return JSON.parse(fs.readFileSync(new URL('./tool-guides.json', import.meta.url), 'utf8')).guides || {}; } catch { return {}; }
+})();
+
 const PLATFORM_TOOLS = [
     { id: 'uivf12', name: '数据抓取', href: '/uivf12', guide: '管理从业务系统页面抓数的脚本：把浏览器 F12 里复制的 fetch 代码粘贴进来解析、命名、分类；可生成 UI.Vision 宏。抓到的数据可一键送到「数据导入」。' },
     { id: 'sla', name: '数据导入', href: '/sla', guide: '上传 Excel/CSV（支持批量，或指定整改/常规/专项/SR/漏洞类别），页面内配置指标规则和目标，点击「保存当前指标数据」生成快照；可导出裕湘模板。' },
@@ -185,6 +192,12 @@ const PLATFORM_TOOLS = [
     { id: 'expedite', name: '一键催办', href: '/expedite', guide: '按最新入库数据列出未达标/超期事项，按责任人分组生成催办内容，可通过基座通知发送。' },
     { id: 'monthly', name: '月报页面', href: '/monthly', guide: 'AI 月报编辑器：按模板生成月报，每个单元格可与 AI 对话改写、生成图表；经典月报在 /monthly/legacy，可导出 .msg 邮件。' },
     { id: 'bigscreen', name: '大屏看板', href: '/bigscreen', guide: '会议室大屏：责任人矩阵、趋势与告警指标，数据来自报表看板的入库结果。' },
+    { id: 'topic-analysis', name: '专题分析', href: '/topic-analysis', guide: 'NetCare / DataFab 专题快照的历史记录、趋势和月报（EOS、证书、变更、拦截、SR 等），月报可导出 PNG / PDF / HTML / Excel / MSG。' },
+    { id: 'duty-roster', name: '值班表', href: '/duty-roster', guide: '夜间运维值班表，按月保存；周日开始、周五周六为周末。' },
+    { id: 'frt', name: 'FRT 核算', href: '/frt', guide: '上传工单表在浏览器里核算 FRT KPI，历史快照存服务器。' },
+    { id: 'praudit', name: 'PR 稽查', href: '/praudit', guide: 'PR 进展附件稽查：模板（字段、检查点、报告字段、筛选规则）存服务器，稽查在浏览器里完成。' },
+    { id: 'db-explorer', name: '数据探索', href: '/db-explorer', guide: '仅管理员：只读查询本应用库的业务表，选表看结构、写 SELECT、导出 CSV。' },
+    { id: 'requirements', name: '需求广场', href: '/requirements', guide: '提平台功能需求、看处理进度和记录；管理员按流程流转。' },
 ];
 
 export const TOOLS = [
@@ -298,6 +311,25 @@ export const TOOLS = [
             const all = [...PLATFORM_TOOLS, ...custom];
             const hit = q ? all.filter((t) => `${t.id} ${t.name} ${t.guide}`.toLowerCase().includes(q)) : all;
             return { ok: true, summary: `${(hit.length ? hit : all).length} 个功能`, content: JSON.stringify({ tools: hit.length ? hit : all, linkHint: '给用户链接时用 Markdown：[名称](href)，href 原样使用' }) };
+        },
+    },
+    {
+        name: 'read_tool_guide',
+        description: '读取平台上某个功能页面或内置工具的使用说明：能做什么、什么时候用、操作步骤、工作原理、注意事项。用户问某个工具怎么用、怎么工作时调用；tool 填工具名称或标识（可先用 find_platform_tools 找）。',
+        parameters: { type: 'object', properties: { tool: { type: 'string', description: '工具名称或标识，如 数据导入、sla、reward-program' } }, required: ['tool'] },
+        async run(args, ctx) {
+            const ref = String(args.tool || '').trim().replace(/^\//, '').toLowerCase();
+            const custom = await listCustomTools(ctx.identity).catch(() => []);
+            const entries = [
+                ...PLATFORM_TOOLS.map((t) => ({ key: `page:${t.href}`, id: t.id, name: t.name, href: t.href, summary: t.guide })),
+                ...custom.map((t) => ({ key: `custom:${t.slug}`, id: t.slug, name: t.name, href: t.href, summary: t.description || '' })),
+            ];
+            const hit = entries.find((e) => [e.id, e.name, e.href.replace(/^\//, '')].some((v) => String(v).toLowerCase() === ref))
+                || entries.find((e) => String(e.name).toLowerCase().includes(ref) || String(e.id).toLowerCase().includes(ref));
+            if (!ref || !hit) return { ok: false, summary: '没有这个工具', content: `平台上没有找到「${args.tool}」，先用 find_platform_tools 搜一下。` };
+            const guide = TOOL_GUIDES[hit.key];
+            const body = guide ? `摘要：${guide.summary}\n\n${guide.guide}` : `（这个工具还没有详细说明，以下只有简介）\n${hit.summary || '无'}`;
+            return { ok: true, summary: `${hit.name} 的使用说明`, content: `# ${hit.name}\n入口：${hit.href}\n\n${body}` };
         },
     },
     {
@@ -651,6 +683,8 @@ export const TOOLS = [
             return { ok: true, summary: '已删除', content: '脚本已删除。' };
         },
     },
+    ...NETCARE_TOOLS,
+    ...FOLLOWUP_TOOLS,
 ];
 
 export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));

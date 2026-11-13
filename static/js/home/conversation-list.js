@@ -50,8 +50,9 @@
             if(!isGroup)return false;
         }
         if(filter.status==='workspace'){
-            const hasWs = Boolean(item?.agent?.root||item?._raw?.agent?.root||item?.cwd||item?._raw?.cwd||item?.workspaceDir||item?._raw?.workspaceDir);
-            if(!hasWs)return false;
+            const root = item?.agent?.root||item?._raw?.agent?.root||item?.cwd||item?._raw?.cwd||item?.workspaceDir||item?._raw?.workspaceDir||'';
+            const isScratch = item?.scratch||item?.agent?.scratch||item?._raw?.agent?.scratch||item?._raw?.scratch||typeof root !== 'string'||!root.trim()||root.includes('dragon-claw-scratch')||/[\\/]scratch[\\/][a-f0-9]+$/i.test(root.trim());
+            if (isScratch) return false;
         }
         if(filter.time==='all')return true;
         const dateVal = config?.date ? config.date(item) : (item?.updatedAt||item?.updated_at||item?.lastActiveAt||item?.created_at||item?._raw?.updatedAt||item?._raw?.lastActiveAt);
@@ -139,7 +140,7 @@
             const index=Number(main.dataset[config.index]),item=config.items[index];if(!item)continue;
             const row=main.closest('.home-chat-owned')||main,wrapper=document.createElement('div');wrapper.className='conversation-list-row';wrapper.dataset.conversationIndex=index;
             row.before(wrapper);wrapper.append(row);const more=document.createElement('button');more.type='button';more.className='conversation-list-more';more.dataset.conversationMore='';more.textContent='···';more.title=L('对话操作','Conversation actions');more.setAttribute('aria-label',more.title);more.setAttribute('aria-haspopup','menu');wrapper.append(more);
-            if(get(config.source,config.id(item)).pinned){const pin=document.createElement('span');pin.className='conversation-pin';pin.innerHTML=icon('pin');pin.title=L('已置顶','Pinned');wrapper.append(pin);}
+            if(get(config.source,config.id(item)).pinned){wrapper.classList.add('is-pinned');const pin=document.createElement('span');pin.className='conversation-pin';pin.innerHTML=icon('pin');pin.title=L('已置顶','Pinned');wrapper.append(pin);}
         }
         if(document.documentElement.dataset.ui==='v2')renderBatch(list);
     }

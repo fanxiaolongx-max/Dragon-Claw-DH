@@ -1,0 +1,69 @@
+{
+  "tools": [
+    {
+      "slug": "department-reward-penalty",
+      "name": "负向事件管理",
+      "nameEn": "Negative Event Management",
+      "icon": "⚖️",
+      "description": "用于维护部门负向事件与违规记录、扣罚规则、人员名册与操作审计日志，支持草稿发布、规则分类筛选和人员 CSV 导入导出。",
+      "descriptionEn": "Manage department negative event records, penalty rules, personnel rosters, and audit logs with draft publishing, rule filtering, and CSV roster import/export.",
+      "tags": [
+        "质量管理",
+        "负向事件",
+        "规则",
+        "人员"
+      ]
+    },
+    {
+      "slug": "reward-program",
+      "name": "奖励申报与评优",
+      "nameEn": "Reward Programs",
+      "icon": "🏆",
+      "description": "独立的悬赏奖、岗位激励、操作激励与代表处评优申报、规则和审批公示工作台。",
+      "descriptionEn": "Bounty, position and operation incentives, and office excellence awards with applications, rules, approval and publicity.",
+      "tags": [
+        "奖励",
+        "激励",
+        "审批",
+        "公示"
+      ]
+    },
+    {
+      "slug": "tool-mqp55fna",
+      "name": "六个一信息收集",
+      "nameEn": "",
+      "icon": "📝",
+      "description": "由独立 HTML 导入的平台工具，可在统一入口和顶部导航中访问。",
+      "descriptionEn": "",
+      "tags": []
+    },
+    {
+      "slug": "tool-ms4xb66s",
+      "name": "操作激励统计",
+      "nameEn": "Operation Incentive Statistics",
+      "icon": "📊",
+      "description": "导入夜间操作 Excel，按人员、周期和操作等级核算操作激励并生成分析与导出结果。",
+      "descriptionEn": "",
+      "tags": [
+        "激励核算",
+        "Excel",
+        "数据分析"
+      ]
+    },
+    {
+      "slug": "tool-msf5b7nn",
+      "name": "会议考勤",
+      "nameEn": "",
+      "icon": "🗓️",
+      "description": "批量导入QR、RFC、WFM名单及线上线下签到表，合并去重参会人员，按最早签到时间判定准时、迟到、虚假签到或缺席，并支持检索与导出。",
+      "descriptionEn": "",
+      "tags": [
+        "表格导入",
+        "名单去重",
+        "签到匹配",
+        "人员检索",
+        "结果导出"
+      ]
+    }
+  ]
+}

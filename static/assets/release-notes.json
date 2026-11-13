@@ -1,12 +1,12 @@
 {
   "zh": [
-    "桌面端新增运行黑盒：程序异常消失后，下次启动的日志会说明上次未正常退出，并在本地保存崩溃转储，便于定位闪退原因。",
-    "Dragon Claw 执行的每条命令的开始与结束都会写入运行日志；页面渲染进程崩溃后主窗口自动重新加载。",
-    "桌面宠物已全面停用：不再创建宠物窗口，也不再加载全局键盘监听；托盘里的 Agent 额度侧栏可独立开关。"
+    "保险箱（Vault）新增通用 API Key 与 Secret 凭据安全托管，支持独立密文加密存储、界面操作与环境解析。",
+    "完善 iOS App Store 审核与移动端体验，脱敏并优雅格式化网络异常提示，补充合规隐私政策规范与 iPad 适配支持。",
+    "增强智能体技能生态，集成家庭记账账本技能并增加本地执行降级与命令超时保护机制。"
   ],
   "en": [
-    "Desktop now keeps a run black box: after the app disappears unexpectedly, the next launch logs that the previous run ended abnormally and keeps crash dumps locally to help locate the cause.",
-    "Every command Dragon Claw runs is logged at start and end, and the main window reloads itself after a renderer crash.",
-    "The desktop pet is fully disabled: no pet window is created and the global keyboard listener is no longer loaded; the agent quota sidebar can still be toggled from the tray."
+    "Introduce native API Key and Secret credential vault support with encrypted storage, management UI, and runtime injection.",
+    "Improve mobile network resilience and App Store compliance with elegant error masking, privacy policy documentation, and iPad layout support.",
+    "Enhance the agent skills ecosystem with family finance bookkeeper automation, local execution fallbacks, and command timeout protections."
   ]
 }

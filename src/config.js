@@ -53,6 +53,8 @@ export const config = {
     appCacheDatasourceName: String(process.env.APP_CACHE_DATASOURCE_NAME || '').trim(),
     businessDatasourceId: num(process.env.BUSINESS_DATASOURCE_ID, 0),
     businessDatasourceName: String(process.env.BUSINESS_DATASOURCE_NAME || '').trim(),
+    // 业务数据源里的库名（NetCare 数据探查按它读表目录）；平台没有单独注入时按约定取 netcare
+    businessSchema: String(process.env.BUSINESS_SCHEMA || 'netcare').trim(),
     systemDatasourceId: num(process.env.SYSTEM_DATASOURCE_ID, 0),
     systemDatasourceName: String(process.env.SYSTEM_DATASOURCE_NAME || '').trim(),
 

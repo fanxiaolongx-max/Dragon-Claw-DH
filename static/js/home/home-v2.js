@@ -108,11 +108,11 @@
             scanRecheck: '重新检测', scanWindowsOnly: '仅支持 Windows', scanWindowsHint: '内置的 welink-cli 只能在 Windows 上运行，并需要本机登录 WeLink PC。',
             scanRelogin: '重新扫码', scanLogout: '退出登录', scanChannelSettings: '频道设置',
             scanAdminOnly: '仅系统管理员可用',
+            channelDisabledNoChannel: '当前未对接任何频道（WeLink / 微信），可在全局设置中对接',
+            channelDisabledNotEnabled: '已配置频道凭据但尚未启用，请在全局设置中开启',
             roleAdmin: '管理员',
             roleSuperAdmin: '超级管理员',
-            tour: '新手引导',
-            channelDisabledNoChannel: '当前未对接任何频道（WeLink / 微信），可在全局设置中对接',
-            channelDisabledNotEnabled: '已配置频道凭据但尚未启用，请在全局设置中开启'
+            tour: '新手引导'
         },
         'en-US': {
             discover: 'Discover', newChat: 'New chat', channels: 'Channels', skills: 'Skills · plugins', schedule: 'Scheduled', library: 'Library',
@@ -140,11 +140,11 @@
             scanRecheck: 'Check again', scanWindowsOnly: 'Windows only', scanWindowsHint: 'The built-in welink-cli runs only on Windows, with WeLink PC signed in on this machine.',
             scanRelogin: 'Re-scan', scanLogout: 'Sign out', scanChannelSettings: 'Channel settings',
             scanAdminOnly: 'System administrators only',
+            channelDisabledNoChannel: 'No channels configured (WeLink / WeChat). Configure them in Global Settings.',
+            channelDisabledNotEnabled: 'Channels configured but not enabled. Please enable them in Global Settings.',
             roleAdmin: 'Admin',
             roleSuperAdmin: 'Super Admin',
-            tour: 'Product tour',
-            channelDisabledNoChannel: 'No channels configured (WeLink / WeChat). Configure them in Global Settings.',
-            channelDisabledNotEnabled: 'Channels configured but not enabled. Please enable them in Global Settings.'
+            tour: 'Product tour'
         }
     };
     const lang = () => (window.ToolsI18n?.getLanguage?.() === 'en-US' ? 'en-US' : 'zh-CN');
@@ -177,16 +177,17 @@
         if (openPop?.pop === pop && openPop?.anchor === anchor) return;
         closePop();
         const rect = anchor.getBoundingClientRect();
-        if (place === 'right') { pop.style.left = `${rect.right + 6}px`; pop.style.top = `${rect.top - 6}px`; pop.style.bottom = ''; }
+        if (place === 'right') { pop.style.left = `${rect.right + 6}px`; pop.style.top = `${Math.max(8, rect.top - 6)}px`; pop.style.bottom = ''; }
         else if (place === 'up') { pop.style.left = `${rect.left}px`; pop.style.bottom = `${window.innerHeight - rect.top + 8}px`; pop.style.top = ''; }
         else { pop.style.left = `${rect.left}px`; pop.style.top = `${rect.bottom + 6}px`; pop.style.bottom = ''; }
         pop.classList.add('is-open');
         anchor.setAttribute('aria-expanded', 'true');
         openPop = { pop, anchor };
-        // 超出视口底部时向上收
+        // 超出视口边界时自动收进视口内
         const box = pop.getBoundingClientRect();
         if (box.right > window.innerWidth - 8) pop.style.left = `${Math.max(8, window.innerWidth - box.width - 8)}px`;
         if (box.bottom > window.innerHeight - 8 && place !== 'up') pop.style.top = `${Math.max(8, window.innerHeight - box.height - 8)}px`;
+        if (pop.getBoundingClientRect().top < 8 && place !== 'up') pop.style.top = '8px';
     }
     function makePop(className = '') {
         const pop = document.createElement('div');
@@ -197,9 +198,9 @@
     }
     function closeOutsidePop(event) {
         if (!openPop) return;
+        if (event.target?.closest?.('.v2-tour-root')) return;
         // 捕获阶段处理，避免正文/工具自身的 stopPropagation 阻止菜单关闭。
         const path = event.composedPath();
-        if (event.target?.closest?.('.v2-tour-root')) return;
         if (path.includes(openPop.pop) || path.includes(openPop.anchor) || path.includes(linksPanel)) return;
         closePop();
     }
@@ -286,6 +287,7 @@
         compare() { click('builtinToolsCompareBtn'); },
         links() { openLinks(); },
         alerts() { openMessages(); },
+        tour() { window.HomeProductTour?.replay?.(); },
         checkUpdate() { window.ToolsDialogs?.checkUpdate(); },
         feedback() { window.ToolsDialogs?.feedback(); },
         settings() { window.openNavSettingsModal?.(); },
@@ -294,7 +296,6 @@
         theme() { setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); },
         wide() { setWide(!root.classList.contains('v2-wide')); },
         serviceStatus() { window.openServiceStatusModal?.(); },
-        tour() { window.HomeProductTour?.replay?.(); },
         requirements() { if (!window.HomeToolFrame?.open?.('/requirements')) location.href = '/requirements'; },
         logout() { window.doLogout?.(); }
     };
@@ -321,21 +322,27 @@
     // ── 二级菜单：技能·插件·工具 / 更多（悬停或点击展开） ──
     const flyouts = {
         more: () => {
-            const normalizeNavPath = href => {
-                if (!href) return '';
-                const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(href) : href;
-                return stripped.split(/[?#]/)[0].replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+            const normalizeNavPath = raw => {
+                if (!raw) return '';
+                try {
+                    const u = new URL(raw, location.origin);
+                    return u.pathname.replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+                } catch {
+                    return String(raw).split(/[?#]/)[0].replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+                }
             };
             const workflow = window.NavWorkflow?.links() || [];
             const workflowIds = new Set([...(window.NavWorkflow?.ids || []), 'home']);
-            const workflowPaths = new Set(['/', '/index', ...workflow.map(item => normalizeNavPath(item.href))]);
+            const seenPaths = new Set(workflow.map(item => normalizeNavPath(item.href)));
             const toolLink = (href, label) => `<a class="v2-pop-item" role="menuitem" href="${esc(href)}"><span class="v2-ico v2-app-glyph" data-icon="${appGlyph(href)}"></span><span>${esc(label)}</span></a>`;
             const links = [...document.querySelectorAll('#app-navbar .nav-links a[href]')]
                 .filter(a => {
-                    const itemId = a.dataset?.navItemId || '';
-                    if (itemId && workflowIds.has(itemId)) return false;
                     const href = a.getAttribute('href');
-                    return isNavSidebarShortcut(href) && !workflowPaths.has(normalizeNavPath(href));
+                    const navId = a.dataset.navId || a.getAttribute('data-nav-id') || '';
+                    const pathKey = normalizeNavPath(href);
+                    if (!isNavSidebarShortcut(href) || workflowIds.has(navId) || seenPaths.has(pathKey)) return false;
+                    seenPaths.add(pathKey);
+                    return true;
                 })
                 .map(a => toolLink(a.getAttribute('href'), (a.querySelector('.nav-text, .nav-link-text')?.textContent || a.getAttribute('title') || a.textContent || '').trim().replace(/^\S+\s+/, m => (/^[\p{Extended_Pictographic}️]+\s+$/u.test(m) ? '' : m))));
             const personal = window.HomeSidebarMenu;
@@ -585,50 +592,36 @@
     const serviceDown = () => Boolean(document.querySelector('#app-navbar .nav-server-status')?.matches('.offline, .is-offline, .warning, .error, .is-down'));
     const serviceText = () => $('server-status-text')?.textContent?.trim() || t('online');
     const versionText = () => ($('nav-resource-version-display')?.textContent?.trim() || '').split(' · ')[0];
-    const ADMIN_BADGE_ICONS = {
-        admin: '<svg class="v2-role-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13 3.9v3.7c0 3.2-2.1 5.6-5 6.6-2.9-1-5-3.4-5-6.6V3.9L8 1.8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5.7 8.1 7.3 9.7l3-3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        super: '<svg class="v2-role-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 11.4 1.6 5.2l3.8 2.8L8 3.2l2.6 4.8 3.8-2.8-.6 6.2H2.2z" fill="currentColor" opacity="0.22" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/><path d="M3 13.2h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
-        crest: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4 9.7 6.3 14.6 8 9.7 9.7 8 14.6 6.3 9.7 1.4 8 6.3 6.3Z" fill="currentColor"/></svg>'
+    const ROLE_BADGE_ICONS = {
+        admin: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.8v3.9c0 3.2-2.1 5.6-5 6.5-2.9-.9-5-3.3-5-6.5V3.8L8 1.8Z"/><path d="m5.8 8.1 1.5 1.5 3-3"/></svg>',
+        super: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.2 12.2 1.4 5.3a.6.6 0 0 1 1-.5L5.3 7.6 7.5 3.4a.58.58 0 0 1 1 0l2.2 4.2 2.9-2.8a.6.6 0 0 1 1 .5l-.8 6.9a.7.7 0 0 1-.7.6H2.9a.7.7 0 0 1-.7-.6Z"/><rect x="2.6" y="13.5" width="10.8" height="1.3" rx=".65"/></svg>'
     };
-    function userRoleTier() {
-        let role = '';
-        let superFlag = null;
+    const userRoleTier = () => {
         try {
-            role = localStorage.getItem('tools_role') || '';
-            superFlag = localStorage.getItem('tools_super');
-        } catch { /* 无痕模式 */ }
-        if (role !== 'admin') return '';
-        const isSuper = superFlag !== null ? superFlag === '1' : window.isNavSuperAdmin?.() !== false;
-        return isSuper ? 'super' : 'admin';
-    }
-    function roleBadgeContent(tier) {
+            if (localStorage.getItem('tools_role') !== 'admin') return '';
+            if (typeof window.isNavSuperAdmin === 'function') return window.isNavSuperAdmin() ? 'super' : 'admin';
+            const flag = localStorage.getItem('tools_super');
+            return flag === null || flag === '1' ? 'super' : 'admin';
+        } catch {
+            return '';
+        }
+    };
+    const applyUserTierClasses = (el, tier) => {
+        if (!el) return;
+        el.classList.toggle('is-admin', tier === 'admin' || tier === 'super');
+        el.classList.toggle('is-superadmin', tier === 'super');
+    };
+    const renderRoleBadgeHtml = tier => {
         if (!tier) return '';
         const label = tier === 'super' ? t('roleSuperAdmin') : t('roleAdmin');
-        return `${ADMIN_BADGE_ICONS[tier]}<span>${esc(label)}</span>`;
-    }
-    function applyAvatarTierClasses(el, tier) {
-        if (!el) return;
-        el.classList.toggle('is-admin', tier === 'admin');
-        el.classList.toggle('is-super', tier === 'super');
-    }
+        return `${ROLE_BADGE_ICONS[tier] || ''}<span>${esc(label)}</span>`;
+    };
     function renderUser() {
         const name = localStorage.getItem('tools_display_name') || localStorage.getItem('tools_user') || '';
         const tier = userRoleTier();
+        applyUserTierClasses($('v2UserBtn'), tier);
         $('v2UserName').textContent = name;
         if (!$('v2Avatar').firstChild) $('v2Avatar').innerHTML = '<img src="/assets/logo.png" alt="">';
-        applyAvatarTierClasses($('v2UserBtn'), tier);
-        applyAvatarTierClasses($('v2AvatarWrap'), tier);
-        const crest = $('v2AvatarCrest');
-        if (crest) {
-            crest.hidden = tier !== 'super';
-            if (tier === 'super' && !crest.firstChild) crest.innerHTML = ADMIN_BADGE_ICONS.crest;
-        }
-        const badge = $('v2UserRoleBadge');
-        if (badge) {
-            badge.hidden = !tier;
-            badge.className = `v2-role-badge v2-role-badge--sm${tier ? ` is-${tier}` : ''}`;
-            badge.innerHTML = roleBadgeContent(tier);
-        }
         const svcText = serviceText();
         const down = serviceDown();
         const meta = $('v2UserMeta');
@@ -642,13 +635,19 @@
             dot.setAttribute('aria-label', svcText);
             if (dot.parentElement) dot.parentElement.title = svcText;
         }
+        const crest = $('v2AvatarCrest');
+        if (crest) {
+            crest.hidden = tier !== 'super';
+            if (tier === 'super' && !crest.firstChild) crest.innerHTML = ROLE_BADGE_ICONS.super;
+        }
+        const badge = $('v2RoleBadge') || $('v2UserRoleBadge');
+        if (badge) {
+            badge.hidden = !tier;
+            badge.classList.toggle('is-admin', tier === 'admin');
+            badge.classList.toggle('is-superadmin', tier === 'super');
+            badge.innerHTML = renderRoleBadgeHtml(tier);
+        }
     }
-    const syncUserUi = () => {
-        renderUser();
-        if (openPop?.pop === userPop) renderUserMenu();
-    };
-    window.addEventListener('tools:user-synced', syncUserUi);
-    window.addEventListener('dh:platform-user', syncUserUi);
     const rowItem = (icon, label, action, hint = '', arrow = false) => `<button type="button" class="v2-pop-item" role="menuitem" data-v2-do="${action}"><span class="v2-ico" data-icon="${icon}"></span><span>${esc(label)}</span>${hint ? `<span class="v2-pop-hint">${esc(hint)}</span>` : ''}${arrow ? '<span class="v2-ico v2-pop-arrow" data-icon="chevronRight"></span>' : ''}</button>`;
     const switchItem = (icon, label, action, on) => `<button type="button" class="v2-pop-item" role="menuitemcheckbox" aria-checked="${on}" data-v2-do="${action}"><span class="v2-ico" data-icon="${icon}"></span><span>${esc(label)}</span><span class="v2-pop-switch" aria-hidden="true"></span></button>`;
     // 宽屏模式：对话正文与输入框随窗口变宽，两侧不再留大片空白；只记在本浏览器
@@ -660,22 +659,13 @@
     function renderUserMenu() {
         const name = localStorage.getItem('tools_display_name') || localStorage.getItem('tools_user') || '';
         const tier = userRoleTier();
+        const tierClass = tier === 'super' ? ' is-admin is-superadmin' : (tier === 'admin' ? ' is-admin' : '');
+        const headCrest = tier === 'super' ? `<span class="v2-avatar-crest" aria-hidden="true">${ROLE_BADGE_ICONS.super}</span>` : '<span class="v2-avatar-crest" aria-hidden="true" hidden></span>';
+        const headBadge = tier ? `<span class="v2-role-badge ${tier === 'super' ? 'is-superadmin' : 'is-admin'}">${renderRoleBadgeHtml(tier)}</span>` : '';
         const dark = root.getAttribute('data-theme') === 'dark';
         const mac = /Mac/i.test(navigator.platform || '');
-        const headClass = `v2-account-card v2-account-head${tier ? ` is-${tier}` : ''}`;
-        const wrapClass = `v2-avatar-wrap is-lg${tier ? ` is-${tier}` : ''}`;
-        const badgeHtml = tier ? `<span class="v2-role-badge v2-role-badge--lg is-${tier}">${roleBadgeContent(tier)}</span>` : '';
         userPop.innerHTML = `
-            <div class="${headClass}">
-                <span class="${wrapClass}">
-                    <span class="v2-avatar v2-avatar-lg"><img src="/assets/logo.png" alt=""></span>
-                    ${tier === 'super' ? `<span class="v2-avatar-crest" aria-hidden="true">${ADMIN_BADGE_ICONS.crest}</span>` : ''}
-                </span>
-                <div class="v2-account-meta">
-                    <strong class="v2-account-name">${esc(name)}</strong>
-                    ${badgeHtml}
-                </div>
-            </div>
+            <div class="v2-account-card v2-account-head${tierClass}"><span class="v2-avatar-wrap"><span class="v2-avatar v2-avatar-lg"><img src="/assets/logo.png" alt=""></span>${headCrest}</span><div class="v2-account-identity"><strong>${esc(name)}</strong>${headBadge}</div></div>
             <div class="v2-account-card v2-account-stats">
                 <div><small>${esc(t('version'))}</small><strong>${esc(versionText() || '—')}</strong></div>
                 <div><small>${esc(t('service'))}</small><button type="button" class="v2-account-service" data-v2-do="serviceStatus" title="${esc(t('serviceStatus'))}" aria-label="${esc(t('serviceStatus'))}"><span class="v2-status-dot${serviceDown() ? ' is-down' : ''}"></span>${esc(serviceText())}</button></div>
@@ -1629,7 +1619,9 @@
                     const confirmMsg = lang() === 'en-US' ? 'Clear all alert messages?' : '确定清空所有告警消息？';
                     const ok = window.AppDialog?.confirm
                         ? await window.AppDialog.confirm(confirmMsg, { title: lang() === 'en-US' ? 'Clear all' : '全部清除', tone: 'danger', confirmText: lang() === 'en-US' ? 'Clear' : '清空', cancelText: lang() === 'en-US' ? 'Cancel' : '取消' })
-                        : (typeof window.showNavbarConfirm === 'function' ? await window.showNavbarConfirm({ title: lang() === 'en-US' ? 'Clear all' : '全部清除', message: confirmMsg, tone: 'danger' }) : false);
+                        : (typeof window.showNavbarConfirm === 'function'
+                            ? await window.showNavbarConfirm(confirmMsg, { title: lang() === 'en-US' ? 'Clear all' : '全部清除', danger: true })
+                            : false);
                     if (!ok) return;
                     await fetch('/api/alert-center/events/clear-all', { method: 'POST', headers: msgHeaders(true), body: '{}' }).catch(() => {});
                     window.refreshAlertCenterBadge?.(); loadMessages(); return;
@@ -2463,6 +2455,16 @@
         renderModes();
         queueGroups();
     });
+    window.addEventListener('tools:authchange', () => {
+        renderUser();
+        if (openPop?.pop === userPop) renderUserMenu();
+    });
+    window.addEventListener('storage', event => {
+        if (!event.key || ['tools_user', 'tools_role', 'tools_super'].includes(event.key)) {
+            renderUser();
+            if (openPop?.pop === userPop) renderUserMenu();
+        }
+    });
     window.addEventListener('tools:languagechange', () => {
         applyText();
         mirrorNavbar();
@@ -2470,11 +2472,11 @@
         if (!quick.scene) loadRecentQuestions();
         updateChannelsNavState();
         if (openPop?.pop === discover.pop) renderDiscover();
-        if (openPop?.pop === userPop) renderUserMenu();
         if (openPop?.pop === scan.pop) renderScan();
+        if (openPop?.pop === userPop) renderUserMenu();
     });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
     else init();
 
-    window.HomeV2 = { setSideCollapsed, isSideCollapsed, setTheme, closePop, fillIcons, openLinks, updateChannelsNavState };
+    window.HomeV2 = { setSideCollapsed, isSideCollapsed, setTheme, closePop, fillIcons, openLinks, updateChannelsNavState, renderUser };
 })();

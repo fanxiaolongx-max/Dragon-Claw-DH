@@ -266,7 +266,8 @@ export async function startMockBaseServer() {
                 res.end();
                 return;
             }
-            return sendJson({ choices: [{ message: { content: 'OK' } }] });
+            // 非流式调用（起标题、消息摘要等）：用例可用 options.completionText 指定返回内容
+            return sendJson({ choices: [{ message: { content: options.completionText ?? 'OK' } }] });
         }
 
         if (url.pathname === '/healthz') return sendJson({ status: 'ok' });
@@ -287,6 +288,11 @@ export async function startMockBaseServer() {
                 const out = await realBase('/query', body);
                 if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
                 return sendJson(out);
+            }
+            // 业务数据源（按 datasourceName 查）：测试用 options.businessQuery 提供结果
+            if (body.datasourceName && typeof options.businessQuery === 'function') {
+                const rows = options.businessQuery(String(body.sql || ''), body.limit || 200);
+                return sendJson({ code: 0, message: 'ok', data: { datasourceName: body.datasourceName, rows, rowCount: rows.length } });
             }
             try {
                 const rows = queryMockSql(body.sql, body.limit || 200);
