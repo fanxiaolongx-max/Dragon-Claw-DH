@@ -616,7 +616,6 @@ export async function platformShellRoutes(fastify) {
         }
     });
 
-    fastify.get('/api/vault', async () => ({ items: [] }));
     fastify.get('/api/chat-history/status', async () => ({ enabled: false, indexedCount: 0 }));
     fastify.get('/api/distribution/catalog', async () => ({ items: [] }));
     fastify.get('/api/distribution/personal', async () => ({ entries: {} }));

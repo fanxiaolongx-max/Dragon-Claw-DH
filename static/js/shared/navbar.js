@@ -2560,7 +2560,7 @@ function renderNavSettingsSidebar() {
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'media' ? 'active' : ''}" data-tab="media" onclick="switchNavSettingsTab('media')">${renderNavSettingsTabLabel('🎬', navT('nav.set.tab.media'))}</button>` : ''}
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'promotions' ? 'active' : ''}" data-tab="promotions" onclick="switchNavSettingsTab('promotions')">${renderNavSettingsTabLabel('📣', navT('nav.set.tab.promotions'))}</button>` : ''}
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'customBackup' ? 'active' : ''}" data-tab="customBackup" onclick="switchNavSettingsTab('customBackup')">${renderNavSettingsTabLabel('🧰', navT('nav.set.tab.customBackup'))}</button>` : ''}
-        <button class="nav-settings-tab ${t === 'accounts' ? 'active' : ''}" data-tab="accounts" onclick="switchNavSettingsTab('accounts')">${renderNavSettingsTabLabel('👤', isNavSuperAdmin() ? navT('nav.set.tab.accounts') : navLocaleText('我的账号', 'My account'))}</button>
+        <button class="nav-settings-tab ${t === 'accounts' ? 'active' : ''}" data-tab="accounts" onclick="switchNavSettingsTab('accounts')">${renderNavSettingsTabLabel('🧾', navLocaleText('审计日志', 'Audit log'))}</button>
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'security' ? 'active' : ''}" data-tab="security" onclick="switchNavSettingsTab('security')">${renderNavSettingsTabLabel('🛡️', navT('nav.set.tab.security'))}</button>` : ''}
         <div class="nav-settings-title nav-settings-section-title">${navEscape(navT('nav.set.tab.pages'))}</div>
         ${renderPageSettingsTabs()}
@@ -2697,7 +2697,7 @@ function getNavSettingsTitle() {
         const item = NAV_BUILTIN_LINKS.find(link => link.id === pageId);
         return item ? navT('nav.set.pageConfig', { page: getNavLabel(item) }) : navT('nav.set.tab.pages');
     }
-    if (navState.settingsTab === 'accounts') return isNavSuperAdmin() ? navT('nav.set.tab.accounts') : navLocaleText('我的账号', 'My account');
+    if (navState.settingsTab === 'accounts') return navLocaleText('审计日志', 'Audit log'); // 基座 Web 版：账号由数字人门户管理，这个页签只放审计日志
     if (navState.settingsTab === 'security') return navT('nav.set.tab.security');
     if (navState.settingsTab === 'ai') return navT('nav.set.tab.ai');
     if (navState.settingsTab === 'agentTools') return navLocaleText('智能体工具', 'Agent tools');
@@ -2725,11 +2725,11 @@ function getNavSettingsSubtitle() {
         if (pageId === 'duty-roster') return navLocaleText('夜间运维值班表服务端持久化及月报资料库互通说明。', 'Night operation duty roster server persistence and report library overview.');
         return navT('nav.set.sub.pageFallback');
     }
-    if (navState.settingsTab === 'accounts') return navT('nav.set.sub.accounts');
+    if (navState.settingsTab === 'accounts') return navLocaleText('谁在什么时候、从什么客户端进入了平台或做了敏感操作。仅管理员可见。', 'Who entered the platform or performed sensitive actions, when and from which client. Administrators only.');
     if (navState.settingsTab === 'security') return navT('nav.set.sub.security');
     if (navState.settingsTab === 'ai') return navT('nav.set.sub.ai');
     if (navState.settingsTab === 'agentTools') return navLocaleText('Dragon Claw 的 MCP 服务与工具清单：哪些工具常驻、哪些按需加载、占多少上下文、被调用了多少次。', 'Dragon Claw MCP servers and tool catalog: what is always loaded, what loads on demand, context cost and call counts.');
-    if (navState.settingsTab === 'vault') return navLocaleText('只属于你的网站账号密码：Dragon 浏览器自动保存、自动填写并登录，AI 也能代你登录，但看不到密码。', 'Your own website logins: saved, filled and signed in automatically by the Dragon browser. The AI can sign in for you without seeing the password.');
+    if (navState.settingsTab === 'vault') return navLocaleText('只属于你的 API 密钥与 Secret：加密保存，查看明文会记入审计日志。', 'Your own API keys and secrets: stored encrypted; viewing one is recorded in the audit log.');
     if (navState.settingsTab === 'desktopAgents') return navLocaleText('连接本机原生桌面会话，同步最近对话并在 Web 继续交流。', 'Sync recent native desktop sessions and continue them from the Web.');
     if (navState.settingsTab === 'channels') return navT('nav.set.sub.channels');
     if (navState.settingsTab === 'update') return navT('nav.set.sub.update');
@@ -2788,7 +2788,7 @@ async function renderNavSettingsContent() {
 
     if (NAV_SUPER_ONLY_SETTINGS_TABS.has(navState.settingsTab) && !isNavSuperAdmin()) navState.settingsTab = 'primary';
     if (navState.settingsTab.startsWith('page:')) return renderPageSettings(content, navState.settingsTab.slice(5));
-    if (navState.settingsTab === 'accounts') return renderAccountSettings(content);
+    if (navState.settingsTab === 'accounts') { content.innerHTML = renderAuditLogSection(); return window.reloadAuditLogTable(); }
     if (navState.settingsTab === 'security') return renderSecuritySettings(content);
     if (navState.settingsTab === 'ai') return renderAiSettings(content);
     if (navState.settingsTab === 'agentTools') return renderAgentToolsSettings(content);

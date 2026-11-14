@@ -27,6 +27,8 @@ import { frtRoutes, prauditRoutes, dutyRosterRoutes, topicSnapshotsRoutes, requi
 import { rewardProgramRoutes } from './routes/reward-routes.js';
 import { departmentRewardPenaltyRoutes } from './routes/department-reward-penalty.js';
 import { friendLinksRoutes, platformPromotionsRoutes } from './routes/home-extras.js';
+import { vaultRoutes } from './routes/vault.js';
+import { recordAuditOnce, clientIp } from './services/audit-service.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
 const gzipAsync = promisify(zlib.gzip);
@@ -126,6 +128,7 @@ function sendProtectedHtml(req, reply, relPath) {
     const identified = Boolean(req.userIdentity?.identified);
     const hasSubpath = Boolean(req.raw?._dhHasSubpath);
     if (authEnforced && !identified && !hasSubpath) {
+        recordAuditOnce(`denied:${clientIp(req)}`, 10 * 60_000, req, { actor: '（未登录）', action: 'login_failed', detail: `未登录打开 ${relPath}` });
         return sendHtmlFile(reply, '401.html', 401);
     }
     return sendHtmlFile(reply, relPath);
@@ -203,6 +206,8 @@ export async function createServer() {
         const authReason = authRequiredReason(apiPath, identity);
         if (authReason) {
             pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 未登录拒绝：${authReason}`, requestId: req.requestId, userId: identity.username });
+            // 审计：同一来源 10 分钟内只记一次，避免未登录页面的连串请求刷屏
+            recordAuditOnce(`denied:${clientIp(req)}`, 10 * 60_000, req, { actor: '（未登录）', action: 'login_failed', detail: `未登录访问 ${apiPath}` });
             return reply.code(401).send({ error: authReason, code: 'AUTH_REQUIRED', requestId: req.requestId });
         }
         const reason = denyReason(req.method, apiPath, identity);
@@ -334,6 +339,7 @@ export async function createServer() {
     await app.register(rewardProgramRoutes, { prefix: '/api/reward-program' });
     await app.register(friendLinksRoutes, { prefix: '/api/friend-links' });
     await app.register(platformPromotionsRoutes, { prefix: '/api/platform-promotions' });
+    await app.register(vaultRoutes, { prefix: '/api/vault' });
     await app.register(platformShellRoutes);
     // 平台标识：页面里固定引用 assets/logo.png，管理员上传过自定义图标时这里返回自定义的
     app.get('/assets/logo.png', async (_req, reply) => sendLogo(reply));

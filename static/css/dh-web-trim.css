@@ -23,8 +23,7 @@ html.dh-web .v2-account-list [data-v2-do="checkUpdate"],
 html.dh-web .v2-account-list [data-v2-do="logout"],
 html.dh-web .v2-account-list .v2-pop-sep,
 html.dh-web .nav-actions .nav-logout-link,
-/* 全局设置：保留菜单布局、AI 助手、平台标识、智能体工具 */
-html.dh-web .nav-settings-tab[data-tab="vault"],
+/* 全局设置：保留菜单布局、AI 助手、平台标识、智能体工具、保险箱（只有密钥页）、审计日志（accounts 页签在这里只显示审计日志） */
 html.dh-web .nav-settings-tab[data-tab="channels"],
 html.dh-web .nav-settings-tab[data-tab="desktopAgents"],
 html.dh-web .nav-settings-tab[data-tab="update"],
@@ -33,7 +32,6 @@ html.dh-web .nav-settings-tab[data-tab="snapshotPublish"],
 html.dh-web .nav-settings-tab[data-tab="initialize"],
 html.dh-web .nav-settings-tab[data-tab="media"],
 html.dh-web .nav-settings-tab[data-tab="customBackup"],
-html.dh-web .nav-settings-tab[data-tab="accounts"],
 html.dh-web .nav-settings-tab[data-tab="security"],
 /* 智能体工具：Web 版没有 MCP 服务、危险命令规则、工具说明生成，只留工具清单 */
 html.dh-web .nat-card[data-section="mcp"],

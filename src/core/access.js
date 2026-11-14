@@ -114,9 +114,10 @@ const USER_WRITES = [
     ['*', /^\/meeting-snapshots(?:\/.*)?$/], // 已识别用户可维护会议考勤快照与名单设置（与主线版一致）
     ['*', /^\/(?:operation-incentive-snapshots|incentive-snapshots)(?:\/[^/]+)?$/], // 已识别用户可维护操作激励快照
     ['*', /^\/requirements(?:\/.*)?$/], // 提需求、改自己的需求；流转与指派在服务内校验管理员
+    ['*', /^\/vault(?:\/.*)?$/], // 保险箱只属于本人（服务内按归属校验）
 ];
-// 数据探索只给管理员（基座 Web 版的管理员就是超级管理员，与主线版「仅超级管理员」一致）；对话里的查库工具不受影响
-const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
+// 数据探索、审计日志只给管理员（基座 Web 版的管理员就是超级管理员，与主线版「仅超级管理员」一致）；对话里的查库工具不受影响
+const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/auth\/audit$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
 const ANON_ALLOWED_APIS = [/^\/auth\/(?:me|logout)$/, /^\/platform-logo\/image$/, /^\/(?:healthz|health|ping)$/];
 
 /** 生产环境（已注入基座 API 且未开启免鉴权/内存模式）强制要求已识别身份。 */

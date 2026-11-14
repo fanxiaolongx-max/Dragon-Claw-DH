@@ -346,6 +346,8 @@
                     const sendApiFetch = () => {
                         const headers = new Headers((options && options.headers) || (typeof target !== 'string' && target.headers) || undefined);
                         headers.set('x-dh-envelope', '1');
+                        // 客户端类型（与主线版 shared/api.js 同名同值），审计日志按它区分 Web / 移动 Web
+                        if (!headers.has('X-Client-Platform')) headers.set('X-Client-Platform', /iPhone|iPad|iPod|Android/i.test(typeof navigator === 'undefined' ? '' : navigator.userAgent) ? 'mobile_web' : 'web');
                         if (dhPlatformUser?.userName) {
                             if (!headers.has('x-dh-user')) headers.set('x-dh-user', encodeURIComponent(dhPlatformUser.userName));
                             if (!headers.has('x-dh-displayname') && dhPlatformUser.displayName) {

@@ -30,3 +30,31 @@ export function decryptSecret(stored) {
         return ''; // 口令变更后无法解密：当作未配置，由管理员重新填写
     }
 }
+
+// ── 按归属隔离的加密（保险箱密钥）：每个归属一把由主口令派生的子密钥，并把 scope 作为附加校验数据，
+//    密文挪到别的账号或别的名称下无法解开。主口令的强弱同上（见 secretsAreStrong）。
+const SCOPED_PREFIX = 'enc:s1:';
+const scopedKey = (owner) => Buffer.from(crypto.hkdfSync('sha256', key, Buffer.from(String(owner), 'utf8'), Buffer.from('dh-vault-v1', 'utf8'), 32));
+
+export function sealScoped(owner, scope, plain) {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', scopedKey(owner), iv);
+    cipher.setAAD(Buffer.from(`${owner}\n${scope}`, 'utf8'));
+    const body = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+    return SCOPED_PREFIX + Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64');
+}
+
+/** 解不开（口令变更、密文被挪动或篡改）返回 null */
+export function openScoped(owner, scope, stored) {
+    const text = String(stored || '');
+    if (!text.startsWith(SCOPED_PREFIX)) return null;
+    try {
+        const raw = Buffer.from(text.slice(SCOPED_PREFIX.length), 'base64');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', scopedKey(owner), raw.subarray(0, 12));
+        decipher.setAAD(Buffer.from(`${owner}\n${scope}`, 'utf8'));
+        decipher.setAuthTag(raw.subarray(12, 28));
+        return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
+    } catch {
+        return null;
+    }
+}

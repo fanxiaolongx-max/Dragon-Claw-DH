@@ -5,6 +5,9 @@ import { hasAdminMatch, isAuthEnforced, listAdmins, saveAdmins } from '../core/a
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
+import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
+
+const LOGIN_WINDOW_MS = 8 * 3600_000;
 
 function publicIdentity(id) {
     return {
@@ -28,14 +31,26 @@ function publicIdentity(id) {
 }
 
 export async function authRoutes(fastify) {
-    fastify.get('/me', async (req) => publicIdentity(resolveRequestIdentity(req)));
+    fastify.get('/me', async (req) => {
+        const id = resolveRequestIdentity(req);
+        // 登录由基座完成，这里把「同一账号 + 客户端 + IP 在 8 小时内首次进入」记为一次登录
+        if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
+        return publicIdentity(id);
+    });
 
     // 底座已完成单点登录：这两个端点只为兼容桌面版前端的调用，不做任何口令校验
     fastify.post('/login', async (req) => {
         const id = resolveRequestIdentity(req);
         return { success: true, username: id.username, role: id.role, tenantId: id.tenantId, isSuper: id.isSuper };
     });
-    fastify.post('/logout', async () => ({ success: true }));
+    fastify.post('/logout', async (req) => {
+        const id = resolveRequestIdentity(req);
+        if (id.identified) await recordAudit(req, { actor: id.username, action: 'logout' });
+        return { success: true };
+    });
+
+    // 审计日志（仅管理员，见 core/access.js 的 ADMIN_READS）：分页、按客户端筛选，返回体与主线版一致
+    fastify.get('/audit', async (req) => listAudit({ page: req.query?.page, limit: req.query?.limit, platform: req.query?.platform, actor: req.query?.actor, action: req.query?.action }));
 
     fastify.get('/users', async (req) => {
         const id = resolveRequestIdentity(req);
@@ -54,6 +69,7 @@ export async function authRoutes(fastify) {
         }
         const stored = await saveAdmins(next);
         pushLog({ level: 'WARN', category: 'AUTH', message: `管理员名单已更新（${stored.length} 人）`, userId: me.username });
+        await recordAudit(req, { actor: me.username, action: 'admins_update', detail: stored.join('、') || '（空）' });
         await pushAdminAlert({ type: 'security', severity: 'warn', title: '管理员名单已更新', message: `${me.username} 把管理员名单改为：${stored.join('、') || '（空）'}`, actor: me.username, objectType: 'admins' });
         return { success: true, stored };
     });
