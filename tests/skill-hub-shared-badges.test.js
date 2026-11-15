@@ -176,12 +176,12 @@ test('Skill Hub shared badges & category filter chips for Plugins and Tools in d
         assert.match(skillsCode, /isShared \? '全员开放' : '未全员开放'/, 'must support i18n for shared');
     });
 
-    await t.test('home-v2.js discover popup defines shared and unshared category chips and badges', () => {
-        const homeV2Code = fs.readFileSync(path.join(__dirname, '../static/js/home/home-v2.js'), 'utf8');
-        assert.match(homeV2Code, /sharedWithAll:\s*'全员开放'/, 'must define sharedWithAll translation in zh-CN');
-        assert.match(homeV2Code, /unsharedOnly:\s*'未全员开放'/, 'must define unsharedOnly translation in zh-CN');
-        assert.match(homeV2Code, /v2-badge-shared-pill/, 'must render v2-badge-shared-pill in appRow');
-        assert.match(homeV2Code, /discover\.cat === 'sharedWithAll'/, 'must handle sharedWithAll filter');
-        assert.match(homeV2Code, /discover\.cat === 'unsharedOnly'/, 'must handle unsharedOnly filter');
+    await t.test('home-shell.js discover popup defines shared and unshared category chips and badges', () => {
+        const homeShellCode = fs.readFileSync(path.join(__dirname, '../static/js/home/home-shell.js'), 'utf8');
+        assert.match(homeShellCode, /sharedWithAll:\s*'全员开放'/, 'must define sharedWithAll translation in zh-CN');
+        assert.match(homeShellCode, /unsharedOnly:\s*'未全员开放'/, 'must define unsharedOnly translation in zh-CN');
+        assert.match(homeShellCode, /v2-badge-shared-pill/, 'must render v2-badge-shared-pill in appRow');
+        assert.match(homeShellCode, /discover\.cat === 'sharedWithAll'/, 'must handle sharedWithAll filter');
+        assert.match(homeShellCode, /discover\.cat === 'unsharedOnly'/, 'must handle unsharedOnly filter');
     });
 });

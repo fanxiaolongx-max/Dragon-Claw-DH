@@ -11,7 +11,7 @@
     if (window.__dhRuntimeInstalled) return;
     window.__dhRuntimeInstalled = true;
 
-    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|builtin-tools|(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|requirements|custom-tool)(?:\.html)?|pages|favicon\.ico|healthz|ping|tools|custom-tools|storage|netcare-explorer|requirements|custom-report)(?:\/|\?|$)/i;
+    const REWRITE_PREFIX_RE = /^\/(?:api|assets|css|js|downloads|builtin-tools|(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|ai-bi|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|requirements|custom-tool|401)(?:\.html)?|pages|favicon\.ico|healthz|ping|tools|custom-tools|storage|netcare-explorer|requirements|custom-report)(?:\/|\?|$)/i;
     const APP_ROUTE_TAIL_RE = /\/(?:monthly\/legacy|pages\/[a-zA-Z0-9_.-]+\.html|(?:index|uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|bigscreen|db-explorer|topic-analysis|duty-roster|frt|praudit|requirements|ai-bi|custom-tool)\.html|uivf12|sla|report|expedite|monthly|ai-report|bigscreen|praudit|frt|storage|db-explorer|netcare-explorer|topic-analysis|duty-roster|requirements|ai-bi|custom-report|(?:tools|custom-tools)\/.*)$/;
     const PHASE2_RE = /^\/(?:storage|netcare-explorer|custom-report)/i;
     const STATIC_PAGE_MAP = {

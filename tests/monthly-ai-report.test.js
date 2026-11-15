@@ -437,7 +437,7 @@ test('leave-page guards use AppDialog without native beforeunload and homepage p
     const toolFrameJs = fs.readFileSync(path.join(rootDir, 'static/js/home/tool-frame.js'), 'utf8');
     const tourJs = fs.readFileSync(path.join(rootDir, 'static/js/home/product-tour.js'), 'utf8');
     const indexHtml = fs.readFileSync(path.join(rootDir, 'static/index.html'), 'utf8');
-    const homeV2Js = fs.readFileSync(path.join(rootDir, 'static/js/home/home-v2.js'), 'utf8');
+    const homeShellJs = fs.readFileSync(path.join(rootDir, 'static/js/home/home-shell.js'), 'utf8');
 
     assert.equal(/\bbeforeunload\b/.test(aiReportJs), false, 'ai-report/app.js should not attach beforeunload');
     assert.equal(/\bbeforeunload\b/.test(dutyJs), false, 'duty-roster.js should not attach beforeunload');
@@ -453,6 +453,6 @@ test('leave-page guards use AppDialog without native beforeunload and homepage p
     assert.match(tourJs, /navigator\.webdriver/);
     assert.match(tourJs, /restoreSnapshot/);
     assert.match(indexHtml, /js\/home\/product-tour\.js/);
-    assert.match(homeV2Js, /HomeProductTour\?\.replay/);
+    assert.match(homeShellJs, /HomeProductTour\?\.replay/);
 });
 

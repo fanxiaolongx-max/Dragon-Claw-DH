@@ -8,7 +8,7 @@ test('Skill Hub demotion, visual indicators, source filtering and share toggle',
     const hubCode = fs.readFileSync(path.join(__dirname, '../static/js/home/skill-hub.js'), 'utf8');
     const skillsToolsCode = fs.readFileSync(path.join(__dirname, '../static/js/home/skills-tools.js'), 'utf8');
     const indexHtml = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
-    const homePageCode = fs.readFileSync(path.join(__dirname, '../static/js/home/home-page.js'), 'utf8');
+    const homePageCode = fs.readFileSync(path.join(__dirname, '../static/js/home/home-tools.js'), 'utf8');
 
     function createMockEnvironment({ isSuper = true, lang = 'zh-CN' } = {}) {
         const mockWindow = {

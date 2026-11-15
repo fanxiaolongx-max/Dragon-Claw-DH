@@ -192,7 +192,7 @@ test('Nginx 静态直出页面与 dh-runtime.js：路径映射、自定义工具
     assert.equal(sandbox.dhStripBase(`${basePrefix}/sla.html`), '/sla.html');
 
     // 验证「更多 → 快捷工具」在网关子路径重写下仍能排除首页(/)与系统工具
-    const navSrc = fs.readFileSync(path.join(ROOT, 'static/js/shared/navbar.js'), 'utf8');
+    const navSrc = fs.readFileSync(path.join(ROOT, 'static/js/shared/platform-settings-controller.js'), 'utf8');
     const fnMatch = navSrc.match(/function isNavSidebarShortcut\(href\)\s*\{[\s\S]*?\n\}/);
     assert.ok(fnMatch, '应存在 isNavSidebarShortcut 函数');
     vm.runInNewContext(fnMatch[0], sandbox);

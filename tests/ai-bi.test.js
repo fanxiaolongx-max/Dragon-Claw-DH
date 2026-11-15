@@ -57,7 +57,7 @@ test('看板接口、对话生成布局、标记调整与页面入口', async ()
         const page = await fetch(`${url}/ai-bi`, { headers: as('bob') });
         assert.equal(page.status, 200);
         assert.match(await page.text(), /js\/ai-bi\/app\.js/);
-        assert.match(fs.readFileSync(new URL('../static/js/shared/navbar.js', import.meta.url), 'utf8'), /id: 'monthly'[^\n]*\n\s*\{ id: 'ai-bi'/, 'AI BI 紧跟在月报页面后面');
+        assert.match(fs.readFileSync(new URL('../static/js/shared/platform-core.js', import.meta.url), 'utf8'), /id: 'monthly'[^\n]*\n\s*\{ id: 'ai-bi'/, 'AI BI 紧跟在月报页面后面');
 
         // 这个月一点数据都没有：直接说明，不画格子
         const empty = await call('bob', 'POST', '/api/ai-report/bi/plan', { month: '2026-10', message: '做个看板', board: {} });

@@ -180,3 +180,12 @@ npm test         # 接口、权限与浏览器端到端测试
 ## 前端与桌面版的关系
 
 `static/` 来自桌面版 `tools-platform/frontend` 的一期页面子集，另有少量数字人专用文件和改动，清单见 `frontend-overlay.json`。桌面版前端更新后，运行 `node scripts/frontend-drift.mjs <tools-platform/frontend 路径>` 查看哪些文件需要同步。
+
+首页只有一套实现（`static/index.html`，根元素 `.platform-home`）。旧首页 `home-page.js` / `home-v2.js` 和旧顶部导航 `navbar.js` / `navbar-settings.js` 已删除，不要恢复：
+
+- 首页：`js/home/home-shell.js`（侧栏、账号菜单、搜索、主题）、`js/home/home-tools.js`（工具导入、市场、卡片）、`js/home/tool-frame.js`（内嵌工具容器）。
+- 平台共享脚本按顺序加载：`platform-core` → `platform-dialogs` → `platform-settings-controller`（首次打开设置再加载 `platform-settings.js`）→ `platform-alerts` → `platform-services` → `platform-tool-updates` → `platform-runtime`。职责与主线版 `docs/frontend-architecture.md` 一致。
+- 基座专有差异：设置里「账号」页签只放审计日志；退出跳 `401.html`；服务状态没有「平台自检」和日志 ZIP 导出（基座后端无这些接口）；路径经 `dh-runtime.js` 处理 `DH_BASE`。
+- 自定义工具无论内嵌还是独立窗口都落到静态 `custom-tool.html?slug=`：底座 Nginx 只把 `/api/*` 转给 Node，不要照搬主线版直达 `/custom-tools/<slug>/index.html` 的做法。
+
+`tests/platform-architecture.test.js` 守住以上约束。

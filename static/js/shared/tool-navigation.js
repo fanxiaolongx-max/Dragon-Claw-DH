@@ -49,7 +49,7 @@
         }
     }
 
-    const toolPath = /^\/(?:uivf12|sla|report|expedite|monthly|monthly-legacy|ai-report|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|cinama|project-evolution|python-updater|desktop-license-admin)(?:\/|\.html$|$)|^\/(?:tools|apps)\/[^/]+(?:\/|$)|^\/pages\/(?:uivf12|sla|report|expedite|ai-report|monthly|monthly-designer|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|project-evolution|python-updater|desktop-license-admin)\.html$/;
+    const toolPath = /^\/(?:uivf12|sla|report|expedite|monthly|ai-bi|monthly-legacy|ai-report|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|cinama|project-evolution|python-updater|desktop-license-admin)(?:\/|\.html$|$)|^\/(?:tools|apps)\/[^/]+(?:\/|$)|^\/pages\/(?:uivf12|sla|report|expedite|ai-report|ai-bi|monthly|monthly-designer|duty-roster|bigscreen|topic-analysis|frt|praudit|storage|db-explorer|netcare-explorer|requirements|custom-tool|cinema|project-evolution|python-updater|desktop-license-admin)\.html$/;
     const originals = new WeakMap();
     function resolveTool(href) {
         if (!href || String(href).startsWith('#')) return null;
@@ -66,6 +66,9 @@
                 if (url.origin !== location.origin) return null;
                 strippedPath = strip(url.pathname);
             }
+            // 基座 Web 版：底座 Nginx 只把 /api/* 转给 Node，/custom-tools/<slug>/ 和 /tools/<slug> 都到不了服务端，
+            // 所以自定义工具统一经 dhMapStaticRoute 落到静态的 custom-tool.html?slug=<slug>（内嵌和独立窗口都一样）。
+            // 不要照搬主线版的「独立窗口直达 /custom-tools/<slug>/index.html」，那条地址在底座上会回落到首页。
             const raw = strippedPath.match(/^\/custom-tools\/([^/]+)\/?(?:index\.html)?$/);
             if (raw) strippedPath = '/tools/' + raw[1];
             if (!toolPath.test(strippedPath)) return null;
@@ -116,7 +119,7 @@
         const href = originals.get(link) || link.getAttribute('href'), url = resolveTool(href);
         if (!url || url.searchParams.get('standalone') === '1') return;
         event.preventDefault(); event.stopPropagation();
-        window.HomeV2?.closePop?.();
+        window.HomeShell?.closePop?.();
         const path = url.pathname + url.search + url.hash;
         if (document.documentElement.classList.contains('is-clean-tool')) { location.assign(toolUrl(path)); return; }
         if (!window.HomeToolFrame?.open?.(path)) location.assign(shellUrl(path));
@@ -146,7 +149,7 @@
             location.replace(shellUrl(location.href));
         }
         const style = document.createElement('style');
-        style.textContent = 'html.is-embedded-tool{--navbar-h:0px}html.is-embedded-tool #app-navbar,html.is-embedded-tool #navbar-container{display:none!important}html.is-clean-tool :is(.ai-fab,.ai-panel,.ai-proactive-alert,.ops-inbox-banner,.ops-home-inbox,.custom-tool-head){display:none!important}html.is-clean-tool .custom-tool-shell{grid-template-rows:1fr}';
+        style.textContent = 'html.is-embedded-tool{--navbar-h:0px}html.is-clean-tool :is(.ai-fab,.ai-panel,.ai-proactive-alert,.ops-inbox-banner,.ops-home-inbox,.custom-tool-head){display:none!important}html.is-clean-tool .custom-tool-shell{grid-template-rows:1fr}';
         document.head.append(style);
     }
     scan(document);

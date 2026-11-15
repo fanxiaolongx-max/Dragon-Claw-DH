@@ -1,10 +1,10 @@
-// 首页新版界面（html[data-ui="v2"]）首次进入产品新手引导：
+// 首页新版界面（html.platform-home）首次进入产品新手引导：
 // 按用户维度记录完成状态；自动展开对应浮层/模式讲解完整工作区，支持上一步/下一步/键盘/跳过，并在结束或跳过时精准恢复进入前状态。
 (function () {
     'use strict';
 
     const root = document.documentElement;
-    if (root.getAttribute('data-ui') !== 'v2') return;
+    if (!root.classList.contains('platform-home')) return;
 
     const STORAGE_PREFIX = 'dh_home_tour_v1:';
     const ANIM_MS = 380;
@@ -182,7 +182,7 @@
 
     function canAutoStart() {
         if (navigator.webdriver) return false;
-        if (root.getAttribute('data-ui') !== 'v2') return false;
+        if (!root.classList.contains('platform-home')) return false;
         const params = new URLSearchParams(location.search);
         if (params.has('app') || params.has('tour') && params.get('tour') === '0') return false;
         if (window.HomeToolFrame?.isOpen?.()) return false;
@@ -240,7 +240,7 @@
     }
 
     function setSidebar(collapsed) {
-        window.HomeV2?.setSideCollapsed?.(Boolean(collapsed));
+        window.HomeShell?.setSideCollapsed?.(Boolean(collapsed));
     }
 
     function setMode(mode) {
@@ -248,7 +248,7 @@
     }
 
     function closeAllTransientUi() {
-        window.HomeV2?.closePop?.();
+        window.HomeShell?.closePop?.();
         const search = document.getElementById('v2Search');
         if (search && getComputedStyle(search).display !== 'none') {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -391,7 +391,7 @@
         const main = document.querySelector('.home-main');
         return {
             mode: window.HomeMode?.get?.() === 'tools' ? 'tools' : 'chat',
-            sideCollapsed: Boolean(window.HomeV2?.isSideCollapsed?.()),
+            sideCollapsed: Boolean(window.HomeShell?.isSideCollapsed?.()),
             libraryOpen: document.body.classList.contains('v2-library-open'),
             scrollTop: main ? main.scrollTop : 0,
             suspendedHub: false,
@@ -403,7 +403,7 @@
         if (!snap) return;
         closeAllTransientUi();
         root.classList.remove('v2-tour-suspending');
-        window.HomeV2?.setSideCollapsed?.(snap.sideCollapsed);
+        window.HomeShell?.setSideCollapsed?.(snap.sideCollapsed);
         window.HomeMode?.set?.(snap.mode);
         if (snap.libraryOpen) document.body.classList.add('v2-library-open');
         const main = document.querySelector('.home-main');
