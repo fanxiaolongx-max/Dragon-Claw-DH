@@ -15,7 +15,7 @@ import { toolByName, schemaDigest, imageMime, MAX_IMAGE_BYTES } from './tools.js
 import { enabledTools, recordToolCalls } from '../services/tool-catalog-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
 
-const MAX_ROUNDS = 10;
+const MAX_ROUNDS = 16;
 const MAX_TOOL_RESULT = 30_000;
 const MAX_HISTORY_MSG = 8_000;
 
@@ -186,7 +186,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         usage.inputTokens += res.usage.inputTokens;
         usage.outputTokens += res.usage.outputTokens;
         if (!res.toolsSupported) toolsOn = false;
-        finalText += roundText;
+        finalText += res.text;
 
         if (!res.toolCalls.length) {
             // 回答被单次输出上限截断：接着写，最多续两次
@@ -200,7 +200,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         }
 
         // 工具调用之间的正文之间留一个空行，避免两段话粘在一起
-        if (roundText && !/\n\s*$/.test(roundText)) { finalText += '\n\n'; emit({ type: 'delta', delta: '\n\n' }); }
+        if (res.text && !/\n\s*$/.test(res.text)) { finalText += '\n\n'; emit({ type: 'delta', delta: '\n\n' }); }
         messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
 
         const results = await Promise.all(res.toolCalls.map(async (call) => {
@@ -254,6 +254,38 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             const lead = finalText.trim() ? '' : asked.question;
             if (lead) { finalText += lead; emit({ type: 'delta', delta: lead }); }
             ctx.emit({ type: 'question', question: asked.question, options: asked.options });
+            break;
+        }
+
+        if (rounds >= MAX_ROUNDS && !signal?.aborted) {
+            // 达到工具轮数上限后，若刚执行完工具，必须给模型一次最终总结机会输出完整的 Markdown 答复
+            const summarySystem = `${system}\n\n【重要指令】：所有工具已执行完毕。请仔细阅读上述所有工具的返回结果，直接向用户输出完整、专业、详实的最终 Markdown 分析与总结报表，切勿再调用任何工具或输出工具调用标签。`;
+            let summaryRoundText = '';
+            const summaryCall = (s) => streamModel({
+                settings: s,
+                system: summarySystem,
+                messages,
+                tools: [],
+                signal,
+                onDelta: (delta) => { summaryRoundText += delta; emit({ type: 'delta', delta }); },
+                onThinking: (delta) => emit({ type: 'thinking', delta }),
+            });
+            try {
+                const summaryOut = await withFailover({
+                    candidates: [active, ...candidates.filter((c) => c.id !== active.id)],
+                    run: summaryCall,
+                    delivered: () => Boolean(summaryRoundText),
+                });
+                const summaryRes = summaryOut.res;
+                usage.inputTokens += summaryRes.usage.inputTokens;
+                usage.outputTokens += summaryRes.usage.outputTokens;
+                if (summaryRes.text) {
+                    finalText += (finalText && !/\n\s*$/.test(finalText) ? '\n\n' : '') + summaryRes.text;
+                    messages.push({ role: 'assistant', content: summaryRes.text });
+                }
+            } catch (err) {
+                pushLog({ level: 'WARN', category: 'AI', userId: identity.username, message: `最终总结生成异常: ${err.message}` });
+            }
             break;
         }
     }

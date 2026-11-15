@@ -21,6 +21,7 @@ test('streamModel: parses fallback GLM XML tool_calls when model emits raw text'
     const port = server.address().port;
 
     try {
+        const deltas = [];
         const result = await streamModel({
             settings: {
                 apiBaseUrl: `http://127.0.0.1:${port}`,
@@ -30,6 +31,7 @@ test('streamModel: parses fallback GLM XML tool_calls when model emits raw text'
             system: 'system prompt',
             messages: [{ role: 'user', content: 'test' }],
             tools: [{ name: 'calculate', description: 'calc', parameters: {} }],
+            onDelta: (d) => deltas.push(d),
         });
 
         assert.equal(result.toolCalls.length, 1);
@@ -38,6 +40,7 @@ test('streamModel: parses fallback GLM XML tool_calls when model emits raw text'
             expressions: ['29+4+2', '1433+87+16'],
         });
         assert.equal(result.text, ''); // Cleaned raw XML from user-visible text
+        assert.equal(deltas.join('').includes('<tool_call>'), false, 'Deltas should not leak tool_call XML to client');
     } finally {
         await new Promise((resolve) => server.close(resolve));
     }

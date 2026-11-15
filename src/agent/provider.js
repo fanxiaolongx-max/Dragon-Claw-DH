@@ -118,13 +118,45 @@ async function post(url, headers, body, signal) {
  * 发起一轮模型调用。返回 { text, toolCalls, usage, stopReason, toolsSupported }。
  * onDelta(text) 正文增量；onThinking(text) 思考增量。
  */
+function createToolTagFilter(onDelta) {
+    let pending = '';
+    return {
+        async feed(chunk) {
+            pending += chunk;
+            const tagIdx = pending.search(/<\|?tool_call/i);
+            if (tagIdx === -1) {
+                const partial = pending.match(/<\|?(?:t(?:o(?:o(?:l(?:_(?:c(?:a(?:l(?:l)?)?)?)?)?)?)?)?)?$/i);
+                if (partial) {
+                    const emitText = pending.slice(0, partial.index);
+                    pending = pending.slice(partial.index);
+                    if (emitText) await onDelta(emitText);
+                } else {
+                    const emitText = pending;
+                    pending = '';
+                    if (emitText) await onDelta(emitText);
+                }
+            } else {
+                const emitText = pending.slice(0, tagIdx);
+                pending = pending.slice(tagIdx);
+                if (emitText) await onDelta(emitText);
+            }
+        },
+        async flush(isToolCall) {
+            if (!isToolCall && pending) {
+                await onDelta(pending);
+            }
+            pending = '';
+        }
+    };
+}
+
 function extractFallbackToolCalls(rawText) {
-    const re = /<\|?tool_call\|?>([a-zA-Z0-9_-]+)([\s\S]*?)<\/\|?tool_call\|?>/gi;
+    const re = /<\|?tool_call\|?>\s*([a-zA-Z0-9_-]+)([\s\S]*?)(?:<\/\|?tool_call\|?>|$)/gi;
     const calls = [];
     let cleanedText = rawText;
     let m;
     while ((m = re.exec(rawText)) !== null) {
-        const name = m[1];
+        const name = m[1].trim();
         const body = m[2];
         const args = {};
         const kvRe = /<arg_key>([^<]+)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
@@ -146,12 +178,14 @@ function extractFallbackToolCalls(rawText) {
                 Object.assign(args, parseArgs(trimmed));
             }
         }
-        calls.push({
-            id: `call_${Date.now().toString(36)}_${calls.length}`,
-            name,
-            args,
-        });
-        cleanedText = cleanedText.replace(m[0], '');
+        if (name) {
+            calls.push({
+                id: `call_${Date.now().toString(36)}_${calls.length}`,
+                name,
+                args,
+            });
+            cleanedText = cleanedText.replace(m[0], '');
+        }
     }
     return { calls, text: cleanedText.trim() };
 }
@@ -215,6 +249,7 @@ export async function streamModel({
     if (!resp.ok) throw lastError;
 
     const calls = new Map();
+    const tagFilter = createToolTagFilter(onDelta);
     for await (const ev of sseEvents(resp.body)) {
         if (ev.error) throw new BusinessError(`模型服务返回错误：${ev.error.message || JSON.stringify(ev.error).slice(0, 200)}`, 502);
         if (ev.usage) {
@@ -226,7 +261,10 @@ export async function streamModel({
         const d = choice.delta || {};
         const thinking = d.reasoning_content || d.reasoning;
         if (typeof thinking === 'string' && thinking) await onThinking(thinking);
-        if (typeof d.content === 'string' && d.content) { text += d.content; await onDelta(d.content); }
+        if (typeof d.content === 'string' && d.content) {
+            text += d.content;
+            await tagFilter.feed(d.content);
+        }
         for (const tc of d.tool_calls || []) {
             const idx = Number(tc.index ?? calls.size);
             if (!calls.has(idx)) calls.set(idx, { id: '', name: '', raw: '' });
@@ -244,13 +282,16 @@ export async function streamModel({
     })).filter((c) => c.name);
 
     // 容错兜底：GLM 等国产大模型长文本多轮后可能退化为直接在文本中吐出 <tool_call> XML
-    if (!toolCalls.length && (text.includes('<tool_call>') || text.includes('<|tool_call|>'))) {
+    let hasFallback = false;
+    if (!toolCalls.length && (text.includes('<tool_call>') || text.includes('<|tool_call|>') || text.includes('<tool_call'))) {
         const fallback = extractFallbackToolCalls(text);
         if (fallback.calls.length) {
             toolCalls = fallback.calls;
             text = fallback.text;
+            hasFallback = true;
         }
     }
+    await tagFilter.flush(hasFallback);
 
     return { text, toolCalls, usage, stopReason, toolsSupported: used.tools };
 }
