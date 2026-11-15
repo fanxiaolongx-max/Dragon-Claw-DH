@@ -219,11 +219,18 @@
         return `<div class="bi-chat"><div class="bi-side-section"><h3>${t('看板对话','Board conversation')}<button type="button" class="bi-btn" data-bi-clear title="${esc(t('清空对话记录（看板不变）','Clear the conversation (the board stays)'))}">${t('清空','Clear')}</button></h3></div>
             <div class="bi-log">${empty}${log}${state.planning?`<div class="bi-msg is-ai">${t('AI 正在设计看板','Designing the board')}<span class="bi-typing" aria-hidden="true"><i></i><i></i><i></i></span></div>`:''}</div>
             ${focus?`<div class="bi-focus">${t('正在说：','Talking about: ')}${esc(focus.title||t('选中的格子','the selected cell'))}<button type="button" data-unfocus aria-label="${esc(t('改为说整个看板','Talk about the whole board'))}">✕</button></div>`:''}
-            <form class="bi-composer" data-composer><textarea rows="2" maxlength="4000" placeholder="${esc(focus?t('说说这个格子要怎么改…','How should this cell change…'):t('说说想做什么看板，或要怎么改…','Describe the board, or what to change…'))}" ${state.planning?'disabled':''}></textarea><button type="submit" ${state.planning?'disabled':''}>${t('发送','Send')}</button></form>
-            <div class="bi-hint">${t('<kbd>Enter</kbd> 发送 · 选中格子后 <kbd>←↑→↓</kbd> 微调位置（<kbd>Shift</kbd> 大步）· <kbd>⌘/Ctrl+Z</kbd> 撤销 · <kbd>⌘/Ctrl+S</kbd> 保存','<kbd>Enter</kbd> send · arrows nudge the selected cell · <kbd>⌘/Ctrl+Z</kbd> undo')}</div></div>`;
+            <form class="bi-chat-form" data-composer><div class="bi-composer"><textarea rows="1" maxlength="4000" aria-label="${esc(t('消息','Message'))}" placeholder="${esc(focus?t('说说这个格子要怎么改…','How should this cell change…'):t('说说想做什么看板，或要怎么改…','Describe the board, or what to change…'))}" ${state.planning?'disabled':''}></textarea><div class="bi-composer-bar"><small>${t('Enter 发送 · Shift+Enter 换行','Enter to send · Shift+Enter for a new line')}</small><button type="submit" class="bi-send" disabled aria-label="${esc(t('发送','Send'))}" title="${esc(t('发送','Send'))}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div></form>
+            <div class="bi-hint">${t('选中格子后 <kbd>←↑→↓</kbd> 微调 · <kbd>⌘/Ctrl+Z</kbd> 撤销 · <kbd>⌘/Ctrl+S</kbd> 保存','Arrows nudge cell · <kbd>⌘/Ctrl+Z</kbd> undo · <kbd>⌘/Ctrl+S</kbd> save')}</div></div>`;
     }
     // Only messages and panels that are new animate in; redraws of what is already shown stay still.
     let shownMessages=Infinity,shownPanel='';
+    function fitComposer(input){
+        if(!input)return;
+        input.style.height='auto';
+        input.style.height=Math.min(input.scrollHeight,200)+'px';
+        const button=side.querySelector('.bi-send');
+        if(button)button.disabled=state.planning||!input.value.trim()||input.disabled;
+    }
     function paintSide(){
         if(!state.board){side.innerHTML='';return;}
         const keep=side.querySelector('.bi-composer textarea')?.value||'',log=side.querySelector('.bi-log'),bottom=log?log.scrollHeight-log.scrollTop-log.clientHeight<40:true;
@@ -231,7 +238,7 @@
         side.innerHTML=(entry?itemPanel(entry):'')+chatHtml();
         shownMessages=state.board.chat.length;
         const panel=side.querySelector('.bi-item-panel');if(panel&&entry&&shownPanel!==entry.id)panel.classList.add('is-new');shownPanel=entry?.id||'';
-        const input=side.querySelector('.bi-composer textarea');if(input&&keep)input.value=keep;
+        const input=side.querySelector('.bi-composer textarea');if(input){if(keep)input.value=keep;fitComposer(input);}
         const nextLog=side.querySelector('.bi-log');if(nextLog&&bottom)nextLog.scrollTop=nextLog.scrollHeight;
     }
     side.addEventListener('change',event=>{
@@ -248,6 +255,7 @@
         if(event.target.closest('[data-unfocus]')){state.focus=null;return paintSide();}
         if(event.target.closest('[data-bi-clear]')){checkpoint();state.board.chat=[];return paintSide();}
         if(event.target.closest('[data-pp-extract]')){const entry=state.selected&&item(state.selected);if(entry?.recipe)extractItem(entry);return;}
+        if(event.target.closest('.bi-composer')&&!event.target.closest('button')){side.querySelector('.bi-composer textarea')?.focus();return;}
         const action=event.target.closest('[data-item-action]')?.dataset.itemAction,entry=state.selected&&item(state.selected);if(!action||!entry)return;
         if(action==='build'){const prompt=side.querySelector('[data-item-prompt]')?.value.trim();if(prompt&&prompt!==entry.prompt){checkpoint();entry.prompt=prompt;}if(entry.prompt)build(entry);return;}
         checkpoint();
@@ -256,9 +264,14 @@
         if(action==='delete'){state.board.items=state.board.items.filter(other=>other.id!==entry.id);state.selected=null;state.focus=null;return paint();}
     });
     // Build is usable as soon as there is something to build from, before the prompt field loses focus.
-    side.addEventListener('input',event=>{if(!event.target.matches('[data-item-prompt]'))return;const button=side.querySelector('[data-item-action="build"]'),entry=state.selected&&item(state.selected);if(button&&entry)button.disabled=state.busy.has(entry.id)||!event.target.value.trim();});
-    side.addEventListener('submit',event=>{if(!event.target.matches('[data-composer]'))return;event.preventDefault();const input=event.target.querySelector('textarea'),text=input.value.trim();if(text){input.value='';send(text);}});
-    side.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.target.matches('.bi-composer textarea')){event.preventDefault();event.target.form.requestSubmit();}});
+    side.addEventListener('input',event=>{
+        if(event.target.matches('.bi-composer textarea'))fitComposer(event.target);
+        if(!event.target.matches('[data-item-prompt]'))return;
+        const button=side.querySelector('[data-item-action="build"]'),entry=state.selected&&item(state.selected);
+        if(button&&entry)button.disabled=state.busy.has(entry.id)||!event.target.value.trim();
+    });
+    side.addEventListener('submit',event=>{if(!event.target.matches('[data-composer]'))return;event.preventDefault();const input=event.target.querySelector('textarea'),text=input.value.trim();if(text){input.value='';fitComposer(input);send(text);}});
+    side.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229&&event.target.matches('.bi-composer textarea')){event.preventDefault();event.target.form.requestSubmit();}});
 
     // ── Conversation → plan → only new or changed cells are built ─────────────────────────────────────────────
     const brief=()=>({name:state.board.name,canvas:state.board.canvas,items:state.board.items.map(entry=>({id:entry.id,title:entry.title,x:entry.x,y:entry.y,w:entry.w,h:entry.h,prompt:entry.prompt}))});

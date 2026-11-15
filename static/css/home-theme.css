@@ -640,6 +640,12 @@ html.platform-home #dcSpotlight { display: none !important; }
 
 html.platform-home .v2-flyout:has(#homeSidebarShortcuts:not([hidden])) { width: min(330px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; }
 
+/* 更多 → 快捷工具的分类二级菜单 */
+html.platform-home .v2-cat-submenu { width: min(260px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+.v2-cat-submenu .v2-cat-back { display: none; }
+.v2-cat-submenu.is-stacked .v2-cat-back { display: block; width: 100%; padding: 8px; margin-bottom: 5px; border: 0; border-bottom: 1px solid var(--v2-line); background: transparent; color: var(--v2-ink2); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.v2-flyout [data-v2-cat][aria-expanded="true"] { background: var(--v2-hover); }
+
 html.platform-home .v2-links-submenu { width: min(276px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; }
 
 html.platform-home .v2-links-submenu .friend-links { display: block; width: 100%; min-width: 0; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }

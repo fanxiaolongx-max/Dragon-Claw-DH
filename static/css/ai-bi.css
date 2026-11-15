@@ -63,10 +63,18 @@ body.ai-bi-page{margin:0;background:#eef1f5;color:#1d2b3a;height:100vh;display:f
 .bi-examples{display:flex;flex-direction:column;gap:6px}
 .bi-focus{display:flex;align-items:center;gap:6px;font-size:12px;color:#2f6fae;padding:0 14px 6px}
 .bi-focus button{border:0;background:transparent;color:#8a99a8;cursor:pointer;font-size:14px}
-.bi-composer{padding:10px 12px 12px;border-top:1px solid #edf1f5;display:flex;gap:8px;align-items:flex-end}
-.bi-composer textarea{flex:1;font:inherit;font-size:13px;padding:8px 10px;border:1px solid #d3dce6;border-radius:8px;resize:none;min-height:40px;max-height:160px}
-.bi-composer button{font:inherit;font-size:13px;padding:8px 14px;border-radius:8px;border:0;background:#2f6fae;color:#fff;cursor:pointer}
-.bi-composer button:disabled,.bi-composer textarea:disabled{opacity:.55;cursor:default}
+.bi-chat-form{padding:10px 12px 6px;border-top:1px solid #edf1f5;background:linear-gradient(#fff0,#f8fbfe)}
+.bi-composer{display:flex;flex-direction:column;gap:4px;padding:10px 10px 8px 14px;border:1px solid #cfdcea;border-radius:16px;background:#fff;box-shadow:0 2px 10px #102b470f;cursor:text;transition:border-color .15s,box-shadow .15s}
+.bi-composer:focus-within{border-color:#8fb7dc;box-shadow:0 0 0 3px rgba(47,111,174,0.15),0 2px 10px #102b470f}
+.bi-composer textarea{display:block;width:100%;min-height:24px;max-height:200px;box-sizing:border-box;padding:2px 0;border:0;outline:none;resize:none;background:transparent;font:inherit;font-size:13px;line-height:1.6;color:#1d2b3a;overflow-y:auto}
+.bi-composer textarea::placeholder{color:#9aabbb}
+.bi-composer textarea:disabled{opacity:.55;cursor:default}
+.bi-composer-bar{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bi-composer-bar small{font-size:11px;color:#a5b4c2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bi-send{flex:none;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:50%;background:var(--bi-accent,#2f6fae);color:#fff;cursor:pointer;transition:background .15s,transform .15s,opacity .15s,box-shadow .15s}
+.bi-send:hover:not(:disabled){background:#1c5994;transform:translateY(-1px);box-shadow:0 2px 6px rgba(47,111,174,0.3)}
+.bi-send:active:not(:disabled){transform:scale(.95);box-shadow:none}
+.bi-send:disabled{background:#d5dfe9;color:#fff;cursor:default;opacity:.65;transform:none;box-shadow:none}
 .bi-view .air-view-slot,.bi-view .air-view-common,.bi-view .air-view-extract{margin:0 0 8px}
 .bi-view .air-view-grid{grid-template-columns:1fr 1fr}
 .bi-view-slot{border:1px solid #e3e9f0;border-radius:8px;padding:6px 8px 8px}
@@ -130,12 +138,8 @@ body.bi-presenting .bi-item.is-selected{outline:none}
 .bi-typing i:nth-child(2){animation-delay:.15s}.bi-typing i:nth-child(3){animation-delay:.3s}
 .bi-choices button,.bi-examples button{transition:background .15s,transform .15s var(--bi-ease)}
 .bi-choices button:hover,.bi-examples button:hover{background:#f1f6fb;transform:translateX(2px)}
-.bi-composer textarea{transition:border-color .15s,box-shadow .15s}
-.bi-composer button{transition:filter .15s,transform .1s}
-.bi-composer button:hover:not(:disabled){filter:brightness(1.08)}
-.bi-composer button:active:not(:disabled){transform:scale(.97)}
-.bi-hint{font-size:11px;color:#9aa8b6;padding:0 14px 8px}
-.bi-hint kbd{font:inherit;font-size:10px;padding:0 4px;border:1px solid #d3dce6;border-radius:4px;background:#f6f9fc}
+.bi-hint{font-size:11px;color:#9aa8b6;padding:2px 14px 10px;line-height:1.4}
+.bi-hint kbd{font:inherit;font-size:10px;padding:1px 4px;border:1px solid #d3dce6;border-radius:4px;background:#f6f9fc}
 @keyframes bi-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes bi-fade{from{opacity:0}to{opacity:1}}
 @keyframes bi-pop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
