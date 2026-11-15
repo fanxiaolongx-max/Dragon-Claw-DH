@@ -40,6 +40,8 @@ const SYNC_PATHS = [
     'src',
     'static',
     'db',
+    'scripts',
+    'tests',
     'run.js',
     'app.json',
     'package.json',
