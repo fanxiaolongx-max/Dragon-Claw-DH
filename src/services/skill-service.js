@@ -81,7 +81,7 @@ const rowToSkill = (row) => ({
     builtIn: false,
     customized: false,
     hidden: false,
-    source: row.source || 'chat',
+    source: row.source === 'builtin' ? 'chat' : (row.source || 'chat'),
     fileCount: 0,
     createdBy: row.created_by || '',
     createdAt: row.created_at,
