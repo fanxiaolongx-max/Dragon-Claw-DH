@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { optionalDep } from '../core/optional.js';
 import {
     kvGet,
@@ -11,6 +12,11 @@ import {
     parseJsonCol,
 } from '../dao/scoped.js';
 import { callAiCompletion } from './ai-service.js';
+
+// 月报格子的内置模板库（前端同一份文件）：编译时让模型挑模板、写 compute、填参数，不再从零写展示代码
+const Templates = createRequire(import.meta.url)('../../static/js/ai-report/templates.js');
+const BiBoard = createRequire(import.meta.url)('../../static/js/ai-bi/model.js');
+const Query = createRequire(import.meta.url)('../../static/js/ai-report/query.js');
 import { getTargets } from './sla-service.js';
 import {
     getSourceCatalog,
@@ -1134,7 +1140,15 @@ export async function aiReportCellCompile({
     };
 
     const sys = [
-        '你是月报配方编译器。只输出 JSON：{"recipe":{"summary":{"zh":"","en":""},"sources":[],"compute":"function compute(input){...}","render":"function render(result,kit){...}","narrative":null}}。',
+        '你是月报配方编译器。只输出 JSON：{"recipe":{"summary":{"zh":"","en":""},"sources":[],"compute":"function compute(input){...}","view":{...},"narrative":null}}。',
+        '展示优先用平台内置模板（view），取数优先写 query（平台执行并核对字段），再选模板、填参数；不要自己写展示代码。recipe 可写 {"summary","sources","query":{...},"view":{...},"narrative":null}，query 表达不了时才写 compute。',
+        Query.GUIDE,
+        '- 一个模板：view = {"template":"模板 id","params":{只写和默认不同的参数}}，compute 直接返回该模板的数据形状。',
+        '- 多个模板（格子里要放几张图 / 图加表 / 指标卡加趋势）：view = {"title":"可选总标题","rows":[[{"id":"英文短名","template":"模板 id","data":"compute 结果里的字段名","width":占这一行的百分比,"params":{}}],[...]]}，compute 返回 {字段名: 对应形状, ...}。最多 4 行、每行最多 4 个；可参考下面的组合布局。',
+        '- 用户提到的标题、单位、目标值、排序、高度、是否显示数值等，都写进 params；提示词里的【展示参数】行是用户手动调好的设置，必须原样保留（同样的模板、数据字段名和参数）。',
+        '- 所有模板都放不下用户要的效果时，才不写 view，改写 "render":"function render(result,kit){...}"（下面的约束适用）。',
+        Templates.FREE_GUIDE,
+        Templates.catalog(),
         '数据源规范：',
         '- 指标源：{"id":"m1","kind":"metrics","label":"本月指标","names":[...可选，留空数组则返回全部指标],"monthOffset":0}。input.m1 包含 {month, metrics:[{key,label,altLabel,metricName,category,value,numValue,target,targetValue,targetRule,isFailing,gap,weight,earnedScore}], values:{[label]:number}, targets:{[label]:number}, rules}。',
         '- 数据集源：{"id":"d1","kind":"dataset","dataset":"report_metric_data|report_category_scores|report_snapshots","label":"...","monthOffset":0}。report_metric_data.rows 每行含 {cat_name,metric_label,label,target_val,raw_val,num_val,is_failing,gap,weight,earned_score}；report_category_scores.rows 含 {cat_name,base_score,manual_score,final_score}。',
@@ -1149,7 +1163,7 @@ export async function aiReportCellCompile({
     ].join('\n');
     const extraContext = [
         previousPrompt ? `上次提示词:\n${previousPrompt}` : '',
-        recipe ? `现有配方参考:\n${JSON.stringify({ sources: recipe.sources, compute: recipe.compute }).slice(0, 1500)}` : '',
+        recipe ? `现有配方参考:\n${JSON.stringify({ sources: recipe.sources, compute: recipe.compute, ...(Templates.viewFromRender(recipe.render) ? { view: Templates.viewFromRender(recipe.render) } : {}), ...(Templates.freeParams(recipe.render) ? { params: Templates.freeParams(recipe.render).defs } : {}), ...(Query.queryFromCompute(recipe.compute) ? { query: Query.queryFromCompute(recipe.compute) } : {}) }).slice(0, 3500)}` : '',
         error ? `上次运行报错（必须修复该错误）:\n${error}` : '',
         style ? `整体视觉风格:\n${String(style).slice(0, 600)}` : '',
         outline ? `报告大纲参考:\n${JSON.stringify(outline).slice(0, 500)}` : '',
@@ -1158,16 +1172,105 @@ export async function aiReportCellCompile({
     const usr = `${ctx.text}\n\n最终提示词:\n${prompt}${extraContext ? `\n\n${extraContext}` : ''}`;
     const aiRes = await runStructuredAiTurn(sys, usr, { recipe: fallbackRecipe });
     let compiled;
+    // 模型给了 view：展示代码由模板库生成（只是把 view 交给模板库），view 无效时再看它有没有自己写 render
+    const raw = aiRes.recipe && typeof aiRes.recipe === 'object' ? { ...aiRes.recipe } : null;
+    const view = raw?.view ? Templates.normalizeView(raw.view) : null;
+    if (raw && view) raw.render = Templates.renderSource(view);
+    // 模型给了 query：取数代码由查询库执行（只是把 query 交给查询库），字段和取值在运行时核对
+    if (raw && raw.query && typeof raw.query === 'object') raw.compute = Query.computeSource(raw.query);
     try {
-        compiled = normalizeRecipe(aiRes.recipe || fallbackRecipe);
+        compiled = normalizeRecipe(raw || fallbackRecipe);
     } catch {
         compiled = normalizeRecipe(fallbackRecipe);
     }
+    if (Templates.isTemplateRender(compiled.render)) return { recipe: compiled, _rounds: aiRes._rounds };
     if (interactive && !/kit\.interactive\s*\(/.test(compiled.render || '')) {
         compiled = normalizeRecipe(fallbackRecipe);
     }
     if (interactive) compiled.narrative = null;
     return { recipe: compiled, _rounds: aiRes._rounds };
+}
+
+// 画面标记 → 只改模板格子的展示设置（模板、参数、分区宽度），不改数据；需要改数据或计算时交回格子对话
+const ADJUST_PROMPT = `你调整月报格子的展示设置 view（JSON），不改数据和计算。用户在格子画面上某处做了标记并写了修改意见。
+- 只能改：各分区的 template（只能换成数据形状相同的模板）、params、width、view.title；分区的 id 和 data 不变，不增删分区。
+- 参数只能用下面列出的键和取值；颜色、字体等列表里没有的设置做不到时，回复 data。
+- 意见需要不同的数据、筛选、计算、新增内容或新增分区时，回复 data，由格子对话处理。
+只输出 JSON，二选一：
+{"type":"view","reply":"一句话说明改了什么","view":{完整的新 view}}
+{"type":"data","reply":"为什么需要交给格子对话"}`;
+
+// 自己写代码的格子：参数块（kit.params）里的值按标记调整
+
+
+function markWhere(target = {}) {
+    return [target.slot && `分区 ${target.slot}`, target.title && `标题“${target.title}”`, target.kind === 'chart' ? '图表上' : target.text && `文字“${String(target.text).slice(0, 40)}”附近`].filter(Boolean).join('，');
+}
+
+export async function aiReportCellAdjust({ view, params, prompt = '', note = '', target = {} } = {}) {
+    if (!String(note).trim()) fail('请写下要怎么改');
+    if (!view && params && typeof params === 'object') {
+        const defs = Templates.freeParams(`kit.params(${JSON.stringify(params)})`)?.defs;
+        if (!defs) fail('这个格子没有可调参数');
+        const usr = `当前参数：\n${JSON.stringify(defs)}\n\n格子提示词：\n${String(prompt).slice(0, 1500)}\n\n标记位置：${markWhere(target) || '格子内'}\n修改意见：${String(note).slice(0, 600)}`;
+        const res = await runStructuredAiTurn(Templates.ADJUST_PARAMS_PROMPT, usr, { type: 'data', reply: '' });
+        const values = res.type === 'params' && res.values && typeof res.values === 'object' ? Object.fromEntries(Object.entries(res.values).filter(([key]) => key in defs)) : null;
+        if (!values || !Object.keys(values).length) return { type: 'data', reply: String(res.reply || '').slice(0, 300), _rounds: res._rounds };
+        return { type: 'params', values, reply: String(res.reply || '').slice(0, 300), _rounds: res._rounds };
+    }
+    const current = Templates.normalizeView(view);
+    if (!current) fail('这个格子不是模板格子');
+    const usr = `当前 view：\n${JSON.stringify(current)}\n\n可用模板与参数：\n${Templates.paramGuide(current)}\n\n格子提示词：\n${String(prompt).slice(0, 1500)}\n\n标记位置：${markWhere(target) || '格子内'}\n修改意见：${String(note).slice(0, 600)}`;
+    const res = await runStructuredAiTurn(ADJUST_PROMPT, usr, { type: 'data', reply: '' });
+    if (res.type !== 'view') return { type: 'data', reply: String(res.reply || '').slice(0, 300), _rounds: res._rounds };
+    const next = Templates.normalizeView(res.view);
+    // 分区和数据字段必须原样：模型改了它们就当作需要改数据，交回对话
+    const same = next && JSON.stringify(Templates.slots(next).map((s) => [s.id, s.data || ''])) === JSON.stringify(Templates.slots(current).map((s) => [s.id, s.data || '']))
+        && Templates.slots(next).every((s, i) => Templates.get(s.template).kind === Templates.get(Templates.slots(current)[i].template).kind);
+    if (!same) return { type: 'data', reply: '需要调整数据或分区，交给格子对话处理', _rounds: res._rounds };
+    return { type: 'view', view: next, reply: String(res.reply || '').slice(0, 300), _rounds: res._rounds };
+}
+
+// 旧格子或没写参数块的格子：让 AI 只把展示值提到 kit.params 参数块里，其余代码不变
+
+
+export async function aiReportCellParams({ render = '', prompt = '' } = {}) {
+    const code = String(render || '');
+    if (!code.trim() || code.length > 30000) fail('这个格子没有可以整理的展示代码');
+    if (Templates.isTemplateRender(code)) fail('模板格子已经有展示设置');
+    if (Templates.freeParams(code)) return { render: code };
+    const res = await runStructuredAiTurn(Templates.EXTRACT_PARAMS_PROMPT, `格子提示词：\n${String(prompt).slice(0, 1500)}\n\n当前展示代码：\n${code}`, { render: '' });
+    const next = typeof res.render === 'string' ? res.render.trim() : '';
+    if (!next || !Templates.freeParams(next) || !/function\s+render\s*\(/.test(next)) fail('没能整理出可调设置，可以在格子对话里直接说要改什么');
+    // 只做语法检查（不执行）；精简包没有 acorn 时跳过，运行时沙箱仍会报错并回退
+    const acorn = await optionalDep('acorn', '代码语法检查').catch(() => null);
+    if (acorn) { try { acorn.parse(next, { ecmaVersion: 'latest', sourceType: 'script' }); } catch (error) { fail(`整理后的代码有语法错误：${error.message}`); } }
+    return { render: next.slice(0, 30000), _rounds: res._rounds };
+}
+
+// AI BI：对话 → 画布大小与格子布局（每个格子一段提示词，之后逐个编译）
+export async function aiBiPlan({ month, message = '', chat = [], board = {}, focus = '' } = {}) {
+    if (!validMonth(month)) fail('A valid report month is required');
+    if (!String(message).trim()) fail('请说说想做什么样的看板');
+    const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
+        listAiReportSources(month), listAiReportMetrics(month), listAiReportDatasets(month), loadReportSnapshotBundle(month),
+    ]);
+    // 这个月一点数据都没有时直接说明，不画一堆只会显示 0 或报错的格子
+    const datasetRows = (datasetsRes?.datasets || []).reduce((sum, d) => sum + (Number(d.rowCount) || 0), 0);
+    if (!(sources || []).length && !(metrics || []).length && !datasetRows) {
+        return { type: 'answer', text: `${month} 还没有任何数据（没有导入表、指标，数据集也是空的），看板里的格子只能显示 0 或“暂无数据”。请先到「数据导入」导入这个月的数据，或者把数据月份换成有数据的月份，再告诉我想做什么看板。` };
+    }
+    const ctx = buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText: message });
+    const history = (Array.isArray(chat) ? chat : []).slice(-12).map((c) => `${c.role === 'user' ? '用户' : 'AI'}：${String(c.text || '').slice(0, 800)}`).join('\n');
+    const usr = [`报告月份：${month}`, `数据概况：\n${ctx.text}`, BiBoard.planCatalog(Templates), `当前看板：${BiBoard.boardBrief(board, focus)}`, history ? `之前的对话：\n${history}` : '', focus ? `用户正在说的格子：${focus}` : '', `用户：${String(message).slice(0, 4000)}`].filter(Boolean).join('\n\n');
+    const started = Date.now();
+    const res = await callAiCompletion({ messages: [{ role: 'system', content: BiBoard.PLAN_PROMPT }, { role: 'user', content: usr }], maxTokens: 6000 });
+    const _rounds = [{ index: 1, model: res.model || 'default', ms: Date.now() - started, inputTokens: res.usage?.prompt_tokens || 0, outputTokens: res.usage?.completion_tokens || 0, at: new Date().toISOString() }];
+    if (!res.ok) fail(`AI 暂时不可用：${res.error || '请检查模型配置'}`, 503);
+    const reply = parseJsonReply(res.text) || {};
+    if (reply.type === 'ask' && reply.question) return { type: 'ask', question: String(reply.question).slice(0, 1000), choices: (reply.choices || []).slice(0, 4).map((c) => String(c).slice(0, 200)), _rounds };
+    if (reply.type === 'plan' && Array.isArray(reply.items)) return { type: 'plan', reply: String(reply.reply || '').slice(0, 1000), ...BiBoard.fromPlan(reply, board), _rounds };
+    return { type: 'answer', text: String(reply.text || res.text || '').slice(0, 4000), _rounds };
 }
 
 export async function aiReportOverallChat({ message, prompt = '' } = {}) {

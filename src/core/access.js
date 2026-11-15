@@ -115,6 +115,7 @@ const USER_WRITES = [
     ['*', /^\/(?:operation-incentive-snapshots|incentive-snapshots)(?:\/[^/]+)?$/], // 已识别用户可维护操作激励快照
     ['*', /^\/requirements(?:\/.*)?$/], // 提需求、改自己的需求；流转与指派在服务内校验管理员
     ['*', /^\/vault(?:\/.*)?$/], // 保险箱只属于本人（服务内按归属校验）
+    ['POST', /^\/ai-bi\/boards$/], // AI BI 看板与 AI 月报一样由已识别用户共同维护；删除仅管理员（路由内校验）
 ];
 // 数据探索、审计日志只给管理员（基座 Web 版的管理员就是超级管理员，与主线版「仅超级管理员」一致）；对话里的查库工具不受影响
 const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/auth\/audit$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];

@@ -32,6 +32,8 @@ import {
     aiReportChapterChat,
     aiReportChapterPrompt,
     aiReportCellRestyle,
+    aiReportCellAdjust, aiReportCellParams,
+    aiBiPlan,
     aiReportCellNarrative,
     aiReportTemplateField,
     aiReportTemplateFieldChat,
@@ -113,6 +115,9 @@ export async function aiReportRoutes(fastify) {
     fastify.post('/cell/gist', async (req) => aiReportCellGist(req.body || {}));
     fastify.post('/cell/compile', async (req) => aiReportCellCompile(req.body || {}));
     fastify.post('/cell/restyle', async (req) => aiReportCellRestyle(req.body || {}));
+    fastify.post('/cell/adjust', async (req) => aiReportCellAdjust(req.body || {}));
+    fastify.post('/cell/params', async (req) => aiReportCellParams(req.body || {}));
+    fastify.post('/bi/plan', async (req) => aiBiPlan(req.body || {}));
     fastify.post('/cell/narrative', async (req) => aiReportCellNarrative(req.body || {}));
 
     fastify.post('/report/chat', async (req) => aiReportOverallChat(req.body || {}));

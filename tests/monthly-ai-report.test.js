@@ -22,6 +22,19 @@ async function startMockOpenAiServer() {
             try { body = JSON.parse(raw); } catch { body = {}; }
             captured.push({ url: req.url, body });
             res.setHeader('Content-Type', 'application/json');
+            if (mode === 'template-compile') {
+                res.end(JSON.stringify({
+                    choices: [{ message: { content: JSON.stringify({ recipe: {
+                        summary: { zh: '整改达标', en: 'Rectify' },
+                        sources: [{ id: 'm1', kind: 'metrics', label: '整改指标', names: [], monthOffset: 0 }],
+                        compute: 'function compute(input){ var m=(input&&input.m1&&input.m1.metrics)||[]; return { chart: m.map(function(x){ return { label: x.label, value: x.numValue, target: x.targetValue }; }), kpis: [{ label: "指标数", value: m.length }] }; }',
+                        view: { rows: [[{ id: 'kpi', template: 'kpi-cards', data: 'kpis' }], [{ id: 'chart', template: 'bar-target', data: 'chart', params: { unit: '%', bogus: 1 } }]] },
+                        narrative: null,
+                    } }) } }],
+                    usage: { prompt_tokens: 100, completion_tokens: 50 },
+                }));
+                return;
+            }
             if (mode === 'non-interactive-compile') {
                 res.end(JSON.stringify({
                     choices: [{
@@ -294,6 +307,20 @@ test('AI Monthly Report discovers cross-month SLA & report_metric_data and compi
         const cmpFbJson = await cmpFbRes.json();
         assert.match(cmpFbJson.recipe.render, /kit\.interactive\s*\(/);
         assert.equal(cmpFbJson.recipe.narrative, null);
+
+        // 模板优先：系统提示词里带模板目录；模型给 view 时，render 由模板库生成，不再被强制改成 kit.interactive
+        assert.match(mockAi.captured.at(-1).body.messages[0].content, /bar-target｜达标对比柱/);
+        mockAi.setMode('template-compile');
+        const tplRes = await fetch(`${appUrl}/api/ai-report/cell/compile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ month: '2026-10', interactive: true, prompt: '整改指标达标情况，上面放指标数' }),
+        });
+        assert.equal(tplRes.status, 200);
+        const tplJson = await tplRes.json();
+        assert.match(tplJson.recipe.render, /air-template-view/);
+        assert.doesNotMatch(tplJson.recipe.render, /bogus/);
+        assert.match(tplJson.recipe.render, /"template":"bar-target","data":"chart","params":\{"unit":"%"\}/);
     } finally {
         child.kill('SIGTERM');
         await new Promise((resolve) => child.once('exit', resolve));

@@ -28,6 +28,7 @@ import { rewardProgramRoutes } from './routes/reward-routes.js';
 import { departmentRewardPenaltyRoutes } from './routes/department-reward-penalty.js';
 import { friendLinksRoutes, platformPromotionsRoutes } from './routes/home-extras.js';
 import { vaultRoutes } from './routes/vault.js';
+import { aiBiRoutes } from './routes/ai-bi.js';
 import { recordAuditOnce, clientIp } from './services/audit-service.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 
@@ -41,6 +42,7 @@ const PHASE1_PAGES = new Map([
     ['/report', 'report.html'],
     ['/expedite', 'expedite.html'],
     ['/monthly', 'monthly.html'],
+    ['/ai-bi', 'ai-bi.html'],
     ['/monthly/legacy', 'monthly-legacy.html'],
     ['/bigscreen', 'bigscreen.html'],
     ['/db-explorer', 'db-explorer.html'],
@@ -340,6 +342,7 @@ export async function createServer() {
     await app.register(friendLinksRoutes, { prefix: '/api/friend-links' });
     await app.register(platformPromotionsRoutes, { prefix: '/api/platform-promotions' });
     await app.register(vaultRoutes, { prefix: '/api/vault' });
+    await app.register(aiBiRoutes, { prefix: '/api/ai-bi' });
     await app.register(platformShellRoutes);
     // 平台标识：页面里固定引用 assets/logo.png，管理员上传过自定义图标时这里返回自定义的
     app.get('/assets/logo.png', async (_req, reply) => sendLogo(reply));
@@ -402,6 +405,7 @@ export async function createServer() {
             'frt.html': 'frt.html',
             'praudit.html': 'praudit.html',
             'requirements.html': 'requirements.html',
+            'ai-bi.html': 'ai-bi.html',
         };
         if (Object.hasOwn(legacyMap, file)) {
             return sendProtectedHtml(req, reply, legacyMap[file]);
