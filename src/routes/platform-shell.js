@@ -625,4 +625,20 @@ export async function platformShellRoutes(fastify) {
     fastify.get('/api/desktop-pet/language', async () => ({ lang: 'zh-CN' }));
     fastify.post('/api/desktop-pet/language', async (req) => ({ success: true, lang: req.body?.language || req.body?.lang || 'zh-CN' }));
     fastify.get('/api/ai/speech', async () => ({ ready: false, available: false, offlineOnly: false, local: { ready: false }, webMode: true }));
+
+    // 基座版终端安全守卫：非超管绝对禁止访问终端接口
+    fastify.all('/api/terminal', async (req, reply) => {
+        const identity = resolveRequestIdentity(req);
+        if (!identity.isSuper && !identity.isAdmin) {
+            return reply.code(403).send({ error: '基座安全规范：非超级管理员禁止访问终端', code: 'TERMINAL_SUPERADMIN_ONLY' });
+        }
+        return { pty: false, shells: [], items: [], platform: 'web' };
+    });
+    fastify.all('/api/terminal/*', async (req, reply) => {
+        const identity = resolveRequestIdentity(req);
+        if (!identity.isSuper && !identity.isAdmin) {
+            return reply.code(403).send({ error: '基座安全规范：非超级管理员禁止访问终端', code: 'TERMINAL_SUPERADMIN_ONLY' });
+        }
+        return reply.code(501).send({ error: '基座 Web 托管环境未加载本地伪终端服务', code: 'TERMINAL_NOT_SUPPORTED' });
+    });
 }

@@ -7,7 +7,15 @@
     'use strict';
     const L = (zh, en) => /^en/.test(window.ToolsI18n?.getLanguage?.() || localStorage.getItem('tools_lang') || '') ? en : zh;
     const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-    const isAdmin = () => localStorage.getItem('tools_role') === 'admin';
+    const isSuperAdmin = () => {
+        try {
+            if (typeof window.isNavSuperAdmin === 'function') return window.isNavSuperAdmin() === true;
+            return localStorage.getItem('tools_role') === 'admin' && localStorage.getItem('tools_super') === '1';
+        } catch {
+            return false;
+        }
+    };
+    const isAdmin = isSuperAdmin;
     const AUTO_KEY = 'dragon_terminal_auto_open';
     const ICONS = {
         plus: '<path d="M10 4v12M4 10h12"/>', caret: '<path d="m6 8 4 4 4-4"/>', close: '<path d="m5 5 10 10M15 5 5 15"/>',
@@ -403,7 +411,7 @@
         renderTabs();
     }
     async function newTerminal(shell, { cwd = window.DragonClawWorkspace?.getWorkspacePayload?.()?.root || '' } = {}) {
-        if (!isAdmin()) return showError(L('只有管理员可以打开终端', 'Only administrators can open a terminal'));
+        if (!isSuperAdmin()) return showError(L('基座版规范：非超级管理员禁止开启终端', 'Only super administrators can open a terminal in digital human web edition'));
         try {
             const count = [...tabs.values()].filter(tab => tab.kind === 'shell').length;
             const shellInfo = info?.shells?.find(item => item.id === shell) || info?.shells?.find(item => item.default);
@@ -458,6 +466,11 @@
         window.dispatchEvent(new Event('dragon-claw:sidebar-layout'));
     }
     async function show({ tab, auto = false } = {}) {
+        if (!isSuperAdmin()) {
+            if (open) close();
+            showError(L('基座版规范：非超级管理员禁止开启终端', 'Only super administrators can open a terminal in digital human web edition'));
+            return;
+        }
         if (!panel) return;
         window.ChatFiles?.closePreview?.();
         window.DragonClawWorkspace?.closePanel?.();
@@ -468,7 +481,7 @@
         // 手动打开且还没有任何可见标签：直接新建默认终端，不显示空的 Agent 标签
         if (!tab) {
             await restored;
-            if (open && ![...tabs.values()].some(visibleTab) && isAdmin()) { await newTerminal(); if (!auto) tabs.get(activeId)?.term?.focus(); return; }
+            if (open && ![...tabs.values()].some(visibleTab) && isSuperAdmin()) { await newTerminal(); if (!auto) tabs.get(activeId)?.term?.focus(); return; }
         }
         select(tab || activeId);
         if (!auto) tabs.get(activeId)?.term?.focus();
@@ -485,8 +498,17 @@
         toggle.type = 'button'; toggle.className = 'dc-ghost-btn'; toggle.id = 'dcTerminalToggle';
         toggle.setAttribute('aria-pressed', 'false');
         toggle.textContent = L('终端', 'Terminal');
-        toggle.hidden = !isAdmin(); // 只有管理员能执行命令和打开终端
+        toggle.hidden = !isSuperAdmin(); // 基座版规范：非超管用户不显示也不允许用户开启终端
         browserToggle.after(toggle);
+
+        function updateToggleVisibility() {
+            const allowed = isSuperAdmin();
+            if (toggle) toggle.hidden = !allowed;
+            if (!allowed && open) close();
+        }
+        window.addEventListener('tools:user-synced', updateToggleVisibility);
+        window.addEventListener('storage', updateToggleVisibility);
+        window.addEventListener('dragon-claw:role-change', updateToggleVisibility);
 
         panel = document.createElement('aside');
         panel.className = 'dc-terminal-panel'; panel.id = 'dcTerminalPanel'; panel.hidden = true;
@@ -564,8 +586,12 @@
         document.addEventListener('pointerdown', event => { if (!menuNode.hidden && !event.target.closest('.dc-term-menu,[data-term-action="menu"]')) menuNode.hidden = true; });
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && !menuNode.hidden) { menuNode.hidden = true; event.preventDefault(); }
-            // Ctrl+` 切换终端面板（与常见编辑器一致）
-            if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); open ? close() : show(); }
+            // Ctrl+` 切换终端面板（仅限超级管理员）
+            if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) {
+                if (!isSuperAdmin()) return;
+                event.preventDefault();
+                open ? close() : show();
+            }
         });
         new ResizeObserver(() => fitTab(tabs.get(activeId))).observe(body);
         window.addEventListener('dragon-claw:command', event => onCommand(event.detail));

@@ -2249,7 +2249,7 @@ async function syncTenantWorkspace(user) {
 function isNavSuperAdmin() {
     if (localStorage.getItem('tools_role') !== 'admin') return false;
     const flag = localStorage.getItem('tools_super');
-    return flag === null ? true : flag === '1'; // 还没从服务端取到标记时不隐藏管理员菜单
+    return flag === '1'; // 严格校验：只有明确为 1 才是超管，null 或 0 均为普通用户/普通管理员
 }
 if (typeof window !== 'undefined') window.isNavSuperAdmin = isNavSuperAdmin;
 
@@ -5570,6 +5570,7 @@ async function syncNavUserSession() {
                 localStorage.setItem('tools_user', data.username);
                 localStorage.setItem('tools_display_name', displayName);
                 if (data.role) localStorage.setItem('tools_role', data.role);
+                localStorage.setItem('tools_super', data.isSuper ? '1' : '0');
                 if (await syncTenantWorkspace(data)) return;
                 const currentSuper = localStorage.getItem('tools_super');
                 // 导航栏按本地角色渲染管理员入口（设置、租户管理）；服务端角色与渲染时不同就整条重绘。
