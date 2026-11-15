@@ -163,6 +163,7 @@ export async function queryBusiness(sql, limit = 100) {
     }
     const r = await baseRequest(endpoints.query, {
         tag: `queryBusiness:${dsName}`,
+        timeoutMs: Math.max(config.httpTimeoutMs, 45_000),
         body: { datasourceName: dsName, sql, limit },
     });
     if (r.code !== 0) throw new DatabaseError(r.message || '业务库查询失败');

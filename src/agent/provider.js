@@ -118,7 +118,46 @@ async function post(url, headers, body, signal) {
  * 发起一轮模型调用。返回 { text, toolCalls, usage, stopReason, toolsSupported }。
  * onDelta(text) 正文增量；onThinking(text) 思考增量。
  */
-export async function streamModel({ settings, system, messages, tools = [], signal, onDelta = () => {}, onThinking = () => {} }) {
+function extractFallbackToolCalls(rawText) {
+    const re = /<\|?tool_call\|?>([a-zA-Z0-9_-]+)([\s\S]*?)<\/\|?tool_call\|?>/gi;
+    const calls = [];
+    let cleanedText = rawText;
+    let m;
+    while ((m = re.exec(rawText)) !== null) {
+        const name = m[1];
+        const body = m[2];
+        const args = {};
+        const kvRe = /<arg_key>([^<]+)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+        let kv;
+        let foundKv = false;
+        while ((kv = kvRe.exec(body)) !== null) {
+            foundKv = true;
+            const k = kv[1].trim();
+            const rawV = kv[2].trim();
+            try {
+                args[k] = JSON.parse(rawV);
+            } catch {
+                args[k] = rawV;
+            }
+        }
+        if (!foundKv) {
+            const trimmed = body.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                Object.assign(args, parseArgs(trimmed));
+            }
+        }
+        calls.push({
+            id: `call_${Date.now().toString(36)}_${calls.length}`,
+            name,
+            args,
+        });
+        cleanedText = cleanedText.replace(m[0], '');
+    }
+    return { calls, text: cleanedText.trim() };
+}
+
+export async function streamModel({
+ settings, system, messages, tools = [], signal, onDelta = () => {}, onThinking = () => {} }) {
     const spec = buildCompletionRequest(settings, [], { stream: true, maxTokens: Number(settings.maxOutputTokens) || 4096 });
     const usage = { inputTokens: 0, outputTokens: 0 };
     let text = '';
@@ -198,10 +237,20 @@ export async function streamModel({ settings, system, messages, tools = [], sign
         }
         if (choice.finish_reason) stopReason = choice.finish_reason;
     }
-    const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([i, c]) => ({
+    let toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([i, c]) => ({
         id: c.id || `call_${Date.now().toString(36)}_${i}`,
         name: c.name,
         args: parseArgs(c.raw),
     })).filter((c) => c.name);
+
+    // 容错兜底：GLM 等国产大模型长文本多轮后可能退化为直接在文本中吐出 <tool_call> XML
+    if (!toolCalls.length && (text.includes('<tool_call>') || text.includes('<|tool_call|>'))) {
+        const fallback = extractFallbackToolCalls(text);
+        if (fallback.calls.length) {
+            toolCalls = fallback.calls;
+            text = fallback.text;
+        }
+    }
+
     return { text, toolCalls, usage, stopReason, toolsSupported: used.tools };
 }
