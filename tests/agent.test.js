@@ -176,6 +176,44 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.match(streamReqs()[0].messages[0].content, /蓝莓松饼/);
         assert.match(streamReqs()[0].messages[0].content, /"id":"data-check"/);
 
+        // ── 3b. 技能包：整包导入（脚本、参考、二进制都在），模型按需读文件，导出原样，覆盖 / 回退 / 删除时文件跟着走 ──
+        const PkgZip = (await import('jszip')).default;
+        const pkgPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
+        const pack = async (files) => { const zip = new PkgZip(); Object.entries(files).forEach(([name, content]) => zip.file(name, content)); return (await zip.generateAsync({ type: 'nodebuffer' })).toString('base64'); };
+        const v1 = await pack({ 'pdf-tools/SKILL.md': '---\nname: pdf-tools\ndescription: 处理 PDF\n---\n# PDF\n见 references/guide.md', 'pdf-tools/references/guide.md': '# Guide\n口令：海盐焦糖', 'pdf-tools/scripts/run.py': 'print("ok")\n', 'pdf-tools/assets/logo.png': pkgPng, '__MACOSX/._x': 'junk' });
+        const skillPost = (path, body, user = 'alice') => fetch(`${url}/api/agent-skills${path}`, { method: 'POST', headers: json(as(user)), body: JSON.stringify(body) });
+        const pkgPreview = (await (await skillPost('/preview', { archiveBase64: v1 })).json()).skill;
+        assert.deepEqual([pkgPreview.id, pkgPreview.fileCount, pkgPreview.skippedFiles], ['pdf-tools', 3, 0]);
+        const pkgImported = (await (await skillPost('/import', { archiveBase64: v1 })).json()).skill;
+        assert.deepEqual(pkgImported.files.map((f) => [f.path, !!f.binary, f.size]).sort(), [['assets/logo.png', true, 8], ['references/guide.md', false, 29], ['scripts/run.py', false, 12]]);
+        assert.equal(pkgImported.files.find((f) => f.binary).content, '', '二进制内容不发给界面');
+        assert.equal((await (await fetch(`${url}/api/agent-skills`, { headers: as('bob') })).json()).items.find((s) => s.id === 'pdf-tools').fileCount, 3);
+        const readSkill = TOOLS.find((t) => t.name === 'read_skill');
+        assert.match((await readSkill.run({ id: 'pdf-tools' }, {})).content, /#### 技能包文件\n[\s\S]*- assets\/logo\.png（二进制，8 B）[\s\S]*当前环境不能执行脚本/);
+        assert.match((await readSkill.run({ id: '@pdf-tools', file: 'references/guide.md' }, {})).content, /海盐焦糖/);
+        assert.match((await readSkill.run({ id: 'pdf-tools', file: 'assets/logo.png' }, {})).content, /二进制文件/);
+        assert.equal((await readSkill.run({ id: 'pdf-tools', file: '../../etc/passwd' }, {})).ok, false);
+        mock.aiRequests.length = 0;
+        mock.aiScript.push({ text: '好的。' });
+        await chat('bob', { messages: [{ role: 'user', content: '@pdf-tools 提取文字' }] });
+        assert.match(streamReqs()[0].messages[0].content, /#### 技能包文件\n[\s\S]*- scripts\/run\.py/);
+        const pkgExported = await PkgZip.loadAsync(Buffer.from(await (await fetch(`${url}/api/agent-skills/pdf-tools/export`, { headers: as('bob') })).arrayBuffer()));
+        assert.deepEqual(Object.keys(pkgExported.files).filter((n) => !n.endsWith('/')).sort(), ['pdf-tools/SKILL.md', 'pdf-tools/assets/logo.png', 'pdf-tools/references/guide.md', 'pdf-tools/scripts/run.py']);
+        assert.ok((await pkgExported.file('pdf-tools/assets/logo.png').async('nodebuffer')).equals(pkgPng));
+        // 只改 SKILL.md（对话里完善技能）不动附带文件；重新导入整包则替换
+        await skillPost('', { skillMd: '---\nid: pdf-tools\nname: pdf-tools\ndescription: 处理 PDF\n---\n# PDF 改过', overwrite: true });
+        assert.equal((await (await fetch(`${url}/api/agent-skills/pdf-tools`, { headers: as('bob') })).json()).skill.files.length, 3);
+        const v2 = await pack({ 'pdf-tools/SKILL.md': '---\nname: pdf-tools\ndescription: v2\n---\n# PDF v2', 'pdf-tools/scripts/new.sh': '#!/bin/sh\necho 2\n' });
+        assert.deepEqual((await (await skillPost('/import', { archiveBase64: v2, overwrite: true })).json()).skill.files.map((f) => f.path), ['scripts/new.sh']);
+        // 回退到带三个文件的版本，文件一起回来；删除后文件和计数都清掉
+        const pkgBackups = (await (await fetch(`${url}/api/agent-skills/pdf-tools/backups`, { headers: as('alice') })).json()).backups;
+        const withFiles = pkgBackups.find((b) => b.fileCount === 3);
+        assert.ok(withFiles, '覆盖前的版本连同文件留了备份');
+        assert.equal((await (await skillPost(`/pdf-tools/rollback/${withFiles.id}`, {})).json()).skill.files.length, 3);
+        assert.equal((await fetch(`${url}/api/agent-skills/pdf-tools`, { method: 'DELETE', headers: as('alice') })).status, 200);
+        assert.deepEqual(await dao.kvGet('skill_files:pdf-tools', null), null);
+        assert.equal((await dao.kvGet('skill_file_counts', {}))['pdf-tools'], undefined);
+
         // ── 4. 附件：上传 → read_file 读到内容；别人读不到、下不了 ──
         const form = new FormData();
         form.append('files', new Blob(['工单号,状态\nRT-1,进行中\nRT-2,已关闭\n'], { type: 'text/csv' }), '工单.csv');

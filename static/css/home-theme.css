@@ -2345,7 +2345,12 @@ html.platform-home #customToolImportModal .tool-import-title { color: var(--v2-i
 
 html.platform-home #customToolImportModal .tool-import-subtitle { color: var(--v2-ink2); font-size: 12px; line-height: 1.5; margin-top: 6px; }
 
-html.platform-home #customToolImportModal .tool-import-form { min-height: 0; padding: 16px 20px 20px; overflow-y: auto; scrollbar-width: thin; }
+/* Only the fields scroll; actions stay visible as metadata and upload logs grow. */
+html.platform-home #customToolImportModal .tool-import-form { display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 0; overflow: hidden; }
+
+html.platform-home #customToolImportModal .tool-import-body { min-height: 0; padding: 16px 20px 20px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+
+html.platform-home #customToolImportModal .tool-import-ai-status { overflow-wrap: anywhere; }
 
 html.platform-home #customToolImportModal .tool-import-close { width: 28px; height: 28px; border-radius: 8px; border-color: var(--v2-line); background: transparent; color: var(--v2-ink2); font-size: 19px; }
 
@@ -2404,7 +2409,7 @@ html.platform-home #customToolImportModal .tool-import-locked-hint {
 
 html.platform-home #customToolImportModal .tool-import-textarea { min-height: 56px; height: 56px; }
 
-html.platform-home #customToolImportModal .tool-import-actions { gap: 8px; margin-top: 16px; }
+html.platform-home #customToolImportModal .tool-import-actions { flex: none; gap: 8px; margin: 0; padding: 12px 20px max(16px, env(safe-area-inset-bottom)); border-top: 1px solid var(--v2-line); background: var(--v2-pop); }
 
 html.platform-home #customToolImportModal .tool-import-btn { min-width: 80px; padding: 8px 14px; border-radius: 9px; border-color: var(--v2-line-strong); background: color-mix(in srgb, var(--v2-bg) 65%, transparent); color: var(--v2-ink2); }
 
@@ -2431,7 +2436,7 @@ html.platform-home #customToolImportModal { padding: 12px; }
 
 html.platform-home #customToolImportModal .tool-import-dialog { max-height: calc(100dvh - 24px); border-radius: 16px; }
 
-html.platform-home #customToolImportModal :is(.tool-import-head, .tool-import-form) { padding-left: 16px; padding-right: 16px; }
+html.platform-home #customToolImportModal :is(.tool-import-head, .tool-import-body, .tool-import-actions) { padding-left: 16px; padding-right: 16px; }
 }
 /* 新对话首页在深色模式同样使用平台底色，避免旧蓝色面板与插画区域形成色块。 */
 html.platform-home[data-theme="dark"] body:not(.dc-chatting) #dragonClaw.dc {

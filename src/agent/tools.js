@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
 import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
-import { listSkills, getSkill, saveSkill } from '../services/skill-service.js';
+import { listSkills, getSkill, saveSkill, skillFilesNote, readSkillFile } from '../services/skill-service.js';
 import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
@@ -334,12 +334,19 @@ export const TOOLS = [
     },
     {
         name: 'read_skill',
-        description: '读取某个技能的完整步骤。技能目录见系统提示；任务与某个技能相符时先读它再执行。',
-        parameters: { type: 'object', properties: { id: { type: 'string', description: '技能标识' } }, required: ['id'] },
+        description: '读取某个技能的完整步骤。技能目录见系统提示；任务与某个技能相符时先读它再执行。技能列出“技能包文件”时，带上 file 读取其中一个文件。',
+        parameters: { type: 'object', properties: { id: { type: 'string', description: '技能标识' }, file: { type: 'string', description: '可选：技能包内的文件路径（如 references/guide.md），只读这个文件' } }, required: ['id'] },
         async run(args) {
-            const skill = await getSkill(String(args.id || '').replace(/^@/, ''));
+            const skillId = String(args.id || '').replace(/^@/, '').toLowerCase();
+            if (args.file) {
+                const found = await readSkillFile(skillId, args.file);
+                if (found?.missing) return { ok: false, summary: '文件不存在', content: `@${skillId} 的技能包里没有 ${args.file}。${found.files.length ? `包内文件：${found.files.join('、')}` : '这个技能没有附带文件。'}` };
+                if (found?.binary) return { ok: true, summary: `${found.path}（二进制）`, content: `${found.path} 是二进制文件（${found.size} 字节），不能按文本读取。` };
+                if (found) return { ok: true, summary: `已读取 ${found.path}`, content: `# @${skillId} / ${found.path}\n\`\`\`\n${found.content}\n\`\`\`${found.truncated ? '\n（内容过长，已截断）' : ''}` };
+            }
+            const skill = await getSkill(skillId);
             if (!skill) return { ok: false, summary: '技能不存在', content: `没有标识为 ${args.id} 的技能。可用技能：${(await listSkills()).map((s) => s.id).join('、')}` };
-            return { ok: true, summary: skill.name, content: `# ${skill.name}（@${skill.id}）\n${skill.description}\n\n${skill.body}` };
+            return { ok: true, summary: skill.name, content: `# ${skill.name}（@${skill.id}）\n${skill.description}\n\n${skill.body}${skillFilesNote(skill)}` };
         },
     },
     {
