@@ -462,11 +462,68 @@ export async function sendBaseNotify(payload) {
     return r;
 }
 
+export const EXPECTED_INIT_TABLES = [
+    'sys_kv_store',
+    'debug_audit_test',
+    'platform_metrics_events',
+    'dh_blob_assets',
+    'ai_chat_sessions',
+    'ai_chat_messages',
+    'ai_settings_profiles',
+    'uiv_categories',
+    'uiv_scripts',
+    'dh_uiv_import_sessions',
+    'sla_config_items',
+    'sla_categories',
+    'sla_groups',
+    'sla_group_items',
+    'sla_targets',
+    'sla_snapshots',
+    'upload_history',
+    'import_source_batches',
+    'import_source_files',
+    'import_source_sheets',
+    'import_source_presets',
+    'monthly_logos',
+    'monthly_documents',
+    'monthly_drafts',
+    'report_snapshots',
+    'report_category_scores',
+    'report_metric_data',
+    'bigscreen_owners',
+    'monthly_snapshots',
+    'ai_report_documents',
+    'ai_report_images',
+    'ai_report_image_deletions',
+    'dh_chunks',
+    'agent_skills',
+    'custom_tools',
+    'ai_chat_uploads',
+    'agent_schedules',
+    'biz_records',
+];
+
 export async function debugProbeAction(action, params = {}) {
     if (isMemoryMode() && !config.baseQueryUrl) {
         switch (action) {
         case 'db-tables':
             return { mode: 'memory', tables: listMemoryTables() };
+        case 'schema-check': {
+            const memoryTables = listMemoryTables().map((t) => (typeof t === 'string' ? t : t.name || t.TABLE_NAME || '')).filter(Boolean);
+            const presentSet = new Set(memoryTables.map((s) => s.toLowerCase()));
+            const missing = EXPECTED_INIT_TABLES.filter((t) => !presentSet.has(t.toLowerCase()));
+            return {
+                mode: 'memory',
+                healthy: missing.length === 0,
+                expectedCount: EXPECTED_INIT_TABLES.length,
+                presentCount: EXPECTED_INIT_TABLES.length - missing.length,
+                missingCount: missing.length,
+                missingTables: missing,
+                expectedTables: EXPECTED_INIT_TABLES,
+                presentTables: [...presentSet],
+                upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），升级前请联系 DBA 导入 db/upgrade.sql 补充缺失表。` : '全部 38 张业务数据表均已就绪。',
+            };
+        }
         case 'query-self': {
             const rows = await selectTable('debug_audit_test', { limit: 20 });
             return { mode: 'memory', action, rows, rowCount: rows.length };
@@ -527,6 +584,27 @@ export async function debugProbeAction(action, params = {}) {
             200,
         );
         return { schema: config.appSchema, tables: rows, count: rows.length };
+    }
+    case 'schema-check': {
+        const rows = await queryAppSchema(
+            `SELECT TABLE_NAME, TABLE_ROWS, CREATE_TIME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${sqlVal(config.appSchema)} ORDER BY TABLE_NAME`,
+            200,
+        );
+        const presentNames = (rows || []).map((r) => String(r.TABLE_NAME || '').toLowerCase());
+        const presentSet = new Set(presentNames);
+        const missing = EXPECTED_INIT_TABLES.filter((t) => !presentSet.has(t.toLowerCase()));
+        return {
+            mode: 'online',
+            schema: config.appSchema,
+            healthy: missing.length === 0,
+            expectedCount: EXPECTED_INIT_TABLES.length,
+            presentCount: EXPECTED_INIT_TABLES.length - missing.length,
+            missingCount: missing.length,
+            missingTables: missing,
+            expectedTables: EXPECTED_INIT_TABLES,
+            presentTables: (rows || []).map((r) => ({ name: r.TABLE_NAME, rows: r.TABLE_ROWS, createdAt: r.CREATE_TIME })),
+            upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），升级前请联系 DBA 导入 db/upgrade.sql 补充缺失表。` : '全部 38 张业务数据表均已就绪，当前环境数据库完整。',
+        };
     }
     case 'query-base':
         return rawBasePost(endpoints.query, {

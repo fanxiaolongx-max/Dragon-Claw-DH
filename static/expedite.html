@@ -1015,7 +1015,11 @@
                                 </div>
                             </div>
                         </div>
-                        <div>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <button class="btn-primary" id="btn-base-notify" onclick="openBaseNotifyModal()"
+                                style="padding: 8px 16px; background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: #fff; border: none; border-radius: 6px; font-weight: 600; white-space: nowrap; cursor: pointer; box-shadow: 0 2px 4px rgba(16,185,129,0.25); display: inline-flex; align-items: center; gap: 6px;">
+                                📨 <span data-i18n="btn_base_notify">基座一键下发通知</span>
+                            </button>
                             <button class="btn-primary" onclick="generateAndCopyWLS()"
                                 style="padding: 8px 16px; background: #0078d4; white-space: nowrap;">
                                 📋 <span data-i18n="btn_copy_script">复制自动化脚本</span>
@@ -1069,6 +1073,111 @@
         <div id="expedite-explanation-section" class="expedite-explanation-card"></div>
     </div>
     </div>
+    </div>
+
+    <!-- 基座通知一键下发弹窗 (基座特有功能) -->
+    <div class="modal-overlay" id="base-notify-modal" onclick="if(event.target === this) closeBaseNotifyModal()"
+        onkeydown="handleBaseNotifyKeydown(event)" style="display: none;">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="base-notify-modal-title"
+            style="width: 780px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #e2e8f0;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 id="base-notify-modal-title" style="margin: 0; font-size: 17px; color: #0f172a; display: flex; align-items: center; gap: 8px;">
+                        <span>📨</span> <span data-i18n="modal_notify_title">基座催办通知下发</span>
+                    </h3>
+                    <span style="display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; color: #065f46; background: #d1fae5; border: 1px solid #a7f3d0; border-radius: 12px;"
+                        data-i18n="modal_notify_badge">基座特有功能</span>
+                </div>
+                <button type="button" class="close-btn" onclick="closeBaseNotifyModal()" aria-label="关闭">&times;</button>
+            </div>
+            <div class="dist-body" style="padding: 16px 0; overflow-y: auto; flex: 1;" tabindex="0">
+                <p style="font-size: 13px; color: #475569; margin: 0 0 16px 0; line-height: 1.6;" data-i18n="modal_notify_desc">
+                    通过基座原生通知服务直发消息，支持关联「高级分发策略」中的员工工号或姓名，一对一专属直发或全量广播，无需本地运行脚本。
+                </p>
+
+                <!-- 下发模式选择 -->
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                    <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 8px;" data-i18n="notify_mode_lbl">
+                        🎯 下发模式：
+                    </label>
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #334155;">
+                            <input type="radio" name="base-notify-mode" value="personalized" checked onchange="onBaseNotifyModeChange()">
+                            <strong data-i18n="notify_mode_personal">按分发策略·专属差异化下发 (推荐)</strong>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #334155;">
+                            <input type="radio" name="base-notify-mode" value="broadcast" onchange="onBaseNotifyModeChange()">
+                            <span data-i18n="notify_mode_broadcast">全量通报广播 (发送完整简报)</span>
+                        </label>
+                    </div>
+                    <div id="notify-mode-hint" style="font-size: 12px; color: #64748b; margin-top: 6px;">
+                        为每位员工单独提取其负责分类下的未达标指标，生成个性化催办内容发送至其工号。
+                    </div>
+                </div>
+
+                <!-- 接收人与名册状态 -->
+                <div style="margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: flex; align-items: center; gap: 6px;">
+                            <span>👤</span> <span data-i18n="notify_recipients_lbl">目标接收人 (工号 / 姓名)</span>
+                            <span id="notify-selected-count" style="font-size: 12px; font-weight: normal; color: #059669; background: #ecfdf5; padding: 1px 8px; border-radius: 10px;">0 人已选</span>
+                        </label>
+                        <div style="display: flex; gap: 8px;">
+                            <button type="button" class="btn-copy" onclick="toggleAllBaseNotifyRecipients(true)" style="padding: 2px 10px; font-size: 11px;">全选</button>
+                            <button type="button" class="btn-copy" onclick="toggleAllBaseNotifyRecipients(false)" style="padding: 2px 10px; font-size: 11px;">全不选</button>
+                            <button type="button" class="btn-copy" onclick="openDistPolicyFromNotify()" style="padding: 2px 10px; font-size: 11px; background: #f1f5f9; color: #0284c7; border-color: #bae6fd;">⚙️ 分发策略</button>
+                        </div>
+                    </div>
+
+                    <!-- 人员复选列表 -->
+                    <div id="base-notify-roster-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; padding: 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;">
+                        <!-- JS 动态渲染 -->
+                    </div>
+
+                    <!-- 手动快速添加接收人 -->
+                    <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+                        <input type="text" id="base-notify-manual-input" placeholder="手动添加工号、姓名或邮箱 (例如: l00123 或 name@huawei.com)"
+                            style="flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px;"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault();addManualNotifyRecipient();}">
+                        <button type="button" class="btn-secondary" onclick="addManualNotifyRecipient()" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">＋ 添加</button>
+                    </div>
+                </div>
+
+                <!-- 通知标题 -->
+                <div style="margin-bottom: 16px;">
+                    <label for="base-notify-title" style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 6px;" data-i18n="notify_title_lbl">
+                        📌 通知标题：
+                    </label>
+                    <input type="text" id="base-notify-title" style="width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; color: #1e293b;">
+                </div>
+
+                <!-- 消息内容预览 -->
+                <div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <label for="base-notify-preview" style="font-weight: 600; font-size: 13px; color: #1e293b;" data-i18n="notify_content_lbl">
+                            👁️ 发送内容预览：
+                        </label>
+                        <select id="base-notify-preview-target" onchange="renderBaseNotifyPreview()" style="font-size: 12px; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 4px; color: #334155; max-width: 260px;">
+                            <!-- Dynamic recipient options -->
+                        </select>
+                    </div>
+                    <textarea id="base-notify-preview" readonly style="width: 100%; box-sizing: border-box; height: 140px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: monospace; font-size: 12px; color: #334155; background: #f8fafc; line-height: 1.5; resize: vertical;"></textarea>
+                </div>
+
+                <!-- 下发状态反馈区域 -->
+                <div id="base-notify-status-box" style="display: none; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-top: 8px;"></div>
+            </div>
+            <div class="dist-footer" style="display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid #e2e8f0;">
+                <span id="base-notify-summary-note" style="font-size: 12px; color: #64748b;">准备就绪</span>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn-secondary" onclick="closeBaseNotifyModal()" data-i18n="btn_cancel">取消</button>
+                    <button type="button" class="btn-primary" id="btn-submit-base-notify" onclick="executeBaseNotify()"
+                        style="padding: 8px 20px; background: linear-gradient(135deg, #059669 0%, #10b981 100%); border: none; font-weight: 600;">
+                        <span id="btn-submit-base-notify-text">🚀 确认立即下发</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="distribution-modal" onclick="if(event.target === this) closeDistributionModal()"
@@ -1264,7 +1373,17 @@
                 "opt_group": "Group Chat",
                 "opt_email": "Email CC",
                 "opt_meet": "Meeting Invite",
+                "btn_base_notify": "Dispatch Base Notification",
                 "btn_copy_script": "Copy Auto Script",
+                "modal_notify_title": "Base Platform Notification Dispatch",
+                "modal_notify_badge": "Base-Native Feature",
+                "modal_notify_desc": "Use base-native notification service to dispatch reminder messages directly to employee IDs, names, or emails configured in the Advanced Strategy, without local PowerShell.",
+                "notify_mode_lbl": "Dispatch Mode:",
+                "notify_mode_personal": "Personalized by Distribution Strategy (Recommended)",
+                "notify_mode_broadcast": "Broadcast Full Briefing",
+                "notify_recipients_lbl": "Target Recipients (Emp ID / Name)",
+                "notify_title_lbl": "Notification Title:",
+                "notify_content_lbl": "Content Preview:",
                 "img_title": "📸 Related Dashboard Screenshot",
                 "btn_copy_small": "Copy Small Image",
                 "btn_copy_orig": "Copy Original Image",
@@ -1340,7 +1459,17 @@
                 "opt_group": "全局群聊",
                 "opt_email": "邮件抄送",
                 "opt_meet": "会议邀请",
+                "btn_base_notify": "基座一键下发通知",
                 "btn_copy_script": "复制自动化脚本",
+                "modal_notify_title": "基座催办通知下发",
+                "modal_notify_badge": "基座特有功能",
+                "modal_notify_desc": "通过基座原生通知服务直发消息，支持关联「高级分发策略」中的员工工号或姓名，一对一专属直发或全量广播，无需本地运行脚本。",
+                "notify_mode_lbl": "下发模式：",
+                "notify_mode_personal": "按分发策略·专属差异化下发 (推荐)",
+                "notify_mode_broadcast": "全量通报广播 (发送完整简报)",
+                "notify_recipients_lbl": "目标接收人 (工号 / 姓名)",
+                "notify_title_lbl": "通知标题：",
+                "notify_content_lbl": "发送内容预览：",
                 "img_title": "📸 关联看板截图",
                 "btn_copy_small": "复制小尺寸图",
                 "btn_copy_orig": "复制原图",
@@ -2247,6 +2376,379 @@
             text += getExpiringTicketsText(latestFailingData, assignedCats);
             text += expediteTemplate.footer;
             return text.trim();
+        }
+
+        // ============================================================
+        // 基座一键下发通知逻辑 (基座特有功能)
+        // ============================================================
+        window._baseNotifyRecipients = [];
+
+        function openBaseNotifyModal() {
+            if (!latestFailingData) return showToast('无快照数据，无法提取催办内容', 'error');
+
+            const monthStr = String(latestFailingData.month || new Date().getMonth() + 1).padStart(2, '0');
+            const dayStr = String(new Date().getDate()).padStart(2, '0');
+            const defaultTitle = `【AIOps 一键催办】未达标指标跟进提醒 (${monthStr}月${dayStr}日)`;
+            const titleInput = document.getElementById('base-notify-title');
+            if (titleInput && (!titleInput.value || titleInput.value.startsWith('【AIOps 一键催办】'))) {
+                titleInput.value = defaultTitle;
+            }
+
+            // 从 window._distPolicy 提取接收人
+            const dynamicCats = getDistributionCategories();
+            const roster = (window._distPolicy && Array.isArray(window._distPolicy.roster)) ? window._distPolicy.roster : [];
+            const assignments = (window._distPolicy && window._distPolicy.assignments) ? window._distPolicy.assignments : {};
+
+            const map = new Map();
+            // 1. 先加入 roster 中人员
+            roster.forEach(emp => {
+                if (emp && emp.id) {
+                    map.set(emp.id, {
+                        id: String(emp.id).trim(),
+                        name: String(emp.name || '').trim(),
+                        categories: [],
+                        selected: true,
+                        manual: false,
+                    });
+                }
+            });
+
+            // 2. 统计每位人员分配的分类
+            dynamicCats.forEach(cat => {
+                const assigned = assignments[cat] || [];
+                assigned.forEach(id => {
+                    if (!map.has(id)) {
+                        map.set(id, {
+                            id: String(id).trim(),
+                            name: '',
+                            categories: [],
+                            selected: true,
+                            manual: false,
+                        });
+                    }
+                    if (!map.get(id).categories.includes(cat)) {
+                        map.get(id).categories.push(cat);
+                    }
+                });
+            });
+
+            // 3. 加入 GLOBAL_EMAIL / GLOBAL_GROUP
+            (assignments['GLOBAL_EMAIL'] || []).forEach(id => {
+                if (!map.has(id)) {
+                    map.set(id, { id: String(id).trim(), name: '', categories: [], selected: true, manual: false });
+                }
+                if (!map.get(id).categories.includes('邮件抄送')) map.get(id).categories.push('邮件抄送');
+            });
+
+            window._baseNotifyRecipients = Array.from(map.values());
+
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+
+            const statusBox = document.getElementById('base-notify-status-box');
+            if (statusBox) statusBox.style.display = 'none';
+
+            const modal = document.getElementById('base-notify-modal');
+            if (modal.style.display !== 'flex') {
+                modal._previousFocus = document.activeElement;
+                modal._previousBodyOverflow = document.body.style.overflow;
+            }
+            document.body.style.overflow = 'hidden';
+            modal.style.display = 'flex';
+            const bodyEl = modal.querySelector('.dist-body');
+            if (bodyEl) bodyEl.scrollTop = 0;
+            const closeBtn = modal.querySelector('.close-btn');
+            if (closeBtn) closeBtn.focus();
+        }
+
+        function closeBaseNotifyModal() {
+            const modal = document.getElementById('base-notify-modal');
+            if (!modal || modal.style.display !== 'flex') return;
+            modal.style.display = 'none';
+            document.body.style.overflow = modal._previousBodyOverflow || '';
+            modal._previousFocus?.focus({ preventScroll: true });
+        }
+
+        function handleBaseNotifyKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeBaseNotifyModal();
+            }
+        }
+
+        function openDistPolicyFromNotify() {
+            closeBaseNotifyModal();
+            openDistributionModal();
+        }
+
+        function onBaseNotifyModeChange() {
+            const mode = document.querySelector('input[name="base-notify-mode"]:checked')?.value || 'personalized';
+            const hintEl = document.getElementById('notify-mode-hint');
+            if (hintEl) {
+                if (mode === 'personalized') {
+                    hintEl.textContent = '为每位员工单独提取其负责分类下的未达标指标，生成个性化催办内容发送至其工号。';
+                } else {
+                    hintEl.textContent = '向所有勾选的目标人员统一发送当前页面的完整催办简报。';
+                }
+            }
+            renderBaseNotifyPreview();
+        }
+
+        function toggleAllBaseNotifyRecipients(checked) {
+            (window._baseNotifyRecipients || []).forEach(r => { r.selected = Boolean(checked); });
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function toggleBaseNotifyRecipient(index, checked) {
+            if (window._baseNotifyRecipients && window._baseNotifyRecipients[index]) {
+                window._baseNotifyRecipients[index].selected = Boolean(checked);
+            }
+            updateBaseNotifySelectedCount();
+            renderBaseNotifyPreview();
+        }
+
+        function updateBaseNotifySelectedCount() {
+            const selected = (window._baseNotifyRecipients || []).filter(r => r.selected);
+            const countEl = document.getElementById('notify-selected-count');
+            if (countEl) countEl.textContent = `${selected.length} 人已选`;
+            const submitText = document.getElementById('btn-submit-base-notify-text');
+            if (submitText) submitText.textContent = `🚀 确认立即下发 (共 ${selected.length} 人)`;
+            const noteEl = document.getElementById('base-notify-summary-note');
+            if (noteEl) noteEl.textContent = selected.length ? `已就绪，将通过基座接口向 ${selected.length} 人下发通知` : '请勾选至少一位接收人';
+        }
+
+        function addManualNotifyRecipient() {
+            const input = document.getElementById('base-notify-manual-input');
+            const val = (input?.value || '').trim();
+            if (!val) return;
+            const tokens = val.split(/[,，;；\s]+/).filter(Boolean);
+            tokens.forEach(tok => {
+                if (!window._baseNotifyRecipients.find(r => r.id === tok)) {
+                    window._baseNotifyRecipients.push({
+                        id: tok,
+                        name: tok,
+                        categories: ['手动指定'],
+                        selected: true,
+                        manual: true,
+                    });
+                }
+            });
+            input.value = '';
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function renderBaseNotifyRoster() {
+            const listEl = document.getElementById('base-notify-roster-list');
+            if (!listEl) return;
+            listEl.replaceChildren();
+
+            const recipients = window._baseNotifyRecipients || [];
+            if (recipients.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.padding = '12px';
+                empty.style.textAlign = 'center';
+                empty.style.color = '#64748b';
+                empty.style.fontSize = '12px';
+                empty.innerHTML = `⚠️ 暂未在「高级分发策略」中配置员工名册。<br>点击上方 <strong>⚙️ 分发策略</strong> 进行配置，或在下方输入工号/姓名直接添加。`;
+                listEl.appendChild(empty);
+                updateBaseNotifySelectedCount();
+                return;
+            }
+
+            recipients.forEach((emp, idx) => {
+                const row = document.createElement('label');
+                row.style.display = 'flex';
+                row.style.alignItems = 'center';
+                row.style.justifyContent = 'space-between';
+                row.style.padding = '6px 8px';
+                row.style.borderRadius = '4px';
+                row.style.background = emp.selected ? '#f0fdf4' : '#f8fafc';
+                row.style.border = emp.selected ? '1px solid #bbf7d0' : '1px solid #e2e8f0';
+                row.style.cursor = 'pointer';
+                row.style.fontSize = '12px';
+
+                const left = document.createElement('div');
+                left.style.display = 'flex';
+                left.style.alignItems = 'center';
+                left.style.gap = '8px';
+
+                const chk = document.createElement('input');
+                chk.type = 'checkbox';
+                chk.checked = emp.selected;
+                chk.onchange = (e) => toggleBaseNotifyRecipient(idx, e.target.checked);
+
+                const info = document.createElement('span');
+                const displayName = emp.name && emp.name !== emp.id ? `${emp.name} (${emp.id})` : emp.id;
+                info.textContent = displayName;
+                info.style.fontWeight = '500';
+                info.style.color = '#1e293b';
+
+                left.append(chk, info);
+
+                const right = document.createElement('div');
+                right.style.display = 'flex';
+                right.style.alignItems = 'center';
+                right.style.gap = '6px';
+
+                if (emp.categories && emp.categories.length) {
+                    emp.categories.slice(0, 3).forEach(cat => {
+                        const tag = document.createElement('span');
+                        tag.textContent = cat;
+                        tag.style.fontSize = '10px';
+                        tag.style.padding = '1px 5px';
+                        tag.style.borderRadius = '4px';
+                        tag.style.background = '#e0f2fe';
+                        tag.style.color = '#0369a1';
+                        right.appendChild(tag);
+                    });
+                    if (emp.categories.length > 3) {
+                        const more = document.createElement('span');
+                        more.textContent = `+${emp.categories.length - 3}`;
+                        more.style.fontSize = '10px';
+                        more.style.color = '#64748b';
+                        right.appendChild(more);
+                    }
+                } else {
+                    const noCat = document.createElement('span');
+                    noCat.textContent = '全量催办';
+                    noCat.style.fontSize = '10px';
+                    noCat.style.padding = '1px 5px';
+                    noCat.style.borderRadius = '4px';
+                    noCat.style.background = '#f1f5f9';
+                    noCat.style.color = '#64748b';
+                    right.appendChild(noCat);
+                }
+
+                row.append(left, right);
+                listEl.appendChild(row);
+            });
+
+            updateBaseNotifySelectedCount();
+        }
+
+        function renderBaseNotifyPreview() {
+            const mode = document.querySelector('input[name="base-notify-mode"]:checked')?.value || 'personalized';
+            const selectEl = document.getElementById('base-notify-preview-target');
+            const previewEl = document.getElementById('base-notify-preview');
+            if (!selectEl || !previewEl) return;
+
+            const selected = (window._baseNotifyRecipients || []).filter(r => r.selected);
+            const dynamicCats = getDistributionCategories();
+
+            if (mode === 'broadcast') {
+                selectEl.style.display = 'none';
+                previewEl.value = document.getElementById('brief-textarea')?.value || '';
+                return;
+            }
+
+            selectEl.style.display = 'inline-block';
+            const curVal = selectEl.value;
+            selectEl.replaceChildren();
+
+            if (selected.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '暂无选中人员';
+                selectEl.appendChild(opt);
+                previewEl.value = '（请先在上方勾选至少一位接收人）';
+                return;
+            }
+
+            selected.forEach(emp => {
+                const opt = document.createElement('option');
+                opt.value = emp.id;
+                opt.textContent = `预览：${emp.name ? `${emp.name} (${emp.id})` : emp.id}`;
+                selectEl.appendChild(opt);
+            });
+
+            if (curVal && selected.some(r => r.id === curVal)) {
+                selectEl.value = curVal;
+            } else {
+                selectEl.value = selected[0].id;
+            }
+
+            const targetId = selectEl.value;
+            const targetEmp = selected.find(r => r.id === targetId);
+            if (targetEmp) {
+                let pText = generatePersonalizedText(targetEmp.id, dynamicCats);
+                if (!pText) {
+                    pText = `Hi ${targetEmp.name || targetEmp.id},\n\n✅ 您所负责的分组指标当前已全部达标，无需跟进。感谢您的支持！`;
+                }
+                previewEl.value = pText;
+            } else {
+                previewEl.value = '';
+            }
+        }
+
+        async function executeBaseNotify() {
+            const selected = (window._baseNotifyRecipients || []).filter(r => r.selected);
+            if (selected.length === 0) return showToast('请至少选择一位接收人', 'error');
+
+            const title = (document.getElementById('base-notify-title')?.value || '【AIOps 一键催办】未达标指标跟进提醒').trim();
+            const mode = document.querySelector('input[name="base-notify-mode"]:checked')?.value || 'personalized';
+            const dynamicCats = getDistributionCategories();
+
+            const submitBtn = document.getElementById('btn-submit-base-notify');
+            const submitText = document.getElementById('btn-submit-base-notify-text');
+            const statusBox = document.getElementById('base-notify-status-box');
+
+            if (submitBtn) submitBtn.disabled = true;
+            if (submitText) submitText.textContent = '⏳ 下发中...';
+
+            if (statusBox) {
+                statusBox.style.display = 'block';
+                statusBox.style.background = '#eff6ff';
+                statusBox.style.color = '#1e40af';
+                statusBox.style.border = '1px solid #bfdbfe';
+                statusBox.textContent = `⏳ 正在调用基座通知服务，向下发 ${selected.length} 位人员...`;
+            }
+
+            try {
+                let res;
+                if (mode === 'personalized') {
+                    const items = selected.map(emp => {
+                        let text = generatePersonalizedText(emp.id, dynamicCats);
+                        if (!text) {
+                            text = `Hi ${emp.name || emp.id},\n\n✅ 您所负责的分组指标当前已全部达标，无需跟进。感谢您的支持！`;
+                        }
+                        return {
+                            recipients: [emp.id],
+                            title: title,
+                            content: text,
+                        };
+                    });
+                    res = await API.post('/api/expedite/notify', { items });
+                } else {
+                    const fullText = document.getElementById('brief-textarea')?.value || '';
+                    res = await API.post('/api/expedite/notify', {
+                        recipients: selected.map(r => r.id),
+                        title: title,
+                        content: fullText,
+                    });
+                }
+
+                if (statusBox) {
+                    statusBox.style.background = '#f0fdf4';
+                    statusBox.style.color = '#15803d';
+                    statusBox.style.border = '1px solid #bbf7d0';
+                    statusBox.innerHTML = `<strong>✅ 基座通知下发成功！</strong><br>已成功通过基座原生通知服务向 ${selected.length} 位责任人下发催办消息。模式：${mode === 'personalized' ? '专属差异化催办' : '全量通报广播'}。`;
+                }
+                showToast(`✅ 已通过基座成功下发 ${selected.length} 条催办通知`, 'success');
+            } catch (err) {
+                console.error('Base notify failed:', err);
+                if (statusBox) {
+                    statusBox.style.background = '#fef2f2';
+                    statusBox.style.color = '#b91c1c';
+                    statusBox.style.border = '1px solid #fecaca';
+                    statusBox.innerHTML = `<strong>❌ 下发失败：</strong> ${err.message || '基座通知服务异常'}`;
+                }
+                showToast(`下发失败: ${err.message}`, 'error');
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+                if (submitText) submitText.textContent = `🚀 确认立即下发 (共 ${selected.length} 人)`;
+            }
         }
 
         function generateAndCopyWLS() {

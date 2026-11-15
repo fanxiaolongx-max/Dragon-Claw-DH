@@ -18,6 +18,7 @@
     };
 
     const PROBE_ACTIONS = [
+        { action: 'schema-check', label: '🗄️ 数据库完整性检查 (缺表自检)' },
         { action: 'db-tables', label: '📋 列出自建库表' },
         { action: 'write-self', label: '✏️ 写自身 Schema (debug_audit_test)' },
         { action: 'query-self', label: '🔍 查自身 Schema' },
@@ -145,6 +146,63 @@
     const probeResultsBox = el('div', 'dh-dbg-probe-list');
     probeSec.appendChild(probeResultsBox);
     probePanel.appendChild(probeSec);
+
+    // ── 数据库表完整性与缺表检查卡片 ──
+    const schemaSec = el('div', 'dh-dbg-section');
+    const schemaHeader = el('h4', '', '🗄️ 数据库 Schema 完整性与缺表检查');
+    const schemaStatusBadge = el('span', 'dh-dbg-pill-ok', '待检测');
+    schemaStatusBadge.style.marginLeft = '8px';
+    schemaStatusBadge.style.fontSize = '12px';
+    schemaHeader.appendChild(schemaStatusBadge);
+
+    const schemaActions = el('div', 'dh-dbg-btn-grid');
+    const checkSchemaBtn = el('button', 'dh-dbg-btn primary', '🔍 立即检查数据库表完整性');
+    checkSchemaBtn.type = 'button';
+    schemaActions.appendChild(checkSchemaBtn);
+
+    const schemaPre = el('pre', 'dh-dbg-pre', '点击「立即检查」对比 db/init.sql 38 张表与当前基座数据库，自动排查是否有漏建的数据表...');
+    schemaSec.append(schemaHeader, schemaActions, schemaPre);
+    probePanel.appendChild(schemaSec);
+
+    checkSchemaBtn.onclick = async () => {
+        schemaPre.textContent = '正在对比检查数据库表...';
+        schemaStatusBadge.className = 'dh-dbg-pill-ok';
+        schemaStatusBadge.textContent = '检查中...';
+        try {
+            const started = Date.now();
+            const res = await fetch(apiUrl('/api/debug/test/schema-check'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            const data = await res.json();
+            const r = data.result || data;
+            const duration = Date.now() - started;
+            if (r.healthy) {
+                schemaStatusBadge.className = 'dh-dbg-pill-ok';
+                schemaStatusBadge.style.background = '#dcfce7';
+                schemaStatusBadge.style.color = '#15803d';
+                schemaStatusBadge.textContent = `✅ ${r.presentCount}/${r.expectedCount} 张表全部就绪`;
+            } else {
+                schemaStatusBadge.className = 'dh-dbg-pill-err';
+                schemaStatusBadge.style.background = '#fee2e2';
+                schemaStatusBadge.style.color = '#b91c1c';
+                schemaStatusBadge.textContent = `⚠️ 缺失 ${r.missingCount} 张表`;
+            }
+            schemaPre.textContent = JSON.stringify({
+                耗时ms: duration,
+                健康状态: r.healthy ? '✅ 完整（无缺失表）' : `⚠️ 缺少 ${r.missingCount} 张表`,
+                就绪数量: `${r.presentCount} / ${r.expectedCount}`,
+                缺失表列表: r.missingTables || [],
+                升级建议: r.upgradeAdvice || '',
+                当前模式: r.mode,
+            }, null, 2);
+        } catch (err) {
+            schemaStatusBadge.className = 'dh-dbg-pill-err';
+            schemaStatusBadge.textContent = '❌ 检测异常';
+            schemaPre.textContent = `请求失败: ${err.message}`;
+        }
+    };
 
     // 流式与出站：对话是否能逐字输出、模型网关是否可达
     const netSec = el('div', 'dh-dbg-section');

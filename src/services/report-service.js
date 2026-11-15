@@ -734,7 +734,26 @@ export async function importReportDataBackupZip(zipBuffer, { mode = 'merge' } = 
     };
 }
 
-export async function sendExpediteNotification({ recipients = [], title = '', content = '', channel = 'email', payload = null } = {}) {
+export async function sendExpediteNotification({ recipients = [], title = '', content = '', channel = 'email', payload = null, items = null } = {}) {
+    if (Array.isArray(items) && items.length > 0) {
+        const results = [];
+        for (const item of items) {
+            try {
+                const res = await sendExpediteNotification(item);
+                results.push({ success: true, recipients: item.recipients, title: item.title, res });
+            } catch (err) {
+                results.push({ success: false, recipients: item.recipients, title: item.title, error: err.message });
+            }
+        }
+        return {
+            success: results.some((r) => r.success),
+            batch: true,
+            total: items.length,
+            sentCount: results.filter((r) => r.success).length,
+            failedCount: results.filter((r) => !r.success).length,
+            results,
+        };
+    }
     const to = Array.isArray(recipients) ? recipients.map((r) => String(r || '').trim()).filter(Boolean) : [];
     // 没有收件人就不发：不能把通知默默发到一个占位地址
     if (!payload && !to.length) fail('请先选择催办对象（收件人为空）', 400);
@@ -742,10 +761,14 @@ export async function sendExpediteNotification({ recipients = [], title = '', co
         module_type: 'AIOps一键催办',
         sub_module_type: channel === 'welink' ? 'WeLink催办通知' : '未达标指标催办',
         msg_type: '1',
+        receivers: to,
+        user_ids: to,
         email_params: {
             title: title || '【AIOps 一键催办】未达标指标跟进提醒',
             content: content || '存在未达标运营指标，请及时核查整改。',
             email_to: to.join(','),
+            receivers: to.join(','),
+            user_ids: to.join(','),
         },
     };
     const res = await sendBaseNotify(body);

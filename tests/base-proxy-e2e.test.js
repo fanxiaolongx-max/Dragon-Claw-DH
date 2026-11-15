@@ -123,6 +123,14 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
         const writeNetcare = await (await fetch(`${appUrl}/api/debug/test/write-netcare`, { method: 'POST' })).json();
         assert.equal(writeNetcare.result.code, 409);
 
+        // Schema Check probe
+        const schemaCheck = await (await fetch(`${appUrl}/api/debug/test/schema-check`, { method: 'POST' })).json();
+        assert.equal(schemaCheck.result.expectedCount, 38);
+        assert.equal(typeof schemaCheck.result.healthy, 'boolean');
+        assert.ok(Array.isArray(schemaCheck.result.missingTables));
+        assert.ok(Array.isArray(schemaCheck.result.expectedTables));
+        assert.ok(typeof schemaCheck.result.upgradeAdvice, 'string');
+
         // Redis Cache Probes
         await fetch(`${appUrl}/api/debug/test/cache-set`, {
             method: 'POST',
@@ -147,6 +155,36 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
         assert.equal(notifyRes.result.baseResult.data.success, true);
         assert.equal(mock.notifications.length, 1);
         assert.equal(mock.notifications[0].module_type, '测试');
+
+        // Expedite Notify: single recipient by employee ID
+        const expNotifySingle = await (await fetch(`${appUrl}/api/expedite/notify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                recipients: ['l00123'],
+                title: '【AIOps 一键催办】指标跟进提醒',
+                content: '请尽快处理网络安全分类下未达标指标',
+            }),
+        })).json();
+        assert.equal(expNotifySingle.success, true);
+        assert.equal(expNotifySingle.payload.receivers[0], 'l00123');
+        assert.equal(mock.notifications.length, 2);
+
+        // Expedite Notify: batch items based on advanced distribution strategy
+        const expNotifyBatch = await (await fetch(`${appUrl}/api/expedite/notify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: [
+                    { recipients: ['l00123'], title: '催办1', content: '内容1' },
+                    { recipients: ['w00456'], title: '催办2', content: '内容2' },
+                ],
+            }),
+        })).json();
+        assert.equal(expNotifyBatch.success, true);
+        assert.equal(expNotifyBatch.batch, true);
+        assert.equal(expNotifyBatch.sentCount, 2);
+        assert.equal(mock.notifications.length, 4);
 
         // Logs API & SSE stream
         const logsJson = await (await fetch(`${appUrl}/api/debug/logs?limit=20`)).json();
