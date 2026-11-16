@@ -23,6 +23,7 @@ import {
 import { runAgent } from '../agent/loop.js';
 import { handleChatUpload } from './agent-extras.js';
 import { listSkills } from '../services/skill-service.js';
+import { filterSkillsForUser } from '../services/distribution-service.js';
 import { getAutoSwitch } from '../services/ai-service.js';
 import { prepareContext, compactSession, generateTitle } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
@@ -317,7 +318,7 @@ export async function aiRoutes(fastify) {
 
 
     // 首页侧栏/联想的非一期接口：温和返回空列表，确保控制台零 404/500 噪音
-    fastify.get('/skills', async () => ({ items: await listSkills() }));
+    fastify.get('/skills', async (req) => ({ items: await filterSkillsForUser(await listSkills(), resolveRequestIdentity(req)) }));
     fastify.get('/connector-status', async () => ({ connected: false, webPhase: 1, connectors: [] }));
     fastify.get('/suggestions', async () => ({ items: [] }));
     fastify.get('/proactive-alerts', async () => ({ items: [] }));

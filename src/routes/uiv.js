@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { STATIC_DIR } from '../config.js';
+import { resolveRequestIdentity } from '../core/identity.js';
 import { ensureQuickStartSeeded } from '../services/onboarding-service.js';
+import { isSuperUser, filterUivScriptsForUser } from '../services/distribution-service.js';
 import {
+    uivScriptOrigin,
     listCategories,
     addCategory,
     deleteCategory,
@@ -23,10 +26,15 @@ import {
 } from '../services/uiv-service.js';
 
 export async function uivRoutes(fastify) {
-    fastify.get('/scripts', async (_req, reply) => {
+    fastify.get('/scripts', async (req, reply) => {
         await ensureQuickStartSeeded();
         reply.header('X-Data-Source', 'mysql');
-        const [scripts, categories] = await Promise.all([listScripts(), listCategories()]);
+        const identity = resolveRequestIdentity(req);
+        const [allScripts, allCategories] = await Promise.all([listScripts(), listCategories()]);
+        const scripts = await filterUivScriptsForUser(allScripts, identity, uivScriptOrigin);
+        const categories = isSuperUser(identity)
+            ? allCategories
+            : [...new Set(scripts.map((s) => s.category || '默认分类'))];
         return { scripts, categories };
     });
 
@@ -46,9 +54,12 @@ export async function uivRoutes(fastify) {
     fastify.patch('/scripts/:id/category', async (req) => moveScriptCategory(req.params.id, req.body?.category));
     fastify.patch('/scripts/:id/rename', async (req) => renameScript(req.params.id, req.body?.name));
 
-    fastify.get('/categories', async () => {
+    fastify.get('/categories', async (req) => {
         await ensureQuickStartSeeded();
-        return listCategories();
+        const identity = resolveRequestIdentity(req);
+        if (isSuperUser(identity)) return listCategories();
+        const visible = await filterUivScriptsForUser(await listScripts(), identity, uivScriptOrigin);
+        return [...new Set(visible.map((s) => s.category || '默认分类'))];
     });
     fastify.post('/categories', async (req, reply) => {
         const categories = await addCategory(req.body?.name);
@@ -56,7 +67,12 @@ export async function uivRoutes(fastify) {
     });
     fastify.delete('/categories/:name', async (req) => ({ categories: await deleteCategory(req.params.name) }));
 
-    fastify.get('/backup', async () => exportBackup());
+    fastify.get('/backup', async (req, reply) => {
+        if (!isSuperUser(resolveRequestIdentity(req))) {
+            return reply.code(403).send({ error: '只有超级管理员可以导出抓取脚本备份' });
+        }
+        return exportBackup();
+    });
     fastify.post('/backup', async (req) => importBackup(req.body || {}));
 
     fastify.get('/batch-scope', async () => getBatchScope());

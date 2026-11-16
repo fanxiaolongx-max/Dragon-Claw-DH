@@ -444,7 +444,7 @@
         document.querySelector('.home-main')?.scrollTo?.({ top: 0 });
         window.scrollTo({ top: 0 });
         remember();
-        if (localStorage.getItem('tools_super') === '0') {
+        if (!isSuperAdmin()) {
             Promise.allSettled([
                 window.HomeSkills?.reload?.(),
                 window.HomeCapabilities?.reload?.(),

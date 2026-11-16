@@ -7,7 +7,34 @@ import {
 } from '../dao/scoped.js';
 import { callAiCompletion } from './ai-service.js';
 
-const DEFAULT_CATEGORIES = ['默认分类'];
+export const DEFAULT_CATEGORIES = ['默认分类'];
+
+export function uivScriptOrigin(script) {
+    const fromCode = (code) => (String(code || '').match(/URL:\s*(https?:\/\/[^\s]+)/) || [])[1]
+        || (String(code || '').match(/fetch\("([^"]+)"/) || [])[1]
+        || '';
+    for (const candidate of [script?.openUrl, script?.url, fromCode(script?.code), fromCode(script?.consoleCode)]) {
+        if (!candidate) continue;
+        try {
+            const parsed = new URL(candidate);
+            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;
+        } catch {
+            // Try next candidate
+        }
+    }
+    return '';
+}
+
+export function uivSiteLabel(origin, lang) {
+    let host = '';
+    try { host = new URL(origin).hostname.toLowerCase(); } catch { host = origin; }
+    const en = lang === 'en-US';
+    if (host === 'netcare.huawei.com') return en ? 'NetCare China' : 'NetCare 中国';
+    if (host === 'netcare-ae.gts.huawei.com') return en ? 'NetCare Middle East' : 'NetCare 中东';
+    if (host === 'netcare-de.gts.huawei.com') return en ? 'NetCare Germany' : 'NetCare 德国';
+    if (host.includes('datafab')) return 'DataFab';
+    return host || 'Web';
+}
 
 export async function listCategories() {
     const rows = await selectTable('uiv_categories', {

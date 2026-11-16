@@ -1,5 +1,6 @@
 // 技能、自定义 HTML 工具、对话附件的接口。
-import { BusinessError } from '../core/errors.js';
+import { BusinessError, NotFoundError } from '../core/errors.js';
+import { resolveRequestIdentity } from '../core/identity.js';
 import { resolveAdmin } from '../core/access.js';
 import {
     listSkills, getSkill, saveSkill, previewSkill, renameSkill, removeSkill, exportSkillZip, skillPackageFromArchive, publicFiles,
@@ -9,7 +10,9 @@ import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool } from
 import { saveChatUpload, readChatUpload } from '../services/chat-upload-service.js';
 import { decideApproval } from '../agent/approvals.js';
 import { runSelect, toolByName } from '../agent/tools.js';
-import { withShared, setShared, setToolShared } from '../services/distribution-service.js';
+import {
+    setShared, setToolShared, isShared, canAccessSkill, filterSkillsForUser, isSuperUser,
+} from '../services/distribution-service.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const overridesFrom = (body) => {
@@ -24,11 +27,20 @@ function decodeArchive(body) {
     return buffer;
 }
 
-// 列表与下载对所有人开放；创建、导入、改名、删除仅管理员（由 core/access.js 统一拦截）
+// 列表、详情与下载按「全员开放」权限隔离：未开放前仅超级管理员可用，创建/导入/改名/删除仅管理员
 export async function agentSkillsRoutes(fastify) {
     fastify.addHook('onSend', async (_req, reply, payload) => { reply.header('Cache-Control', 'private, no-store'); return payload; });
 
-    fastify.get('/', async () => ({ items: await withShared('skill', await listSkills()) }));
+    async function requireReadableSkill(req) {
+        const skill = await getSkill(req.params.id);
+        if (!skill) throw new NotFoundError('技能不存在');
+        if (!(await canAccessSkill(skill, resolveRequestIdentity(req)))) {
+            throw new BusinessError('该技能尚未向全员开放，仅超级管理员可用', 403);
+        }
+        return skill;
+    }
+
+    fastify.get('/', async (req) => ({ items: await filterSkillsForUser(await listSkills(), resolveRequestIdentity(req)) }));
 
     fastify.post('/', async (req) => {
         const markdown = String(req.body?.skillMd || '');
@@ -64,15 +76,18 @@ export async function agentSkillsRoutes(fastify) {
 
     fastify.post('/restore-builtins', async () => ({ restored: 0 }));
 
-    fastify.get('/:id', async (req, reply) => {
-        const skill = await getSkill(req.params.id);
-        if (!skill) return reply.code(404).send({ error: '技能不存在' });
-        return { skill: { ...skill, files: publicFiles(skill.files) } };
+    fastify.get('/:id', async (req) => {
+        const skill = await requireReadableSkill(req);
+        return { skill: { ...skill, sharedAccess: await isShared('skill', skill.id), files: publicFiles(skill.files) } };
     });
-    // 版本历史：覆盖、回退、删除前自动留一份
-    fastify.get('/:id/backups', async (req) => ({ backups: await listSkillBackups(req.params.id) }));
+    // 版本历史：覆盖、回退、删除前自动留一份（仅对可见成员开放）
+    fastify.get('/:id/backups', async (req) => {
+        const skill = await requireReadableSkill(req);
+        return { backups: await listSkillBackups(skill.id) };
+    });
     fastify.get('/:id/backups/:backupId', async (req, reply) => {
-        const backup = await getSkillBackup(req.params.id, req.params.backupId);
+        const skill = await requireReadableSkill(req);
+        const backup = await getSkillBackup(skill.id, req.params.backupId);
         if (!backup) return reply.code(404).send({ error: '这个历史版本不存在' });
         return { backup: { ...backup, files: publicFiles(backup.files) } };
     });
@@ -84,7 +99,8 @@ export async function agentSkillsRoutes(fastify) {
     fastify.patch('/:id/name', async (req) => renameSkill(req.params.id, req.body?.name));
     fastify.delete('/:id', async (req) => removeSkill(req.params.id));
     fastify.get('/:id/export', async (req, reply) => {
-        const archive = await exportSkillZip(req.params.id);
+        const skill = await requireReadableSkill(req);
+        const archive = await exportSkillZip(skill.id);
         if (!archive) return reply.code(404).send({ error: '技能不存在' });
         reply.header('Content-Type', 'application/zip');
         reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(archive.filename)}"`);
@@ -94,8 +110,11 @@ export async function agentSkillsRoutes(fastify) {
 }
 
 const identityOf = async (req) => {
-    const identity = req.userIdentity;
-    if (await resolveAdmin(identity)) identity.isAdmin = true;
+    const identity = resolveRequestIdentity(req);
+    if (await resolveAdmin(identity)) {
+        identity.isAdmin = true;
+        identity.isSuper = true;
+    }
     return identity;
 };
 
@@ -131,15 +150,10 @@ async function handleCustomToolBridge(req, reply) {
 }
 
 export async function customToolsRoutes(fastify) {
-    fastify.get('/', async (req) => {
-        const tools = await listCustomTools(req.userIdentity);
-        const marked = await withShared('tool', tools, (tool) => tool.slug);
-        // 用户发布的工具：可见范围是 public 就是全员开放
-        return marked.map((tool) => (tool.builtIn ? tool : { ...tool, sharedAccess: tool.visibility === 'public' }));
-    });
+    fastify.get('/', async (req) => listCustomTools(resolveRequestIdentity(req)));
     // 「全员开放 / 关闭开放」（与主线版同接口）：仅超级管理员
     fastify.patch('/:slug/distribution', async (req, reply) => {
-        if (!req.userIdentity.isSuper) return reply.code(403).send({ error: '只有超级管理员可以设置全员开放' });
+        if (!isSuperUser(resolveRequestIdentity(req))) return reply.code(403).send({ error: '只有超级管理员可以设置全员开放' });
         if (typeof req.body?.sharedAccess !== 'boolean') return reply.code(400).send({ error: '工具分发设置无效' });
         const tool = await getCustomTool(req.params.slug, req.userIdentity);
         if (!tool) return reply.code(404).send({ error: '工具不存在' });

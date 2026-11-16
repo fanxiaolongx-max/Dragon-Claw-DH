@@ -145,8 +145,9 @@ async function execute(row, firedAt) {
         const profiles = await listProfiles();
         const settings = profiles.find((p) => p.id === row.model_id && p.apiKey) || profiles.find((p) => p.isActive) || profiles[0];
         if (!settings?.apiKey) throw new Error('还没有配置模型，定时任务无法执行');
-        const identity = { username: row.owner_id, displayName: row.owner_id, identified: true, isAdmin: false, source: 'schedule' };
+        const identity = { username: row.owner_id, displayName: row.owner_id, identified: true, isAdmin: false, isSuper: false, source: 'schedule' };
         identity.isAdmin = await resolveAdmin(identity).catch(() => false);
+        identity.isSuper = identity.isAdmin;
         if (sessionId) {
             const session = await getSession(sessionId).catch(() => null);
             if (!session || session.owner !== row.owner_id) sessionId = '';

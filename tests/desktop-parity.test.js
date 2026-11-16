@@ -218,9 +218,16 @@ test('需求广场：提交、加密信封、分块上传、流转规则与权�
     }
 });
 
-test('内置工具与问卷调研：工具清单、外壳页、模板、提交、导出', async () => {
+test('内置工具与问卷调研：未全员开放前仅超管可用，开放后全员可用并支持模板提交导出', async () => {
     const { call } = ctx;
-    // 内置工具出现在工具清单里，meta 标明是内置；页面是静态文件，带运行时垫片；不能删除、不能导出
+    // 未开放前：bob 看不到内置工具、点不开页面也调不到 /api/surveys；alice 超级管理员始终可用
+    assert.equal((await call('bob', 'GET', '/api/custom-tools')).data.some((t) => t.slug === 'tool-mqp55fna'), false);
+    assert.equal((await call('bob', 'GET', '/api/custom-tools/tool-mqp55fna/meta')).status, 404);
+    assert.equal((await fetch(`${ctx.url}/builtin-tools/tool-mqp55fna/index.html`, { headers: as('bob') })).status, 403);
+    assert.equal((await call('bob', 'GET', '/api/surveys/templates')).status, 403);
+    assert.ok((await call('alice', 'GET', '/api/custom-tools')).data.some((t) => t.slug === 'tool-mqp55fna'));
+    // 超级管理员设为全员开放后，bob 才能查看列表、访问外壳与接口
+    assert.equal((await call('alice', 'PATCH', '/api/custom-tools/tool-mqp55fna/distribution', { sharedAccess: true })).status, 200);
     const tools = (await call('bob', 'GET', '/api/custom-tools')).data;
     const survey = tools.find((t) => t.slug === 'tool-mqp55fna');
     assert.equal(survey.builtIn, true);
@@ -281,9 +288,13 @@ test('内置工具与问卷调研：工具清单、外壳页、模板、提交�
     assert.equal((await call('alice', 'DELETE', `/api/surveys/templates/${created.id}`)).status, 200);
 });
 
-test('会议考勤与操作激励快照：保存、筛选、改名、考勤核验、名单提取', async () => {
+test('会议考勤与操作激励快照：未开放拦截，开放后支持保存、筛选、改名、考勤核验、名单提取', async () => {
     const { call } = ctx;
-    // ── 会议考勤：普通用户即可维护 ──
+    assert.equal((await call('bob', 'GET', '/api/meeting-snapshots')).status, 403);
+    assert.equal((await call('bob', 'GET', '/api/operation-incentive-snapshots')).status, 403);
+    await call('alice', 'PATCH', '/api/custom-tools/tool-msf5b7nn/distribution', { sharedAccess: true });
+    await call('alice', 'PATCH', '/api/custom-tools/tool-ms4xb66s/distribution', { sharedAccess: true });
+    // ── 会议考勤：开放后普通用户即可维护 ──
     assert.deepEqual((await call('bob', 'GET', '/api/meeting-snapshots')).data.items, []);
     assert.equal((await call('bob', 'POST', '/api/meeting-snapshots', { title: 'x' })).status, 400);
     const attendees = [
@@ -340,8 +351,10 @@ test('会议考勤与操作激励快照：保存、筛选、改名、考勤核�
     assert.equal((await call('bob', 'DELETE', `/api/operation-incentive-snapshots/${inc.id}`)).status, 200);
 });
 
-test('奖励申报与评优：规则、草稿、发布、审批流、公示异议、归档、证据附件', async () => {
+test('奖励申报与评优：未开放拦截，开放后支持规则、草稿、发布、审批流、公示异议、归档、证据附件', async () => {
     const { call } = ctx;
+    assert.equal((await call('bob', 'GET', '/api/reward-program')).status, 403);
+    await call('alice', 'PATCH', '/api/custom-tools/reward-program/distribution', { sharedAccess: true });
     const home = (await call('bob', 'GET', '/api/reward-program')).data;
     assert.equal(home.isAdmin, false);
     assert.equal(home.username, 'bob');
@@ -431,9 +444,11 @@ test('奖励申报与评优：规则、草稿、发布、审批流、公示异�
     assert.equal((await call('alice', 'GET', '/api/reward-program/snapshot/settings')).status, 404);
 });
 
-test('负向事件管理：配置、人员、违规记录流转、口令、审计、证据、备份恢复', async () => {
+test('负向事件管理：未开放拦截，开放后支持配置、人员、违规记录流转、口令、审计、证据、备份恢复', async () => {
     const { call } = ctx;
     const base = '/api/department-reward-penalty';
+    assert.equal((await call('bob', 'POST', `${base}/records`, {})).status, 403);
+    await call('alice', 'PATCH', '/api/custom-tools/department-reward-penalty/distribution', { sharedAccess: true });
     const state0 = (await call('bob', 'GET', base)).data;
     assert.equal(state0.canEdit, false);
     assert.equal(state0.username, 'bob');
@@ -613,7 +628,10 @@ test('NetCare 数据探查工具：表目录（实时 + 种子 + 标注）、字
     }
 });
 
-test('内置技能里有 NetCare 数据（基座 Web 版：只读、只查业务库）', async () => {
+test('内置技能里有 NetCare 数据（未开放前普通用户 403，开放后可用）', async () => {
+    assert.equal((await ctx.call('bob', 'GET', '/api/agent-skills/netcare-data')).status, 403);
+    assert.equal((await ctx.call('alice', 'GET', '/api/agent-skills/netcare-data')).status, 200);
+    await ctx.call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'netcare-data', sharedAccess: true });
     const skill = (await ctx.call('bob', 'GET', '/api/agent-skills/netcare-data')).data.skill;
     assert.equal(skill.name, 'NetCare 数据');
     assert.match(skill.body, /netcare_tables/);
@@ -681,6 +699,11 @@ test('工具使用说明：平台页面、内置工具都能查到；没有的�
     assert.equal((await run({ tool: '光影大厅' })).ok, false);
     const found = await toolByName.get('find_platform_tools').run({ query: '需求' }, { identity: { username: 'bob' } });
     assert.match(found.content, /需求广场/);
+    // 若管理员关闭了某个内置工具的开放，普通用户对话里 read_tool_guide / find_platform_tools 也找不到
+    await ctx.call('alice', 'PATCH', '/api/custom-tools/reward-program/distribution', { sharedAccess: false });
+    assert.equal((await run({ tool: 'reward-program' })).ok, false);
+    assert.equal((await toolByName.get('read_tool_guide').run({ tool: 'reward-program' }, { identity: { username: 'alice', isSuper: true } })).ok, true);
+    await ctx.call('alice', 'PATCH', '/api/custom-tools/reward-program/distribution', { sharedAccess: true });
 });
 
 test('消息中心 AI 摘要：警告级消息后台生成一句话摘要，所有收件人的那份一起写回；普通消息和模型失败不写', async () => {

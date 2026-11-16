@@ -2,13 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config, STATIC_DIR } from '../config.js';
-import { withShared, setShared } from '../services/distribution-service.js';
+import { filterCapabilitiesForUser, setShared } from '../services/distribution-service.js';
 import { listSkills } from '../services/skill-service.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { pushLog, listLogs } from '../core/log-ring.js';
 import { getSetting as kvGet, saveSetting as kvSet } from '../services/system-service.js';
 import { getOnboardingStatus, applyOnboardingDecision } from '../services/onboarding-service.js';
-import { listScripts as listUivScripts } from '../services/uiv-service.js';
+import { listScripts as listUivScripts, uivScriptOrigin, uivSiteLabel } from '../services/uiv-service.js';
 import { platformSummary, trackToolOpen } from '../services/platform-metrics-service.js';
 
 const DEFAULT_IDENTITY = {
@@ -223,33 +223,6 @@ function normalizeBootstrapPath(rawPath) {
         return null;
     }
     return parsed.pathname + parsed.search;
-}
-
-function uivScriptOrigin(script) {
-    const fromCode = (code) => (String(code || '').match(/URL:\s*(https?:\/\/[^\s]+)/) || [])[1]
-        || (String(code || '').match(/fetch\("([^"]+)"/) || [])[1]
-        || '';
-    for (const candidate of [script?.openUrl, script?.url, fromCode(script?.code), fromCode(script?.consoleCode)]) {
-        if (!candidate) continue;
-        try {
-            const parsed = new URL(candidate);
-            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;
-        } catch {
-            // Try next candidate
-        }
-    }
-    return '';
-}
-
-function uivSiteLabel(origin, lang) {
-    let host = '';
-    try { host = new URL(origin).hostname.toLowerCase(); } catch { host = origin; }
-    const en = lang === 'en-US';
-    if (host === 'netcare.huawei.com') return en ? 'NetCare China' : 'NetCare 中国';
-    if (host === 'netcare-ae.gts.huawei.com') return en ? 'NetCare Middle East' : 'NetCare 中东';
-    if (host === 'netcare-de.gts.huawei.com') return en ? 'NetCare Germany' : 'NetCare 德国';
-    if (host.includes('datafab')) return 'DataFab';
-    return host || 'Web';
 }
 
 function safeStaticAssetPath(rel) {
@@ -480,8 +453,7 @@ export async function platformShellRoutes(fastify) {
                 items: floatItems,
             });
         }
-        const marked = await Promise.all(groups.map(async (group) => ({ ...group, items: await withShared('cap', group.items || []) })));
-        return { groups: marked, generatedAt: new Date().toISOString() };
+        return { groups: await filterCapabilitiesForUser(groups, resolveRequestIdentity(req)), generatedAt: new Date().toISOString() };
     });
 
     fastify.get('/api/home/page-updates', async () => {

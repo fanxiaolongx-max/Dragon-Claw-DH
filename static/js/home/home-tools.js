@@ -1612,7 +1612,10 @@ window.HomeTools = { marketOpened: false };
                         icon: iconInput.value.trim() || '🧩',
                         description: descriptionInput.value.trim(),
                         descriptionEn: descriptionEnInput.value.trim(),
-                        tags: tagsInput.value.split(/[,，]/).map(tag => tag.trim()).filter(Boolean).slice(0, 8)
+                        tags: tagsInput.value.split(/[,，]/).map(tag => tag.trim()).filter(Boolean).slice(0, 8),
+                        ...(!currentUpdateTarget && shareCheckbox && isSuperAdminUser()
+                            ? { visibility: shareCheckbox.checked ? 'public' : 'private' }
+                            : {})
                     };
                     if (isZip) {
                         const bytes = new Uint8Array(await file.arrayBuffer());

@@ -571,13 +571,40 @@
         bar.style.cssText = 'position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483600;padding:6px 14px;border-radius:999px;background:#b45309;color:#fff;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.3);pointer-events:none';
         document.body.appendChild(bar);
     }
+    function renderBuiltinDenied(slug) {
+        if (!document.body) return;
+        document.body.innerHTML = '';
+        const box = document.createElement('div');
+        box.style.cssText = 'max-width:460px;margin:12vh auto;padding:28px;border-radius:14px;background:#fff;border:1px solid #e3e6eb;box-shadow:0 10px 30px rgba(16,43,71,.08);text-align:center;font:14px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#1d2b3a';
+        const h1 = document.createElement('h2');
+        h1.style.cssText = 'margin:0 0 8px;font-size:18px';
+        h1.textContent = '内置工具尚未开放';
+        const p = document.createElement('p');
+        p.style.cssText = 'margin:0 0 18px;color:#5b6573';
+        p.textContent = `工具「${slug}」当前未全员开放，仅超级管理员可使用。`;
+        const link = document.createElement('a');
+        link.href = dhResolveUrl('/');
+        link.style.cssText = 'display:inline-block;padding:8px 16px;border-radius:8px;background:#2f6fae;color:#fff;text-decoration:none;font-weight:600';
+        link.textContent = '← 返回首页';
+        box.append(h1, p, link);
+        document.body.appendChild(box);
+    }
     function mountDebugWidgetAssets() {
         if (IS_401_PAGE) return;
-        const checkMe = () => window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then((me) => {
+        const builtinSlug = (dhStripBase(window.location.pathname || '').match(/^\/builtin-tools\/([a-z0-9_-]+)(?:\/|$)/i) || [])[1]?.toLowerCase() || '';
+        const checkMe = () => window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then(async (me) => {
             window.DH_ME = me || null;
             if (me && me.authRequired && !me.identified && !me.memoryMode && !me.openAdmin) {
                 redirectTo401();
                 return;
+            }
+            if (builtinSlug && me && !me.isSuper && !me.isAdmin) {
+                const accessOk = await window.fetch(`/api/custom-tools/${encodeURIComponent(builtinSlug)}/meta`).then((r) => r.ok).catch(() => false);
+                if (!accessOk) {
+                    clearBootMask();
+                    renderBuiltinDenied(builtinSlug);
+                    return;
+                }
             }
             clearBootMask();
             if (window !== window.top) return; // Keep widget strictly on top frame to avoid duplicate floating pills

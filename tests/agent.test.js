@@ -158,15 +158,30 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
             assert.equal(out.ok, true, `应放行：${sql} → ${out.content}`);
         }
 
-        // ── 3. 技能：内置技能可见；保存需要管理员；@技能 把步骤带进系统提示 ──
-        const skills = await (await fetch(`${url}/api/agent-skills`, { headers: as('bob') })).json();
-        assert.ok(skills.items.some((s) => s.id === 'data-check' && s.builtIn));
+        // ── 3. 技能：未全员开放前仅超级管理员可见/可用；开放后全员可在列表和 @技能 中使用 ──
+        const aliceSkills = await (await fetch(`${url}/api/agent-skills`, { headers: as('alice') })).json();
+        assert.ok(aliceSkills.items.some((s) => s.id === 'data-check' && s.builtIn));
+        const bobSkills0 = await (await fetch(`${url}/api/agent-skills`, { headers: as('bob') })).json();
+        assert.equal(bobSkills0.items.some((s) => s.id === 'data-check'), false, '未开放的内置技能普通用户不可见');
         const md = '---\nid: weekly-brief\nname: 周报摘要\ndescription: 把本周指标变化整理成三句话\nicon: 🗒\n---\n先调用 get_report_overview，再输出三句话摘要，口令：蓝莓松饼。';
         assert.equal((await fetch(`${url}/api/agent-skills`, { method: 'POST', headers: json(as('bob')), body: JSON.stringify({ skillMd: md }) })).status, 403);
         const savedSkill = await fetch(`${url}/api/agent-skills`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ skillMd: md }) });
         assert.equal(savedSkill.status, 200);
         assert.equal((await fetch(`${url}/api/agent-skills`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ skillMd: md }) })).status, 409, '重名不带 overwrite 要提示');
         assert.equal((await fetch(`${url}/api/agent-skills`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ skillMd: md.replace('weekly-brief', 'data-check') }) })).status, 409, '不能占用内置技能标识');
+        // 未开放前：bob 在 /api/ai/skills、GET /:id、export 以及对话 @weekly-brief 中全部被拦
+        assert.equal((await (await fetch(`${url}/api/ai/skills`, { headers: as('bob') })).json()).items.some((s) => s.id === 'weekly-brief'), false);
+        assert.equal((await fetch(`${url}/api/agent-skills/weekly-brief`, { headers: as('bob') })).status, 403);
+        assert.equal((await fetch(`${url}/api/agent-skills/weekly-brief/export`, { headers: as('bob') })).status, 403);
+        mock.aiRequests.length = 0;
+        mock.aiScript.push({ text: '好的。' });
+        const blockedSkillEv = await chat('bob', { messages: [{ role: 'user', content: '@weekly-brief 给我本周摘要' }] });
+        assert.equal(blockedSkillEv.some((e) => e.type === 'skills'), false, '未开放技能不能通过 @ 注入对话');
+        assert.doesNotMatch(streamReqs()[0].messages[0].content, /蓝莓松饼/);
+
+        // alice 将 weekly-brief 与 data-check 设为全员开放后，bob 才能使用
+        assert.equal((await fetch(`${url}/api/distribution`, { method: 'PATCH', headers: json(as('alice')), body: JSON.stringify({ kind: 'skill', id: 'weekly-brief', sharedAccess: true }) })).status, 200);
+        assert.equal((await fetch(`${url}/api/distribution`, { method: 'PATCH', headers: json(as('alice')), body: JSON.stringify({ kind: 'skill', id: 'data-check', sharedAccess: true }) })).status, 200);
         assert.ok((await (await fetch(`${url}/api/ai/skills`, { headers: as('bob') })).json()).items.some((s) => s.id === 'weekly-brief'));
 
         mock.aiRequests.length = 0;
@@ -187,12 +202,18 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const pkgImported = (await (await skillPost('/import', { archiveBase64: v1 })).json()).skill;
         assert.deepEqual(pkgImported.files.map((f) => [f.path, !!f.binary, f.size]).sort(), [['assets/logo.png', true, 8], ['references/guide.md', false, 29], ['scripts/run.py', false, 12]]);
         assert.equal(pkgImported.files.find((f) => f.binary).content, '', '二进制内容不发给界面');
-        assert.equal((await (await fetch(`${url}/api/agent-skills`, { headers: as('bob') })).json()).items.find((s) => s.id === 'pdf-tools').fileCount, 3);
         const readSkill = TOOLS.find((t) => t.name === 'read_skill');
-        assert.match((await readSkill.run({ id: 'pdf-tools' }, {})).content, /#### 技能包文件\n[\s\S]*- assets\/logo\.png（二进制，8 B）[\s\S]*当前环境不能执行脚本/);
-        assert.match((await readSkill.run({ id: '@pdf-tools', file: 'references/guide.md' }, {})).content, /海盐焦糖/);
-        assert.match((await readSkill.run({ id: 'pdf-tools', file: 'assets/logo.png' }, {})).content, /二进制文件/);
-        assert.equal((await readSkill.run({ id: 'pdf-tools', file: '../../etc/passwd' }, {})).ok, false);
+        assert.equal((await readSkill.run({ id: 'pdf-tools' }, { identity: { username: 'bob', isAdmin: false } })).ok, false, '未开放前普通用户不能让 AI read_skill 读取');
+        assert.equal((await readSkill.run({ id: 'pdf-tools', file: 'references/guide.md' }, { identity: { username: 'bob', isAdmin: false } })).ok, false, '未开放前不能读技能包附件');
+        assert.equal((await readSkill.run({ id: 'pdf-tools' }, { identity: { username: 'alice', isAdmin: true } })).ok, true, '超级管理员可直接 read_skill');
+        assert.equal((await fetch(`${url}/api/agent-skills/pdf-tools/export`, { headers: as('bob') })).status, 403);
+        // 开放 pdf-tools 后 bob 才能查看、导出与 read_skill
+        assert.equal((await fetch(`${url}/api/distribution`, { method: 'PATCH', headers: json(as('alice')), body: JSON.stringify({ kind: 'skill', id: 'pdf-tools', sharedAccess: true }) })).status, 200);
+        assert.equal((await (await fetch(`${url}/api/agent-skills`, { headers: as('bob') })).json()).items.find((s) => s.id === 'pdf-tools').fileCount, 3);
+        assert.match((await readSkill.run({ id: 'pdf-tools' }, { identity: { username: 'bob', isAdmin: false } })).content, /#### 技能包文件\n[\s\S]*- assets\/logo\.png（二进制，8 B）[\s\S]*当前环境不能执行脚本/);
+        assert.match((await readSkill.run({ id: '@pdf-tools', file: 'references/guide.md' }, { identity: { username: 'bob', isAdmin: false } })).content, /海盐焦糖/);
+        assert.match((await readSkill.run({ id: 'pdf-tools', file: 'assets/logo.png' }, { identity: { username: 'bob', isAdmin: false } })).content, /二进制文件/);
+        assert.equal((await readSkill.run({ id: 'pdf-tools', file: '../../etc/passwd' }, { identity: { username: 'bob', isAdmin: false } })).ok, false);
         mock.aiRequests.length = 0;
         mock.aiScript.push({ text: '好的。' });
         await chat('bob', { messages: [{ role: 'user', content: '@pdf-tools 提取文字' }] });
@@ -301,6 +322,17 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const ev6 = await chat('alice', { messages: [{ role: 'user', content: '保存这个脚本' }] });
         assert.deepEqual(ev6.filter((e) => e.type === 'tool_result').map((e) => e.ok), [true, true]);
         assert.match(streamReqs()[2].messages.filter((m) => m.role === 'tool').at(-1).content, /"name":"工单列表"/);
+        // 插件/抓取脚本未开放前：bob 在对话与接口里均看不到；开放 cap:float:https://example.invalid 后才可见
+        const listScriptsTool = TOOLS.find((t) => t.name === 'list_uiv_scripts');
+        const readScriptTool = TOOLS.find((t) => t.name === 'read_uiv_script');
+        const aliceListed = JSON.parse((await listScriptsTool.run({}, { identity: { username: 'alice', isAdmin: true } })).content);
+        const scriptId = aliceListed.scripts[0].id;
+        assert.equal(JSON.parse((await listScriptsTool.run({}, { identity: { username: 'bob', isAdmin: false } })).content).scripts.length, 0);
+        assert.equal((await readScriptTool.run({ id: scriptId }, { identity: { username: 'bob', isAdmin: false } })).ok, false);
+        assert.equal((await fetch(`${url}/api/distribution`, { method: 'PATCH', headers: json(as('alice')), body: JSON.stringify({ kind: 'cap', id: 'float:https://example.invalid', sharedAccess: true }) })).status, 200);
+        assert.equal(JSON.parse((await listScriptsTool.run({}, { identity: { username: 'bob', isAdmin: false } })).content).scripts.length, 1);
+        assert.equal((await readScriptTool.run({ id: scriptId }, { identity: { username: 'bob', isAdmin: false } })).ok, true);
+        assert.equal((await fetch(`${url}/api/uiv/backup`, { headers: as('bob') })).status, 403);
 
         // 输出被长度上限截断时自动续写
         mock.aiRequests.length = 0;

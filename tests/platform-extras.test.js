@@ -119,11 +119,13 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         // 设置页同页的其他区块：返回空结果，不报错
         assert.deepEqual((await call('alice', 'GET', '/api/agent-mcp/servers')).data.servers, []);
 
-        // ── 4. 技能版本历史：覆盖前自动留一份，可以查看并回退 ──
+        // ── 4. 技能版本历史：覆盖前自动留一份，开放给全员后普通用户可查看历史但不能回退 ──
         const skillMd = (body) => `---\nid: weekly-brief\nname: 周报\ndescription: 写周报\n---\n${body}`;
         assert.equal((await call('alice', 'POST', '/api/agent-skills', { skillMd: skillMd('第一版步骤') })).status, 200);
         assert.equal((await call('alice', 'GET', '/api/agent-skills/weekly-brief/backups')).data.backups.length, 0);
         assert.equal((await call('alice', 'POST', '/api/agent-skills', { skillMd: skillMd('第二版步骤'), overwrite: true })).status, 200);
+        assert.equal((await call('bob', 'GET', '/api/agent-skills/weekly-brief/backups')).status, 403, '未开放前普通用户不能查看备份');
+        await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'weekly-brief', sharedAccess: true });
         const backups = (await call('bob', 'GET', '/api/agent-skills/weekly-brief/backups')).data.backups;
         assert.equal(backups.length, 1);
         assert.equal(backups[0].name, '周报');
@@ -234,20 +236,27 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         }
         assert.equal((await call('bob', 'GET', '/api/db-explorer/databases')).status, 403);
 
-        // ── 9b. 全员开放：超级管理员可开可关，状态体现在列表里；普通用户 403，不存在的条目 404 ──
-        const skillId = (await call('alice', 'GET', '/api/agent-skills')).data.items[0].id;
+        // ── 9b. 全员开放：未开放前仅超级管理员可见与调用，开放后非超管方可看到并调用 ──
+        const skillId = (await call('alice', 'GET', '/api/agent-skills')).data.items.find((i) => i.id !== 'weekly-brief').id;
+        assert.equal((await call('bob', 'GET', `/api/agent-skills/${skillId}`)).status, 403);
         assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: true })).status, 200);
         assert.equal((await call('alice', 'GET', '/api/agent-skills')).data.items.find((i) => i.id === skillId).sharedAccess, true);
+        assert.equal((await call('bob', 'GET', `/api/agent-skills/${skillId}`)).status, 200);
         assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: false })).status, 200);
         assert.equal((await call('alice', 'GET', '/api/agent-skills')).data.items.find((i) => i.id === skillId).sharedAccess, false);
+        assert.equal((await call('bob', 'GET', '/api/agent-skills')).data.items.some((i) => i.id === skillId), false);
+        assert.equal((await call('bob', 'GET', `/api/agent-skills/${skillId}`)).status, 403);
         assert.equal((await call('bob', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: true })).status, 403);
         assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'no-such-skill', sharedAccess: true })).status, 404);
         assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: 'yes' })).status, 400);
         const builtinTool = (await call('alice', 'GET', '/api/custom-tools')).data.find((t) => t.builtIn);
         if (builtinTool) {
+            assert.equal((await call('bob', 'GET', `/api/custom-tools/${builtinTool.slug}/meta`)).status, 404);
             assert.equal((await call('alice', 'PATCH', `/api/custom-tools/${builtinTool.slug}/distribution`, { sharedAccess: true })).status, 200);
             assert.equal((await call('alice', 'GET', '/api/custom-tools')).data.find((t) => t.slug === builtinTool.slug).sharedAccess, true);
+            assert.equal((await call('bob', 'GET', `/api/custom-tools/${builtinTool.slug}/meta`)).status, 200);
             assert.equal((await call('bob', 'PATCH', `/api/custom-tools/${builtinTool.slug}/distribution`, { sharedAccess: false })).status, 403);
+            await call('alice', 'PATCH', `/api/custom-tools/${builtinTool.slug}/distribution`, { sharedAccess: false });
         }
 
         // ── 10. 请求体不是合法 JSON：返回 422（规范 §8.4），不是 500 ──
@@ -320,6 +329,16 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal(prefMiss.status, 200);
         assert.equal(prefMiss.data, null);
 
+        // ── 14. 插件与脚本全员开放真控：预置 43 个抓取脚本未开放前普通用户一个都看不到；开放指定站点后只返回该站点脚本 ──
+        assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.scripts.length, 0);
+        assert.equal((await call('bob', 'GET', '/api/home/capabilities')).data.groups.length, 0);
+        await call('alice', 'POST', '/api/uiv/scripts', [{ id: 's-cap-check', name: '示例抓取', url: 'https://cap.example.invalid/api/list', method: 'GET', code: 'fetch("https://cap.example.invalid/api/list")' }]);
+        assert.equal((await call('alice', 'GET', '/api/uiv/scripts')).data.scripts.length, 44);
+        assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.scripts.length, 0);
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'cap', id: 'float:https://cap.example.invalid', sharedAccess: true })).status, 200);
+        assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.scripts.length, 1);
+        assert.equal((await call('bob', 'GET', '/api/home/capabilities')).data.groups[0].items[0].id, 'float:https://cap.example.invalid');
+
         const groupsRes = await call('bob', 'GET', '/api/sla/groups');
         assert.equal(groupsRes.status, 200);
         assert.ok(groupsRes.data.length >= 9);
@@ -336,13 +355,16 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal(snapGet.data.id, snapSave.data.id);
         assert.equal((await call('bob', 'GET', '/api/sla/snapshots/no-such-id')).status, 404);
 
-        // ── 14. UIV 分类删除：除 默认分类 外都可删且刷新不再复活 ──
+        // ── 15. UIV 分类删除：除 默认分类 外都可删且刷新不再复活；非超管只见已开放站点关联分类 ──
         assert.equal((await call('alice', 'POST', '/api/uiv/categories', { name: 'NetCare' })).status, 201);
+        assert.ok((await call('alice', 'GET', '/api/uiv/categories')).data.includes('NetCare'));
+        assert.equal((await call('alice', 'PATCH', '/api/uiv/scripts/s-cap-check/category', { category: 'NetCare' })).status, 200);
         assert.ok((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'));
         const delNetCare = await call('alice', 'DELETE', '/api/uiv/categories/NetCare');
         assert.equal(delNetCare.status, 200);
         assert.equal(delNetCare.data.categories.includes('NetCare'), false);
-        assert.equal((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'), false, '刷新后仍保持已删除');
+        assert.equal((await call('alice', 'GET', '/api/uiv/categories')).data.includes('NetCare'), false, '刷新后仍保持已删除');
+        assert.equal((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'), false);
         assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.categories.includes('NetCare'), false);
         assert.equal((await call('alice', 'DELETE', `/api/uiv/categories/${encodeURIComponent('默认分类')}`)).status, 400);
     } finally {

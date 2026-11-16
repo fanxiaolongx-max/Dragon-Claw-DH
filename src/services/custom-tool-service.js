@@ -5,8 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STATIC_DIR } from '../config.js';
 import { BusinessError, NotFoundError } from '../core/errors.js';
+import { isSameUserId } from '../core/access.js';
 import { selectTable, upsertRow, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import { optionalDep } from '../core/optional.js';
+import { isSuperUser, isShared, sharedKeys } from './distribution-service.js';
 
 const MAX_HTML = 4 * 1024 * 1024;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
@@ -123,16 +125,29 @@ export const builtinTool = (slug) => BUILTIN.get(String(slug || '')) || null;
 export const listBuiltinTools = () => [...BUILTIN.values()];
 
 const LIST_COLS = ['slug', 'owner_id', 'visibility', 'name', 'name_en', 'description', 'description_en', 'icon', 'tags_json', 'created_at', 'updated_at'];
-const canSee = (row, identity) => row.visibility === 'public' || identity?.isAdmin || row.owner_id === identity?.username;
+const canSee = (row, identity) => row.visibility === 'public' || isSuperUser(identity) || (Boolean(identity?.username) && isSameUserId(row.owner_id, identity.username));
 
 export async function listCustomTools(identity) {
-    const rows = await selectTable('custom_tools', {
-        columns: LIST_COLS,
-        orderBySql: '`updated_at` DESC',
-        limit: 500,
-        memSort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
-    });
-    return [...listBuiltinTools(), ...rows.filter((r) => canSee(r, identity) && !BUILTIN.has(r.slug)).map(toItem)];
+    const [rows, keys] = await Promise.all([
+        selectTable('custom_tools', {
+            columns: LIST_COLS,
+            orderBySql: '`updated_at` DESC',
+            limit: 500,
+            memSort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
+        }),
+        sharedKeys(),
+    ]);
+    const superUser = isSuperUser(identity);
+    const builtins = listBuiltinTools()
+        .map((tool) => ({ ...tool, sharedAccess: keys.has(`tool:${tool.slug}`) }))
+        .filter((tool) => superUser || tool.sharedAccess);
+    const custom = rows
+        .filter((r) => canSee(r, identity) && !BUILTIN.has(r.slug))
+        .map((r) => {
+            const item = toItem(r);
+            return { ...item, sharedAccess: item.visibility === 'public' };
+        });
+    return [...builtins, ...custom];
 }
 
 async function getRow(slug, columns = ['*']) {
@@ -143,10 +158,16 @@ async function getRow(slug, columns = ['*']) {
 }
 
 export async function getCustomTool(slug, identity) {
-    if (BUILTIN.has(String(slug || ''))) return { ...BUILTIN.get(String(slug)), html: '' };
-    const row = await getRow(slug);
+    const key = String(slug || '').toLowerCase();
+    if (BUILTIN.has(key)) {
+        const shared = await isShared('tool', key);
+        if (!isSuperUser(identity) && !shared) return null;
+        return { ...BUILTIN.get(key), sharedAccess: shared, html: '' };
+    }
+    const row = await getRow(key);
     if (!row || !canSee(row, identity)) return null;
-    return { ...toItem(row), html: row.html || '' };
+    const item = toItem(row);
+    return { ...item, sharedAccess: item.visibility === 'public', html: row.html || '' };
 }
 
 export async function saveCustomTool(input = {}, identity) {

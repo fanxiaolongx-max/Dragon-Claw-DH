@@ -9,7 +9,8 @@ import { listSkills, getSkill, saveSkill, skillFilesNote, readSkillFile } from '
 import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
-import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory } from '../services/uiv-service.js';
+import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory, uivScriptOrigin } from '../services/uiv-service.js';
+import { filterSkillsForUser, filterUivScriptsForUser } from '../services/distribution-service.js';
 import { sendExpediteNotification } from '../services/report-service.js';
 import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
@@ -379,8 +380,12 @@ export const TOOLS = [
         name: 'read_skill',
         description: '读取某个技能的完整步骤。技能目录见系统提示；任务与某个技能相符时先读它再执行。技能列出“技能包文件”时，带上 file 读取其中一个文件。',
         parameters: { type: 'object', properties: { id: { type: 'string', description: '技能标识' }, file: { type: 'string', description: '可选：技能包内的文件路径（如 references/guide.md），只读这个文件' } }, required: ['id'] },
-        async run(args) {
+        async run(args, ctx) {
             const skillId = String(args.id || '').replace(/^@/, '').toLowerCase();
+            const visible = await filterSkillsForUser(await listSkills().catch(() => []), ctx?.identity);
+            if (!visible.some((s) => s.id === skillId)) {
+                return { ok: false, summary: '技能不存在或未开放', content: `没有可用技能 ${args.id}（未全员开放的技能仅超级管理员可用）。可用技能：${visible.map((s) => s.id).join('、') || '暂无'}` };
+            }
             if (args.file) {
                 const found = await readSkillFile(skillId, args.file);
                 if (found?.missing) return { ok: false, summary: '文件不存在', content: `@${skillId} 的技能包里没有 ${args.file}。${found.files.length ? `包内文件：${found.files.join('、')}` : '这个技能没有附带文件。'}` };
@@ -388,7 +393,7 @@ export const TOOLS = [
                 if (found) return { ok: true, summary: `已读取 ${found.path}`, content: `# @${skillId} / ${found.path}\n\`\`\`\n${found.content}\n\`\`\`${found.truncated ? '\n（内容过长，已截断）' : ''}` };
             }
             const skill = await getSkill(skillId);
-            if (!skill) return { ok: false, summary: '技能不存在', content: `没有标识为 ${args.id} 的技能。可用技能：${(await listSkills()).map((s) => s.id).join('、')}` };
+            if (!skill) return { ok: false, summary: '技能不存在', content: `没有标识为 ${args.id} 的技能。可用技能：${visible.map((s) => s.id).join('、') || '暂无'}` };
             return { ok: true, summary: skill.name, content: `# ${skill.name}（@${skill.id}）\n${skill.description}\n\n${skill.body}${skillFilesNote(skill)}` };
         },
     },
@@ -526,20 +531,23 @@ export const TOOLS = [
         name: 'list_uiv_scripts',
         description: '列出「数据抓取」脚本仓库里的脚本（名称、分类、目标地址）。用户问有哪些抓取脚本、某个系统的数据怎么抓时调用。',
         parameters: { type: 'object', properties: { keyword: { type: 'string', description: '按名称、地址或分类筛选，可选' } } },
-        async run(args) {
+        async run(args, ctx) {
             const q = String(args.keyword || '').toLowerCase();
-            const [scripts, categories] = await Promise.all([listScripts(), listCategories().catch(() => [])]);
+            const [allScripts, categories] = await Promise.all([listScripts(), listCategories().catch(() => [])]);
+            const scripts = await filterUivScriptsForUser(allScripts, ctx?.identity, uivScriptOrigin);
             const hit = scripts.filter((s) => !q || `${s.name} ${s.url} ${s.category}`.toLowerCase().includes(q));
-            return { ok: true, summary: `${hit.length} 个脚本`, content: JSON.stringify({ total: scripts.length, categories, scripts: hit.slice(0, 100).map((s) => ({ id: s.id, name: s.name, category: s.category, url: String(s.url || '').slice(0, 200), method: s.method || '' })) }) };
+            const visibleCats = ctx?.identity?.isSuper || ctx?.identity?.isAdmin ? categories : [...new Set(scripts.map((s) => s.category || '默认分类'))];
+            return { ok: true, summary: `${hit.length} 个脚本`, content: JSON.stringify({ total: scripts.length, categories: visibleCats, scripts: hit.slice(0, 100).map((s) => ({ id: s.id, name: s.name, category: s.category, url: String(s.url || '').slice(0, 200), method: s.method || '' })) }) };
         },
     },
     {
         name: 'read_uiv_script',
         description: '读取某个抓取脚本的完整内容（请求地址、方法、请求头、请求体、fetch 代码）。',
         parameters: { type: 'object', properties: { id: { type: 'string', description: '脚本 id（先用 list_uiv_scripts 查）' } }, required: ['id'] },
-        async run(args) {
-            const script = (await listScripts()).find((s) => String(s.id) === String(args.id));
-            if (!script) return { ok: false, summary: '脚本不存在', content: `没有 id 为 ${args.id} 的脚本` };
+        async run(args, ctx) {
+            const visible = await filterUivScriptsForUser(await listScripts(), ctx?.identity, uivScriptOrigin);
+            const script = visible.find((s) => String(s.id) === String(args.id));
+            if (!script) return { ok: false, summary: '脚本不存在或未开放', content: `没有可用抓取脚本 id=${args.id}（未全员开放的插件脚本仅超级管理员可用）` };
             // 请求头里的会话凭据不给模型看
             const safe = JSON.parse(JSON.stringify(script, (k, v) => (/^(cookie|authorization|x-csrf-token|x-auth-token|token)$/i.test(k) && typeof v === 'string' ? '[已隐藏]' : v)));
             let content = JSON.stringify(safe);

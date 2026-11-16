@@ -4,6 +4,7 @@ import { pushLog } from '../core/log-ring.js';
 import { hasBusinessDatasource } from '../dao/scoped.js';
 import { config } from '../config.js';
 import { listSkills, getSkill, skillFilesNote } from '../services/skill-service.js';
+import { filterSkillsForUser } from '../services/distribution-service.js';
 import { listMemories } from '../services/memory-service.js';
 import { followupPrompt } from '../services/followup-service.js';
 import { streamModel } from './provider.js';
@@ -83,7 +84,8 @@ const allowedFollowups = (tools) => tools.some((t) => t.name === 'followup_creat
 export async function runAgent({ settings, identity, history, skillIds = [], language = 'zh', emit = () => {}, signal, summary = '', profiles = [], autoSwitch = false, secrets = [], unattended = false, sessionId = '' }) {
     const started = Date.now();
     const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content || '';
-    const catalog = await listSkills().catch(() => []);
+    const allSkills = await listSkills().catch(() => []);
+    const catalog = await filterSkillsForUser(allSkills, identity);
     const known = new Set(catalog.map((s) => s.id));
     const mentioned = [...String(lastUser).matchAll(/(?<![A-Za-z0-9_.\/@-])@([a-z][a-z0-9-]{1,40})\b/g)].map((m) => m[1]);
     const wanted = [...new Set([...skillIds.map((s) => String(s).toLowerCase()), ...mentioned])].filter((id) => known.has(id)).slice(0, 4);

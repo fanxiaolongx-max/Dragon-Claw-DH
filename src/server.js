@@ -31,6 +31,8 @@ import { vaultRoutes } from './routes/vault.js';
 import { aiBiRoutes } from './routes/ai-bi.js';
 import { recordAuditOnce, clientIp } from './services/audit-service.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
+import { isSuperUser, isShared, isAnyShared } from './services/distribution-service.js';
+import { builtinTool } from './services/custom-tool-service.js';
 
 const gzipAsync = promisify(zlib.gzip);
 const DH_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+(?=\/|$|\?)/i;
@@ -238,11 +240,54 @@ export async function createServer() {
         requestContext.run({ requestId, userId: identity.username }, done);
     });
 
-    // 权限：先判定是否管理员，未登录生产请求直接拦 401，再按桌面版同款规则拦截非管理员写操作
+    const builtinApiAllowed = async (apiPath, method) => {
+        if (/^\/department-reward-penalty(?:\/|$)/.test(apiPath)) {
+            if (method === 'GET' && /^\/department-reward-penalty\/?$/.test(apiPath)) {
+                return isAnyShared('tool', ['department-reward-penalty', 'tool-ms4xb66s']);
+            }
+            return isShared('tool', 'department-reward-penalty');
+        }
+        if (/^\/reward-program(?:\/|$)/.test(apiPath)) return isShared('tool', 'reward-program');
+        if (/^\/surveys(?:\/|$)/.test(apiPath)) return isShared('tool', 'tool-mqp55fna');
+        if (/^\/meeting-snapshots(?:\/|$)/.test(apiPath)) {
+            if (/^\/meeting-snapshots\/(?:attendance-check|batch-attendance-check|extract-roster)(?:\/|$)/.test(apiPath)) {
+                return isAnyShared('tool', ['tool-msf5b7nn', 'reward-program', 'department-reward-penalty', 'tool-ms4xb66s']);
+            }
+            return isShared('tool', 'tool-msf5b7nn');
+        }
+        if (/^\/(?:operation-incentive-snapshots|incentive-snapshots)(?:\/|$)/.test(apiPath)) {
+            if (/\/extract-roster(?:\/|$)/.test(apiPath)) {
+                return isAnyShared('tool', ['tool-ms4xb66s', 'department-reward-penalty']);
+            }
+            return isShared('tool', 'tool-ms4xb66s');
+        }
+        return true;
+    };
+
+    // 权限：先判定是否管理员，未登录生产请求直接拦 401，再按桌面版同款规则拦截非管理员写操作，
+    // 以及未「全员开放」的内置工具路由（含静态页面与业务接口）
     app.addHook('preHandler', async (req, reply) => {
+        const pathname = String(req.url || '/').split('?')[0];
         const apiPath = apiPathOf(req.url);
-        if (apiPath === null || /^\/(?:healthz|health|ping)$/.test(apiPath)) return;
         const identity = req.userIdentity;
+        if (apiPath === null) {
+            const bm = pathname.match(/^\/builtin-tools\/([a-z0-9_-]+)(?:\/|$)/i);
+            const bSlug = bm?.[1]?.toLowerCase();
+            if (bSlug && builtinTool(bSlug)) {
+                if (await resolveAdmin(identity)) {
+                    identity.isAdmin = true;
+                    identity.isSuper = true;
+                    identity.role = 'admin';
+                }
+                if (identity.identified && !isSuperUser(identity) && !(await isShared('tool', bSlug))) {
+                    return reply.code(403).type('text/html; charset=utf-8').send(
+                        phase2PlaceholderHtml('内置工具未开放').replace(/Web 版暂未开放[^<]*/g, '该内置工具尚未向全员开放，仅超级管理员可用'),
+                    );
+                }
+            }
+            return;
+        }
+        if (/^\/(?:healthz|health|ping)$/.test(apiPath)) return;
         if (await resolveAdmin(identity)) {
             identity.isAdmin = true;
             identity.isSuper = true;
@@ -259,6 +304,10 @@ export async function createServer() {
         if (reason) {
             pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 被拒绝：${reason}`, requestId: req.requestId, userId: identity.username });
             return reply.code(403).send({ error: reason, code: 'ADMIN_REQUIRED', requestId: req.requestId });
+        }
+        if (!isSuperUser(identity) && !(await builtinApiAllowed(apiPath, req.method))) {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 被拒绝：内置工具尚未向全员开放`, requestId: req.requestId, userId: identity.username });
+            return reply.code(403).send({ error: '该内置工具尚未向全员开放，仅超级管理员可用', code: 'TOOL_NOT_SHARED', requestId: req.requestId });
         }
     });
 
