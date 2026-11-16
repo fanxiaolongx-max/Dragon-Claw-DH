@@ -234,6 +234,22 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         }
         assert.equal((await call('bob', 'GET', '/api/db-explorer/databases')).status, 403);
 
+        // ── 9b. 全员开放：超级管理员可开可关，状态体现在列表里；普通用户 403，不存在的条目 404 ──
+        const skillId = (await call('alice', 'GET', '/api/agent-skills')).data.items[0].id;
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: true })).status, 200);
+        assert.equal((await call('alice', 'GET', '/api/agent-skills')).data.items.find((i) => i.id === skillId).sharedAccess, true);
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: false })).status, 200);
+        assert.equal((await call('alice', 'GET', '/api/agent-skills')).data.items.find((i) => i.id === skillId).sharedAccess, false);
+        assert.equal((await call('bob', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: true })).status, 403);
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'no-such-skill', sharedAccess: true })).status, 404);
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: skillId, sharedAccess: 'yes' })).status, 400);
+        const builtinTool = (await call('alice', 'GET', '/api/custom-tools')).data.find((t) => t.builtIn);
+        if (builtinTool) {
+            assert.equal((await call('alice', 'PATCH', `/api/custom-tools/${builtinTool.slug}/distribution`, { sharedAccess: true })).status, 200);
+            assert.equal((await call('alice', 'GET', '/api/custom-tools')).data.find((t) => t.slug === builtinTool.slug).sharedAccess, true);
+            assert.equal((await call('bob', 'PATCH', `/api/custom-tools/${builtinTool.slug}/distribution`, { sharedAccess: false })).status, 403);
+        }
+
         // ── 10. 请求体不是合法 JSON：返回 422（规范 §8.4），不是 500 ──
         const broken = await fetch(`${url}/api/ai/conversation-list`, { method: 'PUT', headers: json(as('bob')), body: '{"source":' });
         assert.equal(broken.status, 422);

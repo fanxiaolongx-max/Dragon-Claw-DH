@@ -9,6 +9,7 @@ import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool } from
 import { saveChatUpload, readChatUpload } from '../services/chat-upload-service.js';
 import { decideApproval } from '../agent/approvals.js';
 import { runSelect, toolByName } from '../agent/tools.js';
+import { withShared, setShared, setToolShared } from '../services/distribution-service.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const overridesFrom = (body) => {
@@ -27,7 +28,7 @@ function decodeArchive(body) {
 export async function agentSkillsRoutes(fastify) {
     fastify.addHook('onSend', async (_req, reply, payload) => { reply.header('Cache-Control', 'private, no-store'); return payload; });
 
-    fastify.get('/', async () => ({ items: await listSkills() }));
+    fastify.get('/', async () => ({ items: await withShared('skill', await listSkills()) }));
 
     fastify.post('/', async (req) => {
         const markdown = String(req.body?.skillMd || '');
@@ -130,7 +131,20 @@ async function handleCustomToolBridge(req, reply) {
 }
 
 export async function customToolsRoutes(fastify) {
-    fastify.get('/', async (req) => listCustomTools(req.userIdentity));
+    fastify.get('/', async (req) => {
+        const tools = await listCustomTools(req.userIdentity);
+        const marked = await withShared('tool', tools, (tool) => tool.slug);
+        // 用户发布的工具：可见范围是 public 就是全员开放
+        return marked.map((tool) => (tool.builtIn ? tool : { ...tool, sharedAccess: tool.visibility === 'public' }));
+    });
+    // 「全员开放 / 关闭开放」（与主线版同接口）：仅超级管理员
+    fastify.patch('/:slug/distribution', async (req, reply) => {
+        if (!req.userIdentity.isSuper) return reply.code(403).send({ error: '只有超级管理员可以设置全员开放' });
+        if (typeof req.body?.sharedAccess !== 'boolean') return reply.code(400).send({ error: '工具分发设置无效' });
+        const tool = await getCustomTool(req.params.slug, req.userIdentity);
+        if (!tool) return reply.code(404).send({ error: '工具不存在' });
+        return { sharedAccess: await setToolShared(tool.slug, req.body.sharedAccess, { builtIn: Boolean(tool.builtIn) }) };
+    });
     fastify.post('/', async (req, reply) => reply.code(201).send(await saveCustomTool(req.body || {}, req.userIdentity)));
     fastify.delete('/:slug', async (req) => deleteCustomTool(req.params.slug, req.userIdentity));
     fastify.get('/:slug/meta', async (req, reply) => {

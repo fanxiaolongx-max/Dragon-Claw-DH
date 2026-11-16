@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config, STATIC_DIR } from '../config.js';
+import { withShared, setShared } from '../services/distribution-service.js';
+import { listSkills } from '../services/skill-service.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { pushLog, listLogs } from '../core/log-ring.js';
 import { getSetting as kvGet, saveSetting as kvSet } from '../services/system-service.js';
@@ -478,7 +480,8 @@ export async function platformShellRoutes(fastify) {
                 items: floatItems,
             });
         }
-        return { groups, generatedAt: new Date().toISOString() };
+        const marked = await Promise.all(groups.map(async (group) => ({ ...group, items: await withShared('cap', group.items || []) })));
+        return { groups: marked, generatedAt: new Date().toISOString() };
     });
 
     fastify.get('/api/home/page-updates', async () => {
@@ -620,6 +623,15 @@ export async function platformShellRoutes(fastify) {
 
     fastify.get('/api/chat-history/status', async () => ({ enabled: false, indexedCount: 0 }));
     fastify.get('/api/distribution/catalog', async () => ({ items: [] }));
+    // 「全员开放 / 关闭开放」技能或插件（与主线版同接口）：仅超级管理员，条目必须存在
+    fastify.patch('/api/distribution', async (req, reply) => {
+        const identity = resolveRequestIdentity(req);
+        if (!identity.isSuper) return reply.code(403).send({ error: '只有超级管理员可以设置全员开放' });
+        const { kind, id, sharedAccess } = req.body || {};
+        if (!['skill', 'cap'].includes(kind) || typeof id !== 'string' || typeof sharedAccess !== 'boolean') return reply.code(400).send({ error: '开放设置无效' });
+        if (kind === 'skill' && !(await listSkills()).some((item) => item.id === id)) return reply.code(404).send({ error: '技能不存在' });
+        return { sharedAccess: await setShared(kind, id, sharedAccess) };
+    });
     fastify.get('/api/distribution/personal', async () => ({ entries: {} }));
     fastify.get('/api/hosted-apps/preview', async () => ({ apps: [] }));
     fastify.get('/api/desktop-pet/language', async () => ({ lang: 'zh-CN' }));

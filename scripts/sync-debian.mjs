@@ -16,7 +16,7 @@
 import { execSync } from 'node:child_process';
 import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { watch, existsSync } from 'node:fs';
+import { watch, existsSync, readFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -45,7 +45,8 @@ const SYNC_PATHS = [
     'run.js',
     'app.json',
     'package.json',
-    'dragon-claw-dh.version',
+    // dragon-claw-dh.version 不直接同步：仓库里的版本文件只在手工升大/小版本时才改，
+    // Debian 上显示的版本跟随 GitHub 最新发布的 Release（见 latestReleaseVersion）
 ];
 
 // 运行态状态
@@ -65,6 +66,44 @@ function checkSyntax(filePath) {
     } catch (err) {
         return false;
     }
+}
+
+// ── 版本号：两套逻辑 ──
+// 发版包：GitHub Actions 打包时用 release-version.mjs 定版本并写进包里，这里不管。
+// Debian 联调环境：跟随 GitHub 上最新发布的 Release 版本（v* 标签里最大的那个），
+// 这样页面左上角的版本号和线上最新的安装包对得上，不会一直停在仓库版本文件的旧数字上。
+const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)$/;
+const TAG_FETCH_INTERVAL_MS = 5 * 60 * 1000;
+let lastTagFetch = 0;
+
+function latestReleaseVersion() {
+    const parse = (text) => { const m = VERSION_RE.exec(String(text).trim()); return m ? m.slice(1).map(Number) : null; };
+    const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+    let fileVersion = null;
+    try { fileVersion = parse(readFileSync(resolve(ROOT, 'dragon-claw-dh.version'), 'utf8')); } catch { /* 没有版本文件就只看标签 */ }
+    // 监听模式下不必每次保存都联网，隔几分钟取一次标签；取不到（离线）就用本地已有的标签
+    if (Date.now() - lastTagFetch > TAG_FETCH_INTERVAL_MS) {
+        lastTagFetch = Date.now();
+        try { execSync('git fetch --tags --quiet origin', { cwd: ROOT, stdio: 'pipe', timeout: 15000 }); } catch { /* 离线或没权限：沿用本地标签 */ }
+    }
+    let released = null;
+    try {
+        released = execSync("git tag --list 'v*'", { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+            .split('\n').map(parse).filter(Boolean).sort(compare).pop() || null;
+    } catch { /* 不在 git 仓库里 */ }
+    // 手工把版本文件升到比已发布更高时（准备发大版本），以版本文件为准
+    const best = [released, fileVersion].filter(Boolean).sort(compare).pop();
+    return best ? best.join('.') : '';
+}
+
+/** 把版本号写到 Debian 上的版本文件；返回它是否变了（变了要重启容器，后端只在启动时读一次） */
+function pushVersion() {
+    const version = latestReleaseVersion();
+    if (!version) return { version: '', changed: false };
+    const file = `${TARGET_PATH.replace(/\/+$/, '')}/dragon-claw-dh.version`;
+    const remote = `if [ "$(cat ${file} 2>/dev/null)" = "${version}" ]; then echo same; else echo "${version}" > ${file}; echo changed; fi`;
+    const out = execSync(`ssh ${TARGET_HOST} '${remote}'`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return { version, changed: out === 'changed' };
 }
 
 /** 执行同步主流程 */
@@ -99,9 +138,11 @@ async function syncBatch(filesChanged = []) {
             `${TARGET_HOST}:${TARGET_PATH}`,
         ];
         execSync(rsyncCmd.join(' '), { stdio: 'pipe' });
+        const release = pushVersion();
+        if (release.changed) console.log(`[\x1b[36mVERSION\x1b[0m] Debian 版本号更新为 ${release.version}（跟随 GitHub 最新 Release）`);
 
         // 3. 动静分流：纯前端改动直接零重启生效！
-        if (hasFrontendOnly) {
+        if (hasFrontendOnly && !release.changed) {
             const elapsed = ((Date.now() - start) / 1000).toFixed(2);
             console.log(`[\x1b[32mFAST-SYNC\x1b[0m] 静态前端资源推送完成 (${elapsed}s，\x1b[32m零重启\x1b[0m)！`);
             console.log(`           涉及文件: ${fileList.slice(0, 3).join(', ')}${fileList.length > 3 ? ' 等' : ''}`);
