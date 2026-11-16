@@ -220,4 +220,13 @@ test('home-shell collapsePopSeparators collapses consecutive separators separate
 
     const shellCss = readStatic('css/home-shell.css');
     assert.match(shellCss, /\.v2-pop-sep\[hidden\]/);
+    assert.match(shellCss, /\.v2-filter-archived-btn\.is-checked/);
+
+    assert.match(shellCode, /v2-filter-archived-btn\$\{archivedOn \? ' is-checked' : ''\}/);
+    assert.match(shellCode, /\$\('v2SortBtn'\)\?\.classList\.toggle\('is-on',[^\n;]*archivedOn\)/);
+
+    const dcCode = readStatic('js/home/dragon-claw.js');
+    assert.match(dcCode, /home-chat-archive-banner/);
+    assert.match(dcCode, /home-chat-category-badge/);
+    assert.match(dcCode, /data-chat-exit-archived/);
 });
