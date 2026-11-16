@@ -31,6 +31,39 @@ test('看板模型：画布收拢、格子不出界、计划去重叠并保留�
     const fitted = Board.fitView({ rows: [[{ id: 'a', template: 'kpi-cards', params: {} }], [{ id: 'b', template: 'line-trend', params: { title: 'x' } }]] }, { h: 600 }, T);
     assert.ok(fitted.rows[1][0].params.height > 150, '模板高度按格子大小自动算');
     assert.equal(fitted.rows[0][0].params.height, undefined, '没有高度参数的模板不加');
+
+    const withMarks = Board.normalize({
+        canvas: { width: 1920, height: 1080 },
+        items: [{ id: 'c1', x: 24, y: 24, w: 400, h: 300 }],
+        marks: [
+            { id: 'm1', number: 1, cellId: 'c1', rx: 2, ry: -1, note: '改成横向柱图', status: 'sent' },
+            { id: 'm2', number: 2, cellId: 'missing', rx: 0.5, ry: 0.5, note: '已删格子的标记' },
+        ],
+    });
+    assert.equal(withMarks.marks.length, 1, '已删格子的标记应自动清理');
+    assert.equal(withMarks.marks[0].rx, 0.98);
+    assert.equal(withMarks.marks[0].ry, 0.02);
+    assert.equal(withMarks.marks[0].status, 'sent');
+});
+
+test('AI BI 静态资源：缩放控制栏、侧栏调宽、输入框圆角焦点与多标记持久能力', () => {
+    const html = fs.readFileSync(new URL('../static/ai-bi.html', import.meta.url), 'utf8');
+    const css = fs.readFileSync(new URL('../static/css/ai-bi.css', import.meta.url), 'utf8');
+    const appJs = fs.readFileSync(new URL('../static/js/ai-bi/app.js', import.meta.url), 'utf8');
+    const markerJs = fs.readFileSync(new URL('../static/js/ai-report/marker.js', import.meta.url), 'utf8');
+    assert.match(html, /id="biZoomBar"/);
+    assert.match(html, /id="biSideResizer"/);
+    assert.match(html, /id="biMoreMenu"/);
+    assert.match(html, /data-bi="undo"/);
+    assert.match(html, /data-bi="redo"/);
+    assert.match(css, /\.bi-side \.bi-composer textarea:focus-visible\{[^}]*box-shadow:none/);
+    assert.match(css, /\.bi-zoom-bar\{/);
+    assert.match(css, /\.bi-side-resizer\{/);
+    assert.match(appJs, /setSideWidth/);
+    assert.match(appJs, /stepZoom/);
+    assert.match(appJs, /layer:scaler/);
+    assert.match(markerJs, /data-mark-delete/);
+    assert.match(markerJs, /data-mark-save/);
 });
 
 test('看板接口、对话生成布局、标记调整与页面入口', async () => {

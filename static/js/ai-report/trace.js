@@ -22,7 +22,7 @@
         const list=traces.get(cellId)||[],entry={id:'t'+(++seq),at:new Date().toISOString(),...safe(item)};list.push(entry);
         if(list.length>LIMIT)list.splice(0,list.length-LIMIT);traces.set(cellId,list);changed(cellId);return entry;
     }
-    async function post(cellId,label,path,body){
+    async function post(cellId,label,path,body,{signal}={}){
         const record=enabled,started=Date.now(),run={stage:'connecting',name:'',started};
         active.set(cellId,run);progressChanged(cellId);
         const entry=record?add(cellId,{kind:'call',label,path,method:'POST',request:{...body,_stream:true,_debug:true},status:'running',ms:0,steps:[]}):null;
@@ -34,7 +34,7 @@
             if(event.type==='complete'&&entry)Object.assign(entry,{requestId:event.requestId,httpStatus:event.status});
         };
         try{
-            const reply=await API.post(path,{...body,_stream:true,...(record?{_debug:true}:{})},{onEvent});
+            const reply=await API.post(path,{...body,_stream:true,...(record?{_debug:true}:{})},{onEvent,signal});
             const steps=reply?._trace,request=reply?._request;
             // 每轮模型调用的耗时与速度：攒到这个格子上，由 app.js 的 aiStep 挂到本次 AI 回复（回复下方显示 最低/平均/最高 tok/s）
             if(Array.isArray(reply?._rounds)&&reply._rounds.length)pendingRounds.set(cellId,[...(pendingRounds.get(cellId)||[]),...reply._rounds]);
