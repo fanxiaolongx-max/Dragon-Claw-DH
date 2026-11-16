@@ -91,6 +91,49 @@ export async function reportMsgRoutes(fastify) {
     });
 }
 
+async function handleStreamablePost(req, reply, initialStage, work) {
+    const body = req.body || {};
+    if (body._stream !== true) return work(body, null);
+    const started = Date.now();
+    reply.raw.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-store, no-transform',
+        'X-Accel-Buffering': 'no',
+        ...(req.requestId ? { 'X-Request-Id': req.requestId } : {}),
+    });
+    const sendEvent = (event) => {
+        if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+            reply.raw.write(`${JSON.stringify(event)}\n`);
+        }
+    };
+    sendEvent({ type: 'progress', requestId: req.requestId || '', stage: initialStage || 'received' });
+    try {
+        const result = await work(body, sendEvent);
+        sendEvent({
+            type: 'result',
+            requestId: req.requestId || '',
+            status: 200,
+            ms: Date.now() - started,
+            body: result,
+        });
+    } catch (err) {
+        const status = (Number.isInteger(err?.code) && err.code >= 400 && err.code < 600 ? err.code : 0)
+            || [err?.statusCode, err?.status].find((c) => Number.isInteger(c) && c >= 400 && c < 600)
+            || 500;
+        const message = status < 500 ? (err?.message || '请求处理失败') : `服务内部错误（trace_id: ${req.requestId || ''}）`;
+        sendEvent({
+            type: 'result',
+            requestId: req.requestId || '',
+            status,
+            ms: Date.now() - started,
+            body: { error: message, code: err?.code || 'MONTHLY_ERROR', requestId: req.requestId || '' },
+        });
+    } finally {
+        if (!reply.raw.writableEnded) reply.raw.end();
+    }
+    return reply;
+}
+
 export async function aiReportRoutes(fastify) {
     const userOf = (req) => resolveRequestIdentity(req).username;
 
@@ -107,18 +150,18 @@ export async function aiReportRoutes(fastify) {
     fastify.get('/sources/sheets/:sheetId', async (req) => describeAiReportSheet(req.params.sheetId));
     fastify.get('/metrics', async (req) => listAiReportMetrics(req.query?.month));
     fastify.get('/datasets', async (req) => listAiReportDatasets(req.query?.month));
-    fastify.post('/run-data', async (req) => runAiReportData(req.body || {}));
+    fastify.post('/run-data', (req, reply) => handleStreamablePost(req, reply, 'data', (body) => runAiReportData(body)));
 
-    fastify.post('/cell/chat', async (req) => aiReportCellChat(req.body || {}));
-    fastify.post('/cell/prompt', async (req) => aiReportCellPrompt(req.body || {}));
+    fastify.post('/cell/chat', (req, reply) => handleStreamablePost(req, reply, 'received', (body, onEvent) => aiReportCellChat(body, { onEvent })));
+    fastify.post('/cell/prompt', (req, reply) => handleStreamablePost(req, reply, 'received', (body, onEvent) => aiReportCellPrompt(body, { onEvent })));
     fastify.post('/cell/text-edit', async (req) => aiReportCellTextEdit(req.body || {}));
     fastify.post('/cell/gist', async (req) => aiReportCellGist(req.body || {}));
-    fastify.post('/cell/compile', async (req) => aiReportCellCompile(req.body || {}));
+    fastify.post('/cell/compile', (req, reply) => handleStreamablePost(req, reply, 'received', (body, onEvent) => aiReportCellCompile(body, { onEvent })));
     fastify.post('/cell/restyle', async (req) => aiReportCellRestyle(req.body || {}));
-    fastify.post('/cell/adjust', async (req) => aiReportCellAdjust(req.body || {}));
-    fastify.post('/cell/params', async (req) => aiReportCellParams(req.body || {}));
-    fastify.post('/bi/plan', async (req) => aiBiPlan(req.body || {}));
-    fastify.post('/cell/narrative', async (req) => aiReportCellNarrative(req.body || {}));
+    fastify.post('/cell/adjust', (req, reply) => handleStreamablePost(req, reply, 'received', (body) => aiReportCellAdjust(body)));
+    fastify.post('/cell/params', (req, reply) => handleStreamablePost(req, reply, 'received', (body) => aiReportCellParams(body)));
+    fastify.post('/bi/plan', (req, reply) => handleStreamablePost(req, reply, 'received', (body, onEvent) => aiBiPlan(body, { onEvent })));
+    fastify.post('/cell/narrative', (req, reply) => handleStreamablePost(req, reply, 'received', (body) => aiReportCellNarrative(body)));
 
     fastify.post('/report/chat', async (req) => aiReportOverallChat(req.body || {}));
     fastify.post('/report/prompt', async (req) => aiReportOverallPrompt(req.body || {}));

@@ -453,7 +453,7 @@
     }
 
     window.HomeWorkspace = {
-        getTools, recentIds, scrollToTools,
+        getTools, recentIds, scrollToTools, refresh: scheduleLayout,
         getFilter: () => ({ view: state.view, query: state.query.trim() }),
         // 侧栏其它区块（插件与脚本）被点击时，退出「最近使用」/搜索，回到全部视图
         showAll: () => { if (state.view !== 'all' || state.query) setView('all'); },

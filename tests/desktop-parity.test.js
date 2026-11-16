@@ -759,3 +759,63 @@ test('平台效能统计：按本应用库的业务量折算，返回结构与�
     assert.equal(summary.ai.savedHours, Math.round((summary.ai.answers * 8 + 2 * 3) / 60));
     assert.match(summary.methodology.note, /保守/);
 });
+
+test('英文语言切换：所有首页静态工具卡片、内置工具与内置技能均有完整英文名称与说明', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const vm = await import('node:vm');
+    const rootDir = path.resolve(import.meta.dirname, '..');
+
+    // 1. manifest & /api/custom-tools built-ins
+    const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'static/builtin-tools/manifest.json'), 'utf8'));
+    assert.ok(manifest.tools.length >= 5);
+    for (const tool of manifest.tools) {
+        assert.ok(tool.nameEn && !/[\u4e00-\u9fa5]/.test(tool.nameEn), `${tool.slug} missing English nameEn: ${tool.nameEn}`);
+        assert.ok(tool.descriptionEn && !/[\u4e00-\u9fa5]/.test(tool.descriptionEn), `${tool.slug} missing English descriptionEn`);
+        assert.ok(Array.isArray(tool.tagsEn) && tool.tagsEn.length > 0, `${tool.slug} missing English tagsEn`);
+    }
+    const { call } = ctx;
+    const customTools = (await call('alice', 'GET', '/api/custom-tools')).data;
+    for (const slug of manifest.tools.map((t) => t.slug)) {
+        const found = customTools.find((t) => t.slug === slug);
+        assert.ok(found && found.nameEn && found.descriptionEn, `/api/custom-tools should expose nameEn & descriptionEn for ${slug}`);
+    }
+
+    // 2. Every static card href in index.html maps to HOME_CARDS via homeCardKey under root & subpath URLs
+    const indexHtml = fs.readFileSync(path.join(rootDir, 'static/index.html'), 'utf8');
+    const homeToolsJs = fs.readFileSync(path.join(rootDir, 'static/js/home/home-tools.js'), 'utf8');
+    const cardsBlock = homeToolsJs.match(/const HOME_CARDS = \{[\s\S]*?\n        \};\n\s*if \(window\.ToolsI18n\)/)?.[0]?.replace(/\n\s*if \(window\.ToolsI18n\)[\s\S]*$/, '');
+    const keyFnBlock = homeToolsJs.match(/function homeCardKey\(href\)[\s\S]*?\n        \}/)?.[0];
+    assert.ok(cardsBlock && keyFnBlock, 'HOME_CARDS and homeCardKey exist in home-tools.js');
+    const { HOME_CARDS, homeCardKey } = vm.runInNewContext(
+        `${cardsBlock}\n${keyFnBlock}\n({ HOME_CARDS, homeCardKey })`,
+        { URL, window: { location: { origin: 'https://example.test' }, dhStripPrefix: (p) => p.replace(/^\/digital-human\/dh\/[0-9a-f-]+/i, '') } },
+    );
+
+    const gridMatch = indexHtml.match(/<div class="tools-grid" id="toolsGrid">([\s\S]*?)<\/div>\s*\n\s*<!-- 插件与脚本/);
+    assert.ok(gridMatch, 'toolsGrid block exists in index.html');
+    const hrefs = [...gridMatch[1].matchAll(/<a href="([^"]+)" class="tool-card/g)].map((m) => m[1]);
+    assert.ok(hrefs.length >= 13);
+    for (const href of hrefs) {
+        for (const variant of [href, `/${href}`, `/digital-human/dh/aaaaaaaa-0000-4000-8000-000000000000/${href}.html`]) {
+            const key = homeCardKey(variant);
+            const card = HOME_CARDS[key];
+            assert.ok(card, `missing HOME_CARDS entry for ${variant} -> ${key}`);
+            assert.ok(card.title['en-US'] && !/[\u4e00-\u9fa5]/.test(card.title['en-US']), `${key} en-US title has Chinese`);
+            assert.ok(card.desc['en-US'] && !/[\u4e00-\u9fa5]/.test(card.desc['en-US']), `${key} en-US desc has Chinese`);
+            assert.ok(Array.isArray(card.tags['en-US']) && card.tags['en-US'].length > 0, `${key} missing en-US tags`);
+        }
+    }
+
+    // 3. Built-in skills frontmatter has bilingual name_en & description_en
+    const skillsDir = path.join(rootDir, 'src/agent/builtin-skills');
+    const skillFiles = fs.readdirSync(skillsDir).filter((f) => f.endsWith('.md'));
+    assert.ok(skillFiles.length >= 8);
+    for (const file of skillFiles) {
+        const md = fs.readFileSync(path.join(skillsDir, file), 'utf8');
+        const nameEn = /^name_en:\s*(.+)$/m.exec(md)?.[1]?.trim() || '';
+        const descEn = /^description_en:\s*(.+)$/m.exec(md)?.[1]?.trim() || '';
+        assert.ok(nameEn && !/[\u4e00-\u9fa5]/.test(nameEn), `${file} missing English name_en`);
+        assert.ok(descEn && !/[\u4e00-\u9fa5]/.test(descEn), `${file} missing English description_en`);
+    }
+});

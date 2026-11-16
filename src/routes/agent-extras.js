@@ -164,7 +164,7 @@ export async function customToolsRoutes(fastify) {
     fastify.get('/:slug/meta', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
         if (!tool) return reply.code(404).send({ error: '这个工具不存在，或者你没有查看它的权限' });
-        return { slug: tool.slug, name: tool.name, nameEn: tool.nameEn, icon: tool.icon, description: tool.description, ...(tool.builtIn ? { builtIn: true, entry: tool.entry } : {}) };
+        return { slug: tool.slug, name: tool.name, nameEn: tool.nameEn, icon: tool.icon, description: tool.description, descriptionEn: tool.descriptionEn || '', ...(tool.builtIn ? { builtIn: true, entry: tool.entry } : {}) };
     });
     fastify.get('/:slug/raw', sendCustomToolRaw);
     fastify.post('/:slug/bridge', handleCustomToolBridge);

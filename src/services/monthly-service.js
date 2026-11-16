@@ -416,33 +416,115 @@ async function loadReportSnapshotBundle(month) {
     return { snapshot: cur, allSnapshots: snaps, categories, metrics };
 }
 
-function extractMatchKeywords(text) {
-    const raw = String(text || '').trim();
-    if (!raw) return [];
+function escapeRegExp(text) {
+    return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tokenizeExcludeClause(clause) {
+    const cleaned = String(clause || '')
+        .replace(/^[：:\s]+/, '')
+        .replace(/(?:相关的?|类的?|型的?|等|所有|全部|的)*(?:指标|数据|内容|项目|明细|图表|部分)?[。；，,！!\s]*$/g, '')
+        .trim();
+    if (!cleaned) return [];
     const tokens = new Set();
-    for (const m of raw.matchAll(/[A-Za-z0-9_-]{2,}/g)) {
-        tokens.add(m[0].toLowerCase());
+    const parts = cleaned
+        .split(/[、,/|]+|\s+|(?:以及|还有|and|or)/i)
+        .flatMap((part) => part.split(/(?<=[A-Za-z0-9\u4e00-\u9fa5])(?:和|与|及|或)(?=[A-Za-z0-9\u4e00-\u9fa5])/))
+        .map((p) => p.replace(/(?:相关的?|类的?|的|指标|数据|内容|显示|展示)+$/g, '').trim().toLowerCase())
+        .filter((p) => p.length >= 2);
+    for (const part of parts) tokens.add(part);
+    return Array.from(tokens).slice(0, 12);
+}
+
+function parseMetricQueryKeywords(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return { include: [], exclude: [] };
+    const excludeSet = new Set();
+    const strippedRanges = [];
+    const collectNegation = (start, end, clause) => {
+        strippedRanges.push([start, end]);
+        for (const kw of tokenizeExcludeClause(clause)) excludeSet.add(kw);
+    };
+
+    const prefixRe = /(?:请?勿|不要|无需|不需要|不必|不用|别|不得|严禁|不能|不含|不包括|不包含|不展示|不显示|不统计|不计算|不涉及|不列出|排除|剔除|去掉|去除|忽略|跳过|除了)(?:\s*(?:显示|展示|包含|包括|统计|计算|列出|使用|涉及|加入|放|算|要))*\s*([^，。；！？\n]+)/gi;
+    for (const m of raw.matchAll(prefixRe)) {
+        const clause = String(m[1] || '').replace(/(?:以外|之外).*$/, '');
+        collectNegation(m.index, m.index + m[0].length, clause);
     }
-    const stop = /指标|情况|看看|想要|一下|展示|月报|数据|分析|本月|统计|请问|如何|什么|可以|帮我|列出|全部/;
-    for (const seq of raw.matchAll(/[\u4e00-\u9fa5]{2,}/g)) {
-        const w = seq[0];
-        if (!stop.test(w) && w.length <= 6) tokens.add(w);
-        for (let i = 0; i <= w.length - 2; i += 1) {
-            const sub = w.slice(i, i + 2);
-            if (!stop.test(sub)) tokens.add(sub);
+
+    const postfixRe = /([^，。；！？\n]{1,40}?)\s*(?:除外|以外|之外)/gi;
+    for (const m of raw.matchAll(postfixRe)) {
+        if (!strippedRanges.some(([s, e]) => m.index >= s && m.index < e)) {
+            collectNegation(m.index, m.index + m[0].length, m[1]);
         }
     }
-    return Array.from(tokens).slice(0, 20);
+
+    const enNegRe = /\b(?:exclude|excluding|without|except|omit|skip|not\s+including|do\s+not\s+(?:show|include)|don't\s+(?:show|include)|no)\s+([^,.;!\n]+)/gi;
+    for (const m of raw.matchAll(enNegRe)) {
+        collectNegation(m.index, m.index + m[0].length, m[1]);
+    }
+
+    let positiveText = raw;
+    if (strippedRanges.length) {
+        strippedRanges.sort((a, b) => a[0] - b[0]);
+        let cursor = 0;
+        let out = '';
+        for (const [s, e] of strippedRanges) {
+            if (s > cursor) out += raw.slice(cursor, s);
+            out += ' ';
+            cursor = Math.max(cursor, e);
+        }
+        if (cursor < raw.length) out += raw.slice(cursor);
+        positiveText = out;
+    }
+
+    const tokens = new Set();
+    for (const m of positiveText.matchAll(/[A-Za-z0-9_-]{2,}/g)) {
+        const low = m[0].toLowerCase();
+        if (!excludeSet.has(low)) tokens.add(low);
+    }
+    const stop = /指标|情况|看看|想要|一下|展示|显示|月报|报表|报告|看板|数据|分析|对比|拆解|维度|本月|当月|统计|请问|如何|什么|可以|帮我|列出|全部|所有|注意|要求|基于|生成|详细|相关|需要|进行|地区|以及|或者/;
+    for (const seq of positiveText.matchAll(/[\u4e00-\u9fa5]{2,}/g)) {
+        const w = seq[0];
+        if (!stop.test(w) && w.length <= 6 && !excludeSet.has(w)) tokens.add(w);
+        for (let i = 0; i <= w.length - 2; i += 1) {
+            const sub = w.slice(i, i + 2);
+            if (!stop.test(sub) && !excludeSet.has(sub)) tokens.add(sub);
+        }
+    }
+    return {
+        include: Array.from(tokens).slice(0, 20),
+        exclude: Array.from(excludeSet).slice(0, 12),
+    };
+}
+
+function metricMatchesToken(metric, tokens) {
+    if (!tokens?.length) return false;
+    const hay = `${metric.label || ''} ${metric.category || ''} ${metric.metricName || ''} ${metric.key || ''}`.toLowerCase();
+    return tokens.some((kw) => {
+        if (/^[a-z0-9_-]+$/.test(kw)) {
+            return new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(kw)}(?:$|[^a-z0-9])`, 'i').test(hay);
+        }
+        return hay.includes(kw);
+    });
+}
+
+function extractMatchKeywords(text) {
+    return parseMetricQueryKeywords(text).include;
 }
 
 function rankMetricsForQuery(metrics, queryText, limit = 120) {
     if (!metrics.length) return [];
-    const keywords = extractMatchKeywords(queryText);
-    const scored = metrics.map((m, idx) => {
+    const { include: keywords, exclude } = parseMetricQueryKeywords(queryText);
+    const pool = exclude.length ? metrics.filter((m) => !metricMatchesToken(m, exclude)) : metrics;
+    if (!pool.length) return [];
+    const scored = pool.map((m, idx) => {
         const hay = `${m.label || ''} ${m.category || ''} ${m.metricName || ''} ${m.key || ''}`.toLowerCase();
         let score = 0;
         for (const kw of keywords) {
-            if (hay.includes(kw)) score += kw.length >= 2 ? 10 : 4;
+            if (metricMatchesToken(m, [kw]) || (!/^[a-z0-9_-]+$/.test(kw) && hay.includes(kw))) {
+                score += kw.length >= 2 ? 10 : 4;
+            }
         }
         if (m.isFailing) score += 2;
         if (!m.category) score += 1;
@@ -679,10 +761,21 @@ export async function runAiReportData({ month, recipe: rawRecipe } = {}) {
             };
         } else if (source.kind === 'metrics') {
             const metrics = await listAiReportMetrics(srcMonth);
+            const wantedNames = new Set((source.names || []).map((s) => String(s).trim()).filter(Boolean));
+            const wantedKeys = new Set((source.keys || []).map((s) => String(s).trim()).filter(Boolean));
+            const chosen = (wantedNames.size || wantedKeys.size)
+                ? metrics.filter((m) => (
+                    wantedNames.has(m.label) ||
+                    (m.altLabel && wantedNames.has(m.altLabel)) ||
+                    (m.metricName && wantedNames.has(m.metricName)) ||
+                    wantedNames.has(m.key) ||
+                    wantedKeys.has(m.key)
+                ))
+                : metrics;
             const values = {};
             const targets = {};
             const rules = {};
-            for (const m of metrics) {
+            for (const m of chosen) {
                 const num = m.numValue != null ? m.numValue : toNumber(m.value);
                 values[m.label] = num;
                 values[m.key] = num;
@@ -698,17 +791,6 @@ export async function runAiReportData({ month, recipe: rawRecipe } = {}) {
                     if (m.altLabel) rules[m.altLabel] = m.targetRule;
                 }
             }
-            const wantedNames = new Set((source.names || []).map((s) => String(s).trim()).filter(Boolean));
-            const wantedKeys = new Set((source.keys || []).map((s) => String(s).trim()).filter(Boolean));
-            const chosen = (wantedNames.size || wantedKeys.size)
-                ? metrics.filter((m) => (
-                    wantedNames.has(m.label) ||
-                    (m.altLabel && wantedNames.has(m.altLabel)) ||
-                    (m.metricName && wantedNames.has(m.metricName)) ||
-                    wantedNames.has(m.key) ||
-                    wantedKeys.has(m.key)
-                ))
-                : metrics;
             if (!chosen.length) missing.push({ id: source.id, label: source.label || source.id, month: srcMonth });
             input[source.id] = { month: srcMonth, metrics: chosen, values, targets, rules };
         } else if (source.kind === 'dataset') {
@@ -927,44 +1009,149 @@ export async function changeAiReportImageDeletion(id, owner, operation) {
 // AI Report Conversational Helpers (via ai-service callAiCompletion)
 // ============================================================
 
-function parseJsonReply(text) {
-    const cleaned = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    if (!cleaned) return null;
-    try { return JSON.parse(cleaned); } catch {
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (match) {
-            try { return JSON.parse(match[0]); } catch { return null; }
+function extractBalancedJsonObject(text) {
+    const str = String(text || '');
+    for (let i = 0; i < str.length; i += 1) {
+        if (str[i] !== '{') continue;
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let j = i; j < str.length; j += 1) {
+            const ch = str[j];
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch === '\\') escaped = true;
+                else if (ch === '"') inString = false;
+                continue;
+            }
+            if (ch === '"') { inString = true; continue; }
+            if (ch === '{') depth += 1;
+            else if (ch === '}') {
+                depth -= 1;
+                if (depth === 0) {
+                    const candidate = str.slice(i, j + 1);
+                    try {
+                        const obj = JSON.parse(candidate);
+                        if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+                    } catch { /* keep scanning */ }
+                    break;
+                }
+                if (depth < 0) break;
+            }
         }
-        return null;
     }
+    return null;
 }
 
-async function runStructuredAiTurn(systemInstruction, userPrompt, fallbackObj) {
+function parseJsonReply(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    try {
+        const direct = JSON.parse(stripped);
+        if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
+    } catch { /* fall through */ }
+    for (const m of raw.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
+        try {
+            const fenced = JSON.parse(String(m[1] || '').trim());
+            if (fenced && typeof fenced === 'object' && !Array.isArray(fenced)) return fenced;
+        } catch { /* try next */ }
+    }
+    return extractBalancedJsonObject(raw);
+}
+
+function buildAiRoundMetrics(res, started) {
+    const inputTokens = Number(res?.usage?.prompt_tokens ?? res?.usage?.input_tokens ?? 0) || 0;
+    const outputTokens = Number(res?.usage?.completion_tokens ?? res?.usage?.output_tokens ?? 0) || 0;
+    const ms = Math.max(1, Number(res?.latencyMs) || (Date.now() - started));
+    const tps = outputTokens > 0 ? Math.round((outputTokens / (ms / 1000)) * 10) / 10 : 0;
+    return {
+        index: 1,
+        model: res?.model || 'default',
+        provider: res?.provider || '',
+        finishReason: res?.finishReason || '',
+        ms,
+        generationMs: ms,
+        tps,
+        inputTokens,
+        outputTokens,
+        at: new Date().toISOString(),
+    };
+}
+
+function clipTraceText(value, max = 4000) {
+    const s = String(value ?? '');
+    return s.length > max ? `${s.slice(0, max)}\n...[truncated ${s.length - max} chars]` : s;
+}
+
+async function runStructuredAiTurn(systemInstruction, userPrompt, fallbackObj, options = {}) {
+    const { maxTokens = 2500, timeoutMs = 90_000, stageLabel = 'ai', debug = false, onEvent = null } = options;
     const started = Date.now();
+    onEvent?.({ type: 'progress', stage: 'model', name: stageLabel });
     const res = await callAiCompletion({
         messages: [
             { role: 'system', content: systemInstruction },
             { role: 'user', content: userPrompt },
         ],
-        maxTokens: 2500,
+        maxTokens,
+        timeoutMs,
     });
-    const round = {
-        index: 1,
-        model: res.model || 'default',
-        ms: Date.now() - started,
-        inputTokens: res.usage?.prompt_tokens || 0,
-        outputTokens: res.usage?.completion_tokens || 0,
-        at: new Date().toISOString(),
-    };
+    const round = buildAiRoundMetrics(res, started);
+    const parsed = res.ok ? parseJsonReply(res.text) : null;
+    const ok = Boolean(res.ok && parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+    let fallbackReason = '';
     if (!res.ok) {
-        return { ...fallbackObj, _rounds: [round], _aiError: res.error };
+        fallbackReason = res.error || '模型调用失败';
+    } else if (!ok) {
+        if (!String(res.text || '').trim() && (res.finishReason === 'length' || res.reasoningTokensOnly)) {
+            fallbackReason = '模型输出达到 max_tokens 上限且思考链耗尽了输出空间，未能产出 JSON';
+        } else if (res.finishReason === 'length') {
+            fallbackReason = '模型输出达到 max_tokens 上限被截断，JSON 不完整';
+        } else if (!String(res.text || '').trim()) {
+            fallbackReason = '模型返回空响应';
+        } else {
+            fallbackReason = '模型返回内容不是有效 JSON';
+        }
     }
-    const parsed = parseJsonReply(res.text);
-    return { ...(parsed && typeof parsed === 'object' ? parsed : fallbackObj), _rounds: [round] };
+    const traceStep = {
+        id: 'ai-1',
+        kind: 'ai',
+        label: stageLabel,
+        model: round.model,
+        provider: round.provider,
+        finishReason: round.finishReason || '',
+        ms: round.ms,
+        tps: round.tps,
+        inputTokens: round.inputTokens,
+        outputTokens: round.outputTokens,
+        ...(debug ? {
+            system: clipTraceText(systemInstruction, 4000),
+            messages: [{ role: 'user', content: clipTraceText(userPrompt, 6000) }],
+            reply: clipTraceText(res.text || '', 6000),
+        } : {}),
+        ...(fallbackReason ? { error: fallbackReason } : {}),
+    };
+    onEvent?.({ type: 'trace', step: traceStep });
+    onEvent?.({ type: 'progress', stage: 'model_done', name: stageLabel });
+    const out = ok
+        ? { ...parsed, _rounds: [round] }
+        : { ...fallbackObj, _rounds: [round], ...(res.ok ? {} : { _aiError: res.error }) };
+    if (debug) out._trace = [traceStep];
+    Object.defineProperties(out, {
+        _ok: { value: ok, enumerable: false },
+        _fallbackReason: { value: fallbackReason, enumerable: false },
+        _finishReason: { value: round.finishReason, enumerable: false },
+        _traceStep: { value: traceStep, enumerable: false },
+    });
+    return out;
 }
 
 function buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText }) {
+    const { exclude } = parseMetricQueryKeywords(queryText);
     const ranked = rankMetricsForQuery(metrics, queryText, 120);
+    const excludedCount = exclude.length
+        ? metrics.filter((m) => metricMatchesToken(m, exclude)).length
+        : 0;
     const categories = Array.from(new Set(metrics.map((m) => m.category).filter(Boolean)));
     const failing = metrics.filter((m) => m.isFailing);
     const activeDatasets = (datasetsRes?.datasets || []).filter((d) => d.rowCount > 0 || d.id === 'report_snapshots');
@@ -977,27 +1164,33 @@ function buildDataContextSummary({ month, sources, metrics, datasetsRes, reportB
     const catScoresText = (reportBundle?.categories || [])
         .map((c) => `${c.cat_name}:${c.final_score ?? c.base_score ?? '—'}`)
         .join(', ');
+    const excludeNote = excludedCount > 0
+        ? `（已按提示词排除 ${excludedCount} 个命中 ${exclude.join('/')} 的指标）`
+        : '';
     return {
         ranked,
         categories,
         failing,
         activeDatasets,
+        exclude,
+        excludedCount,
         hasAnyData: metrics.length > 0 || sources.length > 0 || activeDatasets.some((d) => d.rowCount > 0),
         text: [
             `月份: ${month}`,
-            `指标分类(${categories.length}): ${categories.join(', ') || '无'}`,
+            `指标分类/拆解维度(${categories.length}): ${categories.join(', ') || '无'}${categories.length ? '（指标对象中的 category / label“指标名 / 分类”即按该维度拆解）' : ''}`,
             catScoresText ? `分类得分: ${catScoresText}` : '',
             `可用导入表(${sources.length}): ${sources.map((s) => `${s.name}${s.sheets?.length ? `[${s.sheets.map((x) => `${x.name}:${x.rowCount}行`).join(',')}]` : ''}`).slice(0, 20).join(', ') || '无独立源文件（已直接入库指标快照）'}`,
             `可用数据集(${activeDatasets.length}): ${activeDatasets.map((d) => `${d.id}(${d.name}, ${d.rowCount}行)`).join('; ')}`,
-            `可用指标总计 ${metrics.length} 个（未达标 ${failing.length} 个），按相关性优先列出前 ${ranked.length} 个:`,
-            metricLines.join('\n') || '暂无指标',
+            `可用指标总计 ${metrics.length} 个（未达标 ${failing.length} 个）${excludeNote}，按相关性优先列出前 ${ranked.length} 个:`,
+            metricLines.join('\n') || '暂无符合条件的指标',
         ].filter(Boolean).join('\n'),
     };
 }
 
-export async function aiReportCellChat({ month, message, chat = [], prompt = '' } = {}) {
+export async function aiReportCellChat({ month, message, chat = [], prompt = '', _debug = false } = {}, { onEvent = null } = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     if (!String(message || '').trim()) fail('请输入要问的内容');
+    onEvent?.({ type: 'progress', stage: 'data', name: '读取当月数据' });
     const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
         listAiReportSources(month),
         listAiReportMetrics(month),
@@ -1013,24 +1206,38 @@ export async function aiReportCellChat({ month, message, chat = [], prompt = '' 
         '1. 用户在「数据导入」和「报表看板」保存的指标已自动同步在下方上下文的「可用指标」与「可用数据集」中。',
         '2. 只要可用指标数 > 0 或可用数据集行数 > 0，绝对禁止向用户提问“是否需要配置数据源和指标”，也禁止在 choices 中给出“去配置数据源和指标”“上传Excel/CSV文件”“尝试连接业务数据库”等引导外部导入的选项。',
         '3. 当用户提及某个关键词（如“整改”“拓扑”“预案”“未达标”“ET/TE/VDF”）且下方存在相关指标时，优先直接返回 type:"ready" 说明已匹配到的具体指标清单与拟展示方式；只有确实存在展示维度/筛选范围歧义时，才用 type:"ask" 给出基于现有真实指标或分类的具体选项（例如“全部整改指标明细表”“仅展示未达标整改项”“按分类（ET/TE/VDF）对比柱图”）。',
-        '4. 只有当可用指标、数据集、导入表全部为空（均为 0）时，才能告知本月尚无入库数据并提示在「数据导入」或「报表看板」保存本月数据。',
+        '4. 如果用户明确说明排除/不需要某些指标，说明方案时严格剔除这些指标，不要再推荐它们。',
+        '5. 只有当可用指标、数据集、导入表全部为空（均为 0）时，才能告知本月尚无入库数据并提示在「数据导入」或「报表看板」保存本月数据。',
     ].join('\n');
     const usr = `${ctx.text}\n当前提示词: ${prompt}\n历史对话: ${JSON.stringify((Array.isArray(chat) ? chat : []).slice(-6))}\n用户消息: ${message}`;
-    return runStructuredAiTurn(sys, usr, {
+    const res = await runStructuredAiTurn(sys, usr, {
         type: 'ready',
         text: `已理解你的需求（${String(message).slice(0, 80)}）。当前月份已就绪指标 ${metrics.length} 个（未达标 ${ctx.failing.length} 个）、数据集行数 ${ctx.activeDatasets.reduce((s, d) => s + (d.rowCount || 0), 0)} 行。`,
-    });
+    }, { maxTokens: 3500, timeoutMs: 90_000, stageLabel: '格子对话', debug: Boolean(_debug), onEvent });
+    const traceStep = res._traceStep;
+    const out = { ...res };
+    delete out._ok;
+    delete out._fallbackReason;
+    delete out._finishReason;
+    delete out._traceStep;
+    if (_debug && traceStep) out._trace = [traceStep];
+    return out;
 }
 
-export async function aiReportCellPrompt({ month, prompt = '', chat = [] } = {}) {
+export async function aiReportCellPrompt({ month, prompt = '', chat = [], _debug = false } = {}, { onEvent = null } = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     const userText = chat.filter((c) => c.role === 'user').map((c) => c.text).join('\n');
     const res = await runStructuredAiTurn(
         '将月报格子对话总结为清晰的“最终提示词”，只输出 JSON：{"prompt":"..."}。',
         `月份: ${month}\n原提示词: ${prompt}\n用户需求:\n${userText}`,
         { prompt: userText || prompt || `展示 ${month} 核心运营指标情况` },
+        { maxTokens: 2500, stageLabel: '生成最终提示词', debug: Boolean(_debug), onEvent },
     );
-    return { prompt: res.prompt || userText || prompt, _rounds: res._rounds };
+    return {
+        prompt: res.prompt || userText || prompt,
+        _rounds: res._rounds,
+        ...(_debug && res._traceStep ? { _trace: [res._traceStep] } : {}),
+    };
 }
 
 export async function aiReportCellTextEdit({ month, prompt = '', before = '', after = '' } = {}) {
@@ -1111,9 +1318,11 @@ export async function aiReportCellCompile({
     style = '',
     outline = null,
     presentation = null,
-} = {}) {
+    _debug = false,
+} = {}, { onEvent = null } = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     if (!String(prompt).trim()) fail('还没有最终提示词');
+    onEvent?.({ type: 'progress', stage: 'data', name: '读取当月指标与数据集' });
     const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
         listAiReportSources(month),
         listAiReportMetrics(month),
@@ -1121,18 +1330,22 @@ export async function aiReportCellCompile({
         loadReportSnapshotBundle(month),
     ]);
     const ctx = buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText: prompt });
-    const kws = extractMatchKeywords(prompt);
+    const { include: kws, exclude: excludeKws } = parseMetricQueryKeywords(prompt);
+    const eligibleMetrics = excludeKws.length
+        ? metrics.filter((m) => !metricMatchesToken(m, excludeKws))
+        : metrics;
     const matched = kws.length
-        ? metrics.filter((m) => kws.some((kw) => `${m.label} ${m.category} ${m.metricName}`.toLowerCase().includes(kw)))
+        ? eligibleMetrics.filter((m) => metricMatchesToken(m, kws))
         : [];
-    const fallbackNames = matched.length ? matched.slice(0, 40).map((m) => m.label) : [];
+    const fallbackPool = matched.length ? matched : (excludeKws.length ? eligibleMetrics : []);
+    const fallbackNames = fallbackPool.length ? fallbackPool.slice(0, 60).map((m) => m.label) : [];
 
     const fallbackRecipe = {
         summary: { zh: prompt.slice(0, 120), en: 'AI Report Cell' },
         sources: (metrics.length || reportBundle.metrics.length)
             ? [{ id: 'm1', kind: 'metrics', label: `${month} 考核指标`, names: fallbackNames, monthOffset: 0 }]
             : [],
-        compute: `function compute(input) {\n  var all = (input && input.m1 && input.m1.metrics) || [];\n  var list = all.slice(0, 30).map(function(m) {\n    return {\n      label: m.label || '',\n      category: m.category || '',\n      metricName: m.metricName || m.label || '',\n      value: m.value,\n      numValue: m.numValue,\n      target: m.target,\n      gap: m.gap,\n      isFailing: !!m.isFailing,\n      earnedScore: m.earnedScore\n    };\n  });\n  var failingCount = list.filter(function(x) { return x.isFailing; }).length;\n  return { title: ${JSON.stringify(prompt.slice(0, 32))}, count: list.length, failingCount: failingCount, items: list };\n}`,
+        compute: `function compute(input) {\n  var all = (input && input.m1 && input.m1.metrics) || [];\n  var list = all.slice(0, 100).map(function(m) {\n    return {\n      label: m.label || '',\n      category: m.category || '',\n      metricName: m.metricName || m.label || '',\n      value: m.value,\n      numValue: m.numValue,\n      target: m.target,\n      gap: m.gap,\n      isFailing: !!m.isFailing,\n      earnedScore: m.earnedScore\n    };\n  });\n  var failingCount = list.filter(function(x) { return x.isFailing; }).length;\n  return { title: ${JSON.stringify(prompt.slice(0, 48))}, count: list.length, failingCount: failingCount, items: list };\n}`,
         render: interactive
             ? buildFallbackInteractiveRender(month)
             : `function render(result, kit) {\n  if (!result || !result.items || !result.items.length) {\n    return kit.text('当前月份（${month}）暂无可展示指标数据，请先导入 SLA 快照。');\n  }\n  return kit.table(result.items, { title: '本月指标概览', columns: [{ key: 'category', label: '分类' }, { key: 'metricName', label: '指标名称' }, { key: 'target', label: '目标值', align: 'right' }, { key: 'value', label: '当前值', align: 'right' }, { key: 'gap', label: '差距', align: 'right' }] });\n}`,
@@ -1151,44 +1364,95 @@ export async function aiReportCellCompile({
         Templates.catalog(),
         '数据源规范：',
         '- 指标源：{"id":"m1","kind":"metrics","label":"本月指标","names":[...可选，留空数组则返回全部指标],"monthOffset":0}。input.m1 包含 {month, metrics:[{key,label,altLabel,metricName,category,value,numValue,target,targetValue,targetRule,isFailing,gap,weight,earnedScore}], values:{[label]:number}, targets:{[label]:number}, rules}。',
+        '- 拆解维度约定：指标名形如 "整改 / TE" 时，category="TE" 即所属地区/运营商维度，按运营商/分类拆解时直接读取 m.category（或 report_metric_data 中的 cat_name）分组即可，不要在 names 中遗漏或虚构字段。',
         '- 数据集源：{"id":"d1","kind":"dataset","dataset":"report_metric_data|report_category_scores|report_snapshots","label":"...","monthOffset":0}。report_metric_data.rows 每行含 {cat_name,metric_label,label,target_val,raw_val,num_val,is_failing,gap,weight,earned_score}；report_category_scores.rows 含 {cat_name,base_score,manual_score,final_score}。',
         '- 导入表源：{"id":"s1","kind":"sheet","match":{"sourceKey":"...","tableName":"...","sheetName":"..."},"monthOffset":0}。',
         '沙箱安全约束：',
         '- compute 禁止使用示例/假数据或 Math.random()，数值计算使用 numValue / values[label] / targets[label]，不要拿带 % 的字符串做数值运算或给图表喂文本。',
         '- 不要用不完整的简称去读 values[...]，优先遍历 input.m1.metrics 数组筛选 metricName / category / label / isFailing。',
         '- HTML 中绝对不要出现 undefined / NaN / [object Object] / null% / **加粗**。',
+        excludeKws.length
+            ? `- 【必须排除条件】：提示词明确排除了 ${excludeKws.join('、')}，sources[].names 和 compute 筛选结果中禁止出现任何包含这些词的指标。`
+            : '',
         interactive
             ? '- 【强约束 interactive=true】：本次 render(result, kit) 必须只返回一次 kit.interactive({ html, css, script }, { height })（禁止在 kit.interactive 之外返回 kit.table/kit.bar/kit.layout），图表用内联 <svg>，且 recipe.narrative 必须为 null。'
             : '- render(result, kit) 可返回 kit.table / kit.kpi / kit.bar / kit.line / kit.pie / kit.layout / HTML 字符串。',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
+
+    const skipRecipeRef = !recipe
+        || recipe.summary?.en === 'AI Report Cell'
+        || (excludeKws.length && Array.isArray(recipe.sources) && recipe.sources.some((s) => Array.isArray(s.names) && s.names.some((n) => metricMatchesToken({ label: n, metricName: n }, excludeKws))));
     const extraContext = [
         previousPrompt ? `上次提示词:\n${previousPrompt}` : '',
-        recipe ? `现有配方参考:\n${JSON.stringify({ sources: recipe.sources, compute: recipe.compute, ...(Templates.viewFromRender(recipe.render) ? { view: Templates.viewFromRender(recipe.render) } : {}), ...(Templates.freeParams(recipe.render) ? { params: Templates.freeParams(recipe.render).defs } : {}), ...(Query.queryFromCompute(recipe.compute) ? { query: Query.queryFromCompute(recipe.compute) } : {}) }).slice(0, 3500)}` : '',
+        !skipRecipeRef ? `现有配方参考:\n${JSON.stringify({ sources: recipe.sources, compute: recipe.compute, ...(Templates.viewFromRender(recipe.render) ? { view: Templates.viewFromRender(recipe.render) } : {}), ...(Templates.freeParams(recipe.render) ? { params: Templates.freeParams(recipe.render).defs } : {}), ...(Query.queryFromCompute(recipe.compute) ? { query: Query.queryFromCompute(recipe.compute) } : {}) }).slice(0, 3500)}` : '',
         error ? `上次运行报错（必须修复该错误）:\n${error}` : '',
         style ? `整体视觉风格:\n${String(style).slice(0, 600)}` : '',
         outline ? `报告大纲参考:\n${JSON.stringify(outline).slice(0, 500)}` : '',
         presentation ? `当前视图上下文:\n${JSON.stringify(presentation).slice(0, 500)}` : '',
     ].filter(Boolean).join('\n\n');
     const usr = `${ctx.text}\n\n最终提示词:\n${prompt}${extraContext ? `\n\n${extraContext}` : ''}`;
-    const aiRes = await runStructuredAiTurn(sys, usr, { recipe: fallbackRecipe });
-    let compiled;
-    // 模型给了 view：展示代码由模板库生成（只是把 view 交给模板库），view 无效时再看它有没有自己写 render
-    const raw = aiRes.recipe && typeof aiRes.recipe === 'object' ? { ...aiRes.recipe } : null;
-    const view = raw?.view ? Templates.normalizeView(raw.view) : null;
-    if (raw && view) raw.render = Templates.renderSource(view);
-    // 模型给了 query：取数代码由查询库执行（只是把 query 交给查询库），字段和取值在运行时核对
-    if (raw && raw.query && typeof raw.query === 'object') raw.compute = Query.computeSource(raw.query);
-    try {
-        compiled = normalizeRecipe(raw || fallbackRecipe);
-    } catch {
-        compiled = normalizeRecipe(fallbackRecipe);
+    const aiRes = await runStructuredAiTurn(sys, usr, { recipe: fallbackRecipe }, {
+        maxTokens: 6000,
+        timeoutMs: 90_000,
+        stageLabel: '编译格子配方',
+        debug: Boolean(_debug),
+        onEvent,
+    });
+
+    let compiled = null;
+    let usedFallback = false;
+    let fallbackReason = '';
+    if (!aiRes._ok) {
+        usedFallback = true;
+        fallbackReason = aiRes._fallbackReason || '模型调用失败，已使用基础兜底配方';
+    } else {
+        const candidate = (aiRes.recipe && typeof aiRes.recipe === 'object')
+            ? { ...aiRes.recipe }
+            : ((aiRes.sources || aiRes.compute || aiRes.query || aiRes.view || aiRes.render) ? { ...aiRes } : null);
+        if (!candidate) {
+            usedFallback = true;
+            fallbackReason = '模型返回 JSON 中缺少有效的 recipe（sources/compute/render/view）';
+        } else {
+            try {
+                // 模型给了 view：展示代码由模板库生成；模型给了 query：取数代码由查询库生成
+                if (candidate.view) {
+                    const view = Templates.normalizeView(candidate.view);
+                    if (view) candidate.render = Templates.renderSource(view);
+                    else if (!candidate.render) throw new Error('模板 view 配置无效且未提供 render');
+                }
+                if (candidate.query && typeof candidate.query === 'object') {
+                    candidate.compute = Query.computeSource(candidate.query);
+                }
+                compiled = normalizeRecipe(candidate);
+            } catch (normErr) {
+                usedFallback = true;
+                fallbackReason = `模型生成的配方校验失败：${normErr?.message || normErr}`;
+            }
+        }
     }
-    if (Templates.isTemplateRender(compiled.render)) return { recipe: compiled, _rounds: aiRes._rounds };
-    if (interactive && !/kit\.interactive\s*\(/.test(compiled.render || '')) {
-        compiled = normalizeRecipe(fallbackRecipe);
+
+    if (!compiled) compiled = normalizeRecipe(fallbackRecipe);
+
+    if (!Templates.isTemplateRender(compiled.render)) {
+        if (interactive && !/kit\.interactive\s*\(/.test(compiled.render || '')) {
+            usedFallback = true;
+            fallbackReason = fallbackReason || '模型未使用 kit.interactive，已退回兜底交互配方';
+            compiled = normalizeRecipe(fallbackRecipe);
+        }
+        if (interactive) compiled.narrative = null;
     }
-    if (interactive) compiled.narrative = null;
-    return { recipe: compiled, _rounds: aiRes._rounds };
+
+    const traceStep = aiRes._traceStep ? { ...aiRes._traceStep } : null;
+    if (traceStep && usedFallback && fallbackReason && !traceStep.error) {
+        traceStep.error = fallbackReason;
+        onEvent?.({ type: 'trace', step: traceStep });
+    }
+    return {
+        recipe: compiled,
+        _rounds: aiRes._rounds,
+        ...(usedFallback ? { fallback: true, fallbackReason, ...(aiRes._aiError ? { aiError: aiRes._aiError } : {}) } : {}),
+        ...(_debug && traceStep ? { _trace: [traceStep] } : {}),
+    };
 }
 
 // 画面标记 → 只改模板格子的展示设置（模板、参数、分区宽度），不改数据；需要改数据或计算时交回格子对话
@@ -1249,9 +1513,10 @@ export async function aiReportCellParams({ render = '', prompt = '' } = {}) {
 }
 
 // AI BI：对话 → 画布大小与格子布局（每个格子一段提示词，之后逐个编译）
-export async function aiBiPlan({ month, message = '', chat = [], board = {}, focus = '' } = {}) {
+export async function aiBiPlan({ month, message = '', chat = [], board = {}, focus = '', _debug = false } = {}, { onEvent = null } = {}) {
     if (!validMonth(month)) fail('A valid report month is required');
     if (!String(message).trim()) fail('请说说想做什么样的看板');
+    onEvent?.({ type: 'progress', stage: 'data', name: '读取当月数据' });
     const [sources, metrics, datasetsRes, reportBundle] = await Promise.all([
         listAiReportSources(month), listAiReportMetrics(month), listAiReportDatasets(month), loadReportSnapshotBundle(month),
     ]);
@@ -1263,14 +1528,33 @@ export async function aiBiPlan({ month, message = '', chat = [], board = {}, foc
     const ctx = buildDataContextSummary({ month, sources, metrics, datasetsRes, reportBundle, queryText: message });
     const history = (Array.isArray(chat) ? chat : []).slice(-12).map((c) => `${c.role === 'user' ? '用户' : 'AI'}：${String(c.text || '').slice(0, 800)}`).join('\n');
     const usr = [`报告月份：${month}`, `数据概况：\n${ctx.text}`, BiBoard.planCatalog(Templates), `当前看板：${BiBoard.boardBrief(board, focus)}`, history ? `之前的对话：\n${history}` : '', focus ? `用户正在说的格子：${focus}` : '', `用户：${String(message).slice(0, 4000)}`].filter(Boolean).join('\n\n');
+    onEvent?.({ type: 'progress', stage: 'model', name: '规划看板布局' });
     const started = Date.now();
-    const res = await callAiCompletion({ messages: [{ role: 'system', content: BiBoard.PLAN_PROMPT }, { role: 'user', content: usr }], maxTokens: 6000 });
-    const _rounds = [{ index: 1, model: res.model || 'default', ms: Date.now() - started, inputTokens: res.usage?.prompt_tokens || 0, outputTokens: res.usage?.completion_tokens || 0, at: new Date().toISOString() }];
+    const res = await callAiCompletion({ messages: [{ role: 'system', content: BiBoard.PLAN_PROMPT }, { role: 'user', content: usr }], maxTokens: 6000, timeoutMs: 90_000 });
+    const round = buildAiRoundMetrics(res, started);
+    const _rounds = [round];
+    const traceStep = {
+        id: 'ai-1',
+        kind: 'ai',
+        label: '规划看板布局',
+        model: round.model,
+        provider: round.provider,
+        finishReason: round.finishReason || '',
+        ms: round.ms,
+        tps: round.tps,
+        inputTokens: round.inputTokens,
+        outputTokens: round.outputTokens,
+        ...(_debug ? { system: clipTraceText(BiBoard.PLAN_PROMPT, 4000), messages: [{ role: 'user', content: clipTraceText(usr, 6000) }], reply: clipTraceText(res.text || '', 6000) } : {}),
+        ...(!res.ok ? { error: res.error || '模型调用失败' } : {}),
+    };
+    onEvent?.({ type: 'trace', step: traceStep });
+    onEvent?.({ type: 'progress', stage: 'model_done', name: '规划看板布局' });
     if (!res.ok) fail(`AI 暂时不可用：${res.error || '请检查模型配置'}`, 503);
     const reply = parseJsonReply(res.text) || {};
-    if (reply.type === 'ask' && reply.question) return { type: 'ask', question: String(reply.question).slice(0, 1000), choices: (reply.choices || []).slice(0, 4).map((c) => String(c).slice(0, 200)), _rounds };
-    if (reply.type === 'plan' && Array.isArray(reply.items)) return { type: 'plan', reply: String(reply.reply || '').slice(0, 1000), ...BiBoard.fromPlan(reply, board), _rounds };
-    return { type: 'answer', text: String(reply.text || res.text || '').slice(0, 4000), _rounds };
+    const debugExtra = _debug ? { _trace: [traceStep] } : {};
+    if (reply.type === 'ask' && reply.question) return { type: 'ask', question: String(reply.question).slice(0, 1000), choices: (reply.choices || []).slice(0, 4).map((c) => String(c).slice(0, 200)), _rounds, ...debugExtra };
+    if (reply.type === 'plan' && Array.isArray(reply.items)) return { type: 'plan', reply: String(reply.reply || '').slice(0, 1000), ...BiBoard.fromPlan(reply, board), _rounds, ...debugExtra };
+    return { type: 'answer', text: String(reply.text || res.text || '').slice(0, 4000), _rounds, ...debugExtra };
 }
 
 export async function aiReportOverallChat({ message, prompt = '' } = {}) {

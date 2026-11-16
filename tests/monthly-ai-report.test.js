@@ -22,6 +22,58 @@ async function startMockOpenAiServer() {
             try { body = JSON.parse(raw); } catch { body = {}; }
             captured.push({ url: req.url, body });
             res.setHeader('Content-Type', 'application/json');
+            if (mode === 'truncated-compile') {
+                res.end(JSON.stringify({
+                    choices: [{
+                        finish_reason: 'length',
+                        message: { content: '{"recipe":{"summary":{"zh":"incomplete"' },
+                    }],
+                    usage: { prompt_tokens: 400, completion_tokens: 2500 },
+                }));
+                return;
+            }
+            if (mode === 'http-error-compile') {
+                res.statusCode = 502;
+                res.end(JSON.stringify({ error: { message: 'upstream model overloaded' } }));
+                return;
+            }
+            if (mode === 'top-level-recipe') {
+                res.end(JSON.stringify({
+                    choices: [{
+                        finish_reason: 'stop',
+                        message: {
+                            content: JSON.stringify({
+                                summary: { zh: '顶层配方直出', en: 'Top Level' },
+                                sources: [{ id: 'm1', kind: 'metrics', label: '整改', names: ['整改 / ET'], monthOffset: 0 }],
+                                compute: 'function compute(input){ var m=(input&&input.m1&&input.m1.metrics)||[]; return { items: m }; }',
+                                render: 'function render(result, kit){ return kit.table(result.items); }',
+                                narrative: null,
+                            }),
+                        },
+                    }],
+                    usage: { prompt_tokens: 180, completion_tokens: 95 },
+                }));
+                return;
+            }
+            if (mode === 'prose-wrapped-json') {
+                const payload = JSON.stringify({
+                    recipe: {
+                        summary: { zh: '包裹JSON解析', en: 'Wrapped' },
+                        sources: [{ id: 'm1', kind: 'metrics', label: '整改', names: ['整改 / ET'], monthOffset: 0 }],
+                        compute: 'function compute(input){ return { items: (input&&input.m1&&input.m1.metrics)||[] }; }',
+                        render: 'function render(result, kit){ return kit.table(result.items); }',
+                        narrative: null,
+                    },
+                });
+                res.end(JSON.stringify({
+                    choices: [{
+                        finish_reason: 'stop',
+                        message: { content: `说明：{注释占位}\n\`\`\`json\n${payload}\n\`\`\`\n以上为结果。` },
+                    }],
+                    usage: { prompt_tokens: 120, completion_tokens: 80 },
+                }));
+                return;
+            }
             if (mode === 'template-compile') {
                 res.end(JSON.stringify({
                     choices: [{ message: { content: JSON.stringify({ recipe: {
@@ -173,6 +225,18 @@ test('AI Monthly Report discovers cross-month SLA & report_metric_data and compi
                             { category: 'TE', value: '100%', target: '≥ 100%', gap: '0%', isWarn: false },
                         ],
                     },
+                    {
+                        key: 'eos_all_ver',
+                        label: '全量EOS-版本',
+                        value: '92%',
+                        target: '≥ 90%',
+                        isWarn: false,
+                        gap: '0%',
+                        subMetrics: [
+                            { category: 'TE', value: '92%', target: '≥ 90%', gap: '0%', isWarn: false },
+                            { category: 'ET', value: '84%', target: '≥ 90%', gap: '-6%', isWarn: true },
+                        ],
+                    },
                 ],
             }),
         });
@@ -268,6 +332,8 @@ test('AI Monthly Report discovers cross-month SLA & report_metric_data and compi
         assert.equal(runJson.input.m1.values['整改 / ET'], 96);
         assert.equal(runJson.input.m1.targets['整改 / ET'], 100);
         assert.ok(runJson.input.m1.metrics.some((m) => m.label === '整改 / ET'));
+        assert.equal(runJson.input.m1.values['全量EOS-版本 / TE'], undefined, 'run-data values should be scoped to selected sources');
+        assert.equal(runJson.input.m1.targets['拓扑 / TE'], undefined, 'run-data targets should exclude unselected metrics');
         assert.equal(runJson.input.d1.rows.length, 2);
 
         // 6. Verify /api/ai-report/cell/chat includes matched metrics & datasets and forbids external source prompt
@@ -321,6 +387,79 @@ test('AI Monthly Report discovers cross-month SLA & report_metric_data and compi
         assert.match(tplJson.recipe.render, /air-template-view/);
         assert.doesNotMatch(tplJson.recipe.render, /bogus/);
         assert.match(tplJson.recipe.render, /"template":"bar-target","data":"chart","params":\{"unit":"%"\}/);
+
+        // 8. Negation exclusion ("不需要显示EOS相关的指标"), top-level unwrap, max_tokens=6000, explicit fallback/trace, and NDJSON streaming
+        mockAi.setMode('truncated-compile');
+        const truncRes = await fetch(`${appUrl}/api/ai-report/cell/compile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                month: '2026-10',
+                interactive: false,
+                _debug: true,
+                prompt: '请基于2026年10月的数据，生成埃及地区的整改指标月报，按运营商拆解。注意：不需要显示EOS相关的指标。',
+            }),
+        });
+        assert.equal(truncRes.status, 200);
+        const truncJson = await truncRes.json();
+        const compileAiReq = mockAi.captured.at(-1).body;
+        assert.equal(compileAiReq.max_tokens, 6000);
+        const compileUsrMsg = compileAiReq.messages[1].content;
+        assert.doesNotMatch(compileUsrMsg, /全量EOS-版本/, 'negated EOS metrics must be excluded from AI context');
+        assert.match(compileUsrMsg, /整改/, 'positive metric 整改 must stay in AI context');
+        assert.equal(truncJson.fallback, true);
+        assert.match(truncJson.fallbackReason, /max_tokens|截断/);
+        assert.equal(truncJson.aiError, undefined);
+        assert.ok(truncJson._rounds?.[0]?.tps > 0, 'compile rounds should include positive TPS');
+        assert.equal(truncJson._trace?.[0]?.finishReason, 'length');
+        const fallbackNames = truncJson.recipe.sources[0]?.names || [];
+        assert.ok(fallbackNames.some((n) => n.includes('整改')), 'fallback source names should include 整改');
+        assert.equal(fallbackNames.some((n) => /EOS/i.test(n)), false, 'fallback source names must exclude EOS');
+
+        mockAi.setMode('http-error-compile');
+        const errRes = await fetch(`${appUrl}/api/ai-report/cell/compile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ month: '2026-10', interactive: false, _debug: true, prompt: '整改指标情况' }),
+        });
+        assert.equal(errRes.status, 200);
+        const errJson = await errRes.json();
+        assert.equal(errJson.fallback, true);
+        assert.match(errJson.aiError || '', /upstream model overloaded/);
+        assert.match(errJson._trace?.[0]?.error || '', /upstream model overloaded/);
+
+        mockAi.setMode('top-level-recipe');
+        const topRes = await fetch(`${appUrl}/api/ai-report/cell/compile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ month: '2026-10', interactive: false, prompt: '整改指标情况' }),
+        });
+        assert.equal(topRes.status, 200);
+        const topJson = await topRes.json();
+        assert.equal(topJson.fallback, undefined);
+        assert.equal(topJson.recipe.summary.zh, '顶层配方直出');
+
+        mockAi.setMode('prose-wrapped-json');
+        const proseRes = await fetch(`${appUrl}/api/ai-report/cell/compile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                month: '2026-10',
+                interactive: false,
+                _stream: true,
+                _debug: true,
+                prompt: '整改指标情况',
+            }),
+        });
+        assert.equal(proseRes.status, 200);
+        assert.match(proseRes.headers.get('content-type') || '', /application\/x-ndjson/);
+        const ndjsonLines = (await proseRes.text()).trim().split('\n').map((line) => JSON.parse(line));
+        assert.ok(ndjsonLines.some((ev) => ev.type === 'progress' && ev.stage === 'model'));
+        assert.ok(ndjsonLines.some((ev) => ev.type === 'trace' && ev.step?.kind === 'ai'));
+        const resultEv = ndjsonLines.find((ev) => ev.type === 'result');
+        assert.ok(resultEv && resultEv.status === 200);
+        assert.equal(resultEv.body.recipe.summary.zh, '包裹JSON解析');
+        assert.equal(resultEv.body.fallback, undefined);
     } finally {
         child.kill('SIGTERM');
         await new Promise((resolve) => child.once('exit', resolve));
@@ -454,5 +593,101 @@ test('leave-page guards use AppDialog without native beforeunload and homepage p
     assert.match(tourJs, /restoreSnapshot/);
     assert.match(indexHtml, /js\/home\/product-tour\.js/);
     assert.match(homeShellJs, /HomeProductTour\?\.replay/);
+});
+
+test('AI Report frontend trace export deduplicates response and validateInteractive respects interactive flag', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const vm = await import('node:vm');
+    const rootDir = path.resolve(import.meta.dirname, '..');
+
+    const traceCode = fs.readFileSync(path.join(rootDir, 'static/js/ai-report/trace.js'), 'utf8');
+    const appCode = fs.readFileSync(path.join(rootDir, 'static/js/ai-report/app.js'), 'utf8');
+
+    const store = new Map([['air-dev-mode', '1']]);
+    let exportedDownload = null;
+    const win = {
+        location: { pathname: '/monthly.html' },
+        localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) },
+        URL: { createObjectURL: (b) => { exportedDownload = b; return 'blob:test'; }, revokeObjectURL: () => {} },
+        document: {
+            createElement: () => ({ style: {}, click() {}, remove() {} }),
+            body: { append() {} },
+        },
+        API: {
+            post: async () => ({
+                recipe: { summary: { zh: 'ok', en: 'ok' } },
+                _trace: [{ id: 'ai-1', kind: 'ai', model: 'glm-52', provider: 'openai', finishReason: 'stop', ms: 1200, tps: 42.5, inputTokens: 100, outputTokens: 51 }],
+                _rounds: [{ index: 1, model: 'glm-52', ms: 1200, generationMs: 1200, tps: 42.5, inputTokens: 100, outputTokens: 51, at: '2026-11-17T00:00:00Z' }],
+            }),
+        },
+        Blob: class FakeBlob { constructor(parts) { this.text = parts.join(''); } },
+    };
+    win.window = win;
+    vm.runInNewContext(traceCode, { ...win, Map, Set, Date, JSON, Math, Promise, Array, Object, String, Number, Boolean, Error, setTimeout, RegExp });
+
+    await win.AiReportTrace.post('c1', '编译配方（第 1 次）', '/api/ai-report/cell/compile', { month: '2026-10', interactive: false, authToken: 'secret-jwt-123' });
+    const exported = win.AiReportTrace.exportLog('c1', { title: '整改情况', prompt: '按运营商展示整改指标', chat: [] });
+    assert.ok(exported);
+    assert.equal(exported.entries[0].request.authToken, '[REDACTED]', 'real secret token fields must still be redacted');
+    assert.equal('result' in exported.entries[0], false, 'entry should not duplicate serialized result alongside response');
+    assert.ok(exported.entries[0].response?.recipe);
+    assert.equal(exported.entries[0].steps.length, 1);
+    assert.equal(exported.entries[0].steps[0].inputTokens, 100, 'numeric inputTokens must not be redacted');
+    assert.equal(exported.entries[0].steps[0].outputTokens, 51, 'numeric outputTokens must not be redacted');
+    assert.ok(exported.modelStats, 'modelStats should be populated from AI trace steps even when chat is empty');
+    assert.equal(exported.modelStats.total.avgTps, 42.5);
+    assert.ok(exportedDownload && !JSON.parse(exportedDownload.text).entries[0].result);
+
+    // Verify validateInteractive + compileAndRun fallback handling in static/js/ai-report/app.js
+    const fnMatch = appCode.match(/const isFallbackRecipe=[\s\S]*?function wantsInteractive\([\s\S]*?\n    \}/);
+    assert.ok(fnMatch, 'validateInteractive, compileAndRun, and wantsInteractive helpers exist in ai-report/app.js');
+    let settledCount = 0;
+    let compilePostCalls = 0;
+    let sandboxRunCalls = 0;
+    const cellsById = {
+        tableCell: { cell: { recipe: { render: 'function render(){}' }, output: { widgets: [{ id: 'w1', type: 'datatable' }] } } },
+        tplCell: { cell: { recipe: { render: '/* air-template-view */' }, output: { widgets: [{ id: 'w1', type: 'chart' }] } } },
+        interCell: { cell: { recipe: { render: 'function render(r,k){ return k.interactive({}); }' }, output: { widgets: [{ id: 'w1', type: 'interactive' }] } } },
+        errCell: { cell: { id: 'errCell', prompt: '按运营商展示整改，不要显示EOS', recipe: { summary: { zh: 'x', en: 'AI Report Cell' } }, recipePrompt: 'old', chat: [], output: null } },
+    };
+    const appCtx = {
+        state: { doc: { reportMonth: '2026-10' }, busy: new Map() },
+        find: (id) => cellsById[id],
+        t: (zh) => zh,
+        render: () => {},
+        styleOf: () => '',
+        syncNarrowLayout: () => {},
+        reconcileLayout: () => {},
+        rememberResult: () => {},
+        window: { AiReportTemplates: { isTemplateRender: (code) => String(code || '').includes('air-template-view') } },
+        AiReportInteractive: { settle: async () => { settledCount += 1; }, context: () => [] },
+        AiReportRunner: {
+            outline: () => null,
+            run: async (c) => { sandboxRunCalls += 1; c.output = { html: '<table></table>', widgets: [{ id: 'w1', type: 'datatable' }] }; },
+            missingTitle: () => '',
+        },
+        AiReportTrace: {
+            post: async () => {
+                compilePostCalls += 1;
+                return { fallback: true, aiError: 'upstream 502', fallbackReason: '模型网关返回 502', recipe: { summary: { en: 'AI Report Cell' }, render: 'function render(){}' } };
+            },
+            note: () => {},
+        },
+        reportRoot: { querySelector: () => null },
+        CSS: { escape: (x) => x },
+    };
+    const { validateInteractive, compileAndRun } = vm.runInNewContext(`${fnMatch[0]}; ({ validateInteractive, compileAndRun })`, { ...appCtx, Error, String, JSON });
+    await validateInteractive('tableCell', { interactive: false });
+    assert.equal(settledCount, 0, 'non-interactive datatable cell should pass without iframe settle');
+    await validateInteractive('tplCell', { interactive: true });
+    await assert.rejects(() => validateInteractive('tableCell', { interactive: true }), /kit\.interactive/);
+    await validateInteractive('interCell', { interactive: true });
+    assert.equal(settledCount, 1);
+
+    await compileAndRun('errCell', cellsById.errCell.cell);
+    assert.equal(compilePostCalls, 1, 'aiError fallback must abort retry loop after 1 attempt instead of repeating 3 times');
+    assert.equal(sandboxRunCalls, 1, 'blank cell should still compute temporary fallback preview once');
+    assert.match(cellsById.errCell.cell.chat.at(-1)?.text || '', /模型网关返回 502/);
 });
 

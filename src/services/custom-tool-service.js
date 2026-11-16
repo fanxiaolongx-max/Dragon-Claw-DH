@@ -114,7 +114,9 @@ const BUILTIN = (() => {
             if (!fs.existsSync(path.join(STATIC_DIR, 'builtin-tools', tool.slug, 'index.html'))) continue;
             map.set(tool.slug, {
                 slug: tool.slug, name: tool.name || tool.slug, nameEn: tool.nameEn || '', description: tool.description || '', descriptionEn: tool.descriptionEn || '',
-                icon: tool.icon || '🧩', tags: Array.isArray(tool.tags) ? tool.tags : [], href: `/custom-tools/${tool.slug}/`,
+                icon: tool.icon || '🧩', tags: Array.isArray(tool.tags) ? tool.tags : [],
+                ...(Array.isArray(tool.tagsEn) && tool.tagsEn.length ? { tagsEn: tool.tagsEn } : {}),
+                href: `/custom-tools/${tool.slug}/`,
                 builtIn: true, entry: `builtin-tools/${tool.slug}/index.html`, owner: '', visibility: 'public', shared: false, createdAt: '', updatedAt: '',
             });
         }

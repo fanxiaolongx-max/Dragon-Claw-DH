@@ -113,6 +113,11 @@ window.HomeTools = { marketOpened: false };
                 'home.import.skillFiles': '，附带 {count} 个参考文件',
                 'home.import.skillSubmit': '导入技能',
                 'home.import.skillTitle': '导入技能',
+                'home.import.skillSubtitle': '上传 SKILL.md 文件或包含 SKILL.md 的 ZIP 技能包，导入后出现在「技能」列表并可在对话里 @ 使用。',
+                'home.import.skillFileTitle': '选择 SKILL.md / ZIP 技能包',
+                'home.import.skillFileHint': '支持 .md 文件或含 SKILL.md 的 ZIP 压缩包（最大 5 MB）',
+                'home.import.skillRequired': '请先选择 SKILL.md 或 ZIP 技能包',
+                'home.import.adminOnlySkill': '仅管理员可导入技能；普通用户可在对话中使用已开放技能，或在「工具」页上传个人 HTML 工具。',
                 'home.import.skillName': '中文技能名',
                 'home.import.skillNameEn': '英文技能名',
                 'home.import.skillExists': '已有技能 @{id}，要用这个技能包覆盖吗？',
@@ -285,6 +290,11 @@ window.HomeTools = { marketOpened: false };
                 'home.import.skillFiles': ', with {count} reference files',
                 'home.import.skillSubmit': 'Import Skill',
                 'home.import.skillTitle': 'Import Skill',
+                'home.import.skillSubtitle': 'Upload a SKILL.md file or a ZIP package containing SKILL.md so it appears in Skills and can be used with @ in chat.',
+                'home.import.skillFileTitle': 'Choose a SKILL.md / ZIP package',
+                'home.import.skillFileHint': 'Supports .md files or ZIP packages with SKILL.md (up to 5 MB)',
+                'home.import.skillRequired': 'Choose a SKILL.md or ZIP skill package first',
+                'home.import.adminOnlySkill': 'Only administrators can import Skills. Regular members can use shared Skills in chat or upload personal HTML tools under Tools.',
                 'home.import.skillName': 'Chinese Skill name',
                 'home.import.skillNameEn': 'English Skill name',
                 'home.import.skillExists': 'Skill @{id} already exists. Replace it with this package?',
@@ -392,6 +402,12 @@ window.HomeTools = { marketOpened: false };
                 title: { 'zh-CN': 'AI BI', 'en-US': 'AI BI' },
                 desc: { 'zh-CN': '说一句话就生成看板：AI 定画布大小、排好格子，再逐个取数出图。拖动调整布局，参数直接改，不用再等 AI；可全屏演示、导出静态 HTML。', 'en-US': 'Describe a board in one sentence: the AI sizes the canvas, lays out cells and builds each chart from your data. Drag to arrange, tune settings without AI, present full screen or export static HTML.' },
                 tags: { 'zh-CN': ['💬 对话生成看板', '🧱 59 个内置模板', '📍 画面标记修改', '🖥️ 大屏 / A4 / 手机画布'], 'en-US': ['💬 Boards from conversation', '🧱 59 built-in templates', '📍 Mark to change', '🖥️ Wall / A4 / phone canvases'] },
+                arrow: 'home.arrow.tool'
+            },
+            '/duty-roster': {
+                title: { 'zh-CN': '夜间运维值班表', 'en-US': 'Night Duty Roster' },
+                desc: { 'zh-CN': '按月在线编辑夜间运维值班表，严格遵循埃及工作制（周日开始，周五周六为埃及周末并高亮），自动按自然周切分日期区间，并支持一键同步至月报编辑器直接引用。', 'en-US': 'Edit monthly night-shift duty rosters aligned with the Egypt workweek (Sunday start with Friday–Saturday weekends highlighted), automatic weekly date splitting, and one-click sync into the monthly report editor.' },
+                tags: { 'zh-CN': ['🇪🇬 埃及周末排班规则', '📅 目标月自动分周', '👥 人员快捷填入/统计', '📑 月报资料库直接调用'], 'en-US': ['🇪🇬 Egypt weekend rules', '📅 Auto weekly split', '👥 Quick staff fill & stats', '📑 Monthly report sync'] },
                 arrow: 'home.arrow.tool'
             },
             '/bigscreen': {
@@ -1002,6 +1018,19 @@ window.HomeTools = { marketOpened: false };
             });
         }
 
+        function homeCardKey(href) {
+            const raw = String(href || '').trim().split(/[?#]/)[0];
+            if (!raw) return '';
+            let pathname = raw;
+            try { pathname = new URL(raw, window.location.origin).pathname; } catch { /* relative href */ }
+            if (typeof window.dhStripPrefix === 'function') pathname = window.dhStripPrefix(pathname);
+            pathname = pathname.replace(/\.html$/i, '');
+            const clean = '/' + pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+            if (HOME_CARDS[clean]) return clean;
+            const last = '/' + (pathname.split('/').filter(Boolean).pop() || '');
+            return HOME_CARDS[last] ? last : clean;
+        }
+
         function applyHomeI18n() {
             const lang = window.ToolsI18n?.getLanguage?.() || 'zh-CN';
             if (!window.ToolsPlatformTitle?.apply(null, lang)) document.title = t('home.title');
@@ -1044,11 +1073,12 @@ window.HomeTools = { marketOpened: false };
             if (importSubmit && !importSubmit.disabled) importSubmit.textContent = t(importSubmit.dataset.completed === 'true' ? 'home.import.done' : 'home.import.submit');
             const importTags = document.getElementById('customToolTags');
             if (importTags) importTags.placeholder = t('home.import.tagsPlaceholder');
-            document.querySelectorAll('#toolsGrid > a.tool-card:not([data-custom-tool-card="1"])').forEach(card => {
-                const data = HOME_CARDS[card.getAttribute('href')];
+            document.querySelectorAll('#toolsGrid > a.tool-card:not([data-custom-tool-card="1"]):not([data-skill-card="1"])').forEach(card => {
+                const data = HOME_CARDS[homeCardKey(card.getAttribute('href'))];
                 if (!data) return;
                 setTextForCard(card, data, lang);
             });
+            window.HomeWorkspace?.refresh?.();
         }
 
         function setTextForCard(card, data, lang) {
@@ -1056,7 +1086,11 @@ window.HomeTools = { marketOpened: false };
             const desc = card.querySelector('.card-desc');
             const tags = card.querySelector('.card-features');
             const arrow = card.querySelector('.card-arrow');
-            if (title) title.textContent = data.title[lang] || data.title['zh-CN'];
+            if (title) {
+                const badges = [...title.querySelectorAll('.new-badge, .tool-kind-badge')];
+                title.textContent = data.title[lang] || data.title['zh-CN'];
+                badges.forEach(badge => title.appendChild(badge));
+            }
             if (desc) desc.textContent = data.desc[lang] || data.desc['zh-CN'];
             if (tags) {
                 tags.innerHTML = (data.tags[lang] || data.tags['zh-CN'])
@@ -1075,9 +1109,13 @@ window.HomeTools = { marketOpened: false };
             (tools || []).forEach((tool, index) => {
                 const isEnglish = window.ToolsI18n?.getLanguage?.() === 'en-US';
                 const displayName = isEnglish && tool.nameEn ? tool.nameEn : tool.name;
-                const displayDescription = isEnglish && tool.descriptionEn ? tool.descriptionEn : tool.description;
-                const hasTags = Array.isArray(tool.tags) && tool.tags.length > 0;
-                const tags = hasTags ? tool.tags : [t('home.custom.defaultTag1'), t('home.custom.defaultTag2')];
+                const defaultZhDesc = '由独立 HTML 导入的平台工具，可在统一入口和顶部导航中访问。';
+                const displayDescription = isEnglish
+                    ? (tool.descriptionEn || (tool.description && tool.description !== defaultZhDesc ? tool.description : ''))
+                    : tool.description;
+                const rawTags = isEnglish && Array.isArray(tool.tagsEn) && tool.tagsEn.length > 0 ? tool.tagsEn : tool.tags;
+                const hasTags = Array.isArray(rawTags) && rawTags.length > 0;
+                const tags = hasTags ? rawTags : [t('home.custom.defaultTag1'), t('home.custom.defaultTag2')];
                 const card = document.createElement('a');
                 card.href = tool.href;
                 const isSharedAccess = tool.sharedAccess === true;
@@ -1125,7 +1163,6 @@ window.HomeTools = { marketOpened: false };
         }
 
         function setupCustomToolUpload() {
-            const role = localStorage.getItem('tools_role');
             const modal = document.getElementById('customToolImportModal');
             const form = document.getElementById('customToolImportForm');
             const input = document.getElementById('customToolFileInput');
@@ -1156,10 +1193,22 @@ window.HomeTools = { marketOpened: false };
                 progressLog.textContent = uploadLogs.join('\n');
                 progressLog.scrollTop = progressLog.scrollHeight;
             };
-            if (role !== 'admin' || !modal || !form || !input) return;
+            if (!modal || !form || !input) return;
+            const isAdminUser = () => localStorage.getItem('tools_role') === 'admin';
             const isSuperAdminUser = () => localStorage.getItem('tools_super') === '1' && (typeof window.isNavSuperAdmin === 'function' ? window.isNavSuperAdmin() === true : true) && (localStorage.getItem('tools_tenant_id') || 'default') === 'default';
+            let importMode = 'tool';
             const updateFileHint = () => {
+                const fileTitleEl = document.getElementById('customToolFileTitle');
                 const hintEl = document.getElementById('customToolFileHint');
+                const subEl = document.getElementById('customToolImportSubtitle');
+                if (importMode === 'skill') {
+                    if (subEl) subEl.textContent = t('home.import.skillSubtitle');
+                    if (fileTitleEl) fileTitleEl.textContent = t('home.import.skillFileTitle');
+                    if (hintEl) hintEl.textContent = t('home.import.skillFileHint');
+                    return;
+                }
+                if (subEl) subEl.textContent = t('home.import.subtitle');
+                if (fileTitleEl) fileTitleEl.textContent = t('home.import.fileTitle');
                 if (hintEl) hintEl.textContent = isSuperAdminUser() ? t('home.import.fileHint') : t('home.import.fileHintNonSuper');
             };
             let metadataGeneration = 0;
@@ -1213,17 +1262,22 @@ window.HomeTools = { marketOpened: false };
                 if (currentUpdateTarget) return;
                 if (!skillImport) submitBtn.textContent = t(app ? (app.updateSlug ? 'home.import.pyUpdateSubmit' : 'home.import.pySubmit') : 'home.import.submit');
             };
-            const setSkillMode = skill => {
+            const setSkillMode = (skill, { keepPreference = false } = {}) => {
                 skillImport = skill;
-                if (tagsField) tagsField.hidden = Boolean(skill);
+                const skillUi = Boolean(skill) || (keepPreference && importMode === 'skill');
+                if (tagsField) tagsField.hidden = skillUi;
                 if (currentUpdateTarget) return;
-                submitBtn.textContent = t(skill ? 'home.import.skillSubmit' : 'home.import.submit');
+                submitBtn.textContent = t(skillUi ? 'home.import.skillSubmit' : 'home.import.submit');
                 const title = document.getElementById('customToolImportTitle');
-                if (title) title.textContent = t(skill ? 'home.import.skillTitle' : 'home.import.title');
+                if (title) title.textContent = t(skillUi ? 'home.import.skillTitle' : 'home.import.title');
                 const nameLabel = document.getElementById('customToolNameLabel');
-                if (nameLabel) nameLabel.innerHTML = `${escapeHtml(t(skill ? 'home.import.skillName' : 'home.import.name'))} <span>*</span>`;
+                if (nameLabel) nameLabel.innerHTML = `${escapeHtml(t(skillUi ? 'home.import.skillName' : 'home.import.name'))} <span>*</span>`;
                 const nameEnLabel = document.getElementById('customToolNameEnLabel');
-                if (nameEnLabel) nameEnLabel.textContent = t(skill ? 'home.import.skillNameEn' : 'home.import.nameEn');
+                if (nameEnLabel) nameEnLabel.textContent = t(skillUi ? 'home.import.skillNameEn' : 'home.import.nameEn');
+                if (!skill && !keepPreference && importMode === 'skill') {
+                    importMode = 'tool';
+                    updateFileHint();
+                }
             };
             const detectSkill = async file => {
                 const generation = ++metadataGeneration;
@@ -1442,6 +1496,7 @@ window.HomeTools = { marketOpened: false };
                 filePicker.classList.remove('has-file');
                 if (shareCheckbox) shareCheckbox.checked = false;
                 setAiStatus();
+                importMode = 'tool';
                 setSkillMode(null);
                 setPythonMode(null);
                 clearImportError();
@@ -1450,8 +1505,17 @@ window.HomeTools = { marketOpened: false };
                 if (updateTarget instanceof Event || !updateTarget || typeof updateTarget !== 'object') {
                     updateTarget = null;
                 }
+                const preferSkill = !updateTarget?.slug && updateTarget?.kind === 'skill';
                 resetImportForm();
+                importMode = preferSkill ? 'skill' : 'tool';
                 updateFileHint();
+                if (preferSkill) {
+                    setSkillMode(null, { keepPreference: true });
+                    if (iconInput) iconInput.value = '✨';
+                    if (localStorage.getItem('tools_role') && !isAdminUser()) {
+                        setAiStatus(t('home.import.adminOnlySkill'), 'warning');
+                    }
+                }
                 if (shareField && shareCheckbox) {
                     const isSuper = isSuperAdminUser();
                     shareField.hidden = !isSuper || Boolean(updateTarget?.slug);
@@ -1551,7 +1615,16 @@ window.HomeTools = { marketOpened: false };
                 void detectSkill(file);
             };
 
-            window.HomeTools.openImport = () => openImportModal(null);
+            window.HomeTools.openImport = (options = null) => openImportModal(options);
+            window.addEventListener('tools:authchange', () => {
+                if (modal.classList.contains('open')) {
+                    updateFileHint();
+                    if (shareField) shareField.hidden = !isSuperAdminUser() || Boolean(currentUpdateTarget?.slug);
+                    if (importMode === 'skill' && isAdminUser() && aiStatus.textContent === t('home.import.adminOnlySkill')) {
+                        setAiStatus();
+                    }
+                }
+            });
             input.addEventListener('change', updateSelectedFile);
             document.getElementById('customToolImportClose')?.addEventListener('click', closeImportModal);
             document.getElementById('customToolImportCancel')?.addEventListener('click', closeImportModal);
@@ -1568,8 +1641,9 @@ window.HomeTools = { marketOpened: false };
                 clearImportError();
                 const file = input.files && input.files[0];
                 try {
-                    if (!file) throw new Error(t('home.import.fileRequired'));
+                    if (!file) throw new Error(t(importMode === 'skill' ? 'home.import.skillRequired' : 'home.import.fileRequired'));
                     if (skillImport) {
+                        if (!isAdminUser()) throw new Error(t('home.import.adminOnlySkill'));
                         if (!nameInput.value.trim()) throw new Error(t('home.validation.nameRequired'));
                         submitBtn.disabled = true;
                         submitBtn.textContent = t('home.import.submitting');
@@ -2399,6 +2473,9 @@ window.HomeTools = { marketOpened: false };
 
         window.addEventListener('tools:languagechange', () => {
             applyHomeI18n();
+            loadCustomTools();
+        });
+        window.addEventListener('tools:authchange', () => {
             loadCustomTools();
         });
 

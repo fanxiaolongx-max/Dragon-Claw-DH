@@ -12,6 +12,12 @@
         "负向事件",
         "规则",
         "人员"
+      ],
+      "tagsEn": [
+        "Quality Mgmt",
+        "Negative Events",
+        "Rules",
+        "Roster"
       ]
     },
     {
@@ -26,16 +32,31 @@
         "激励",
         "审批",
         "公示"
+      ],
+      "tagsEn": [
+        "Rewards",
+        "Incentives",
+        "Approval",
+        "Publicity"
       ]
     },
     {
       "slug": "tool-mqp55fna",
       "name": "六个一信息收集",
-      "nameEn": "",
+      "nameEn": "6-in-1 Information Collection",
       "icon": "📝",
-      "description": "由独立 HTML 导入的平台工具，可在统一入口和顶部导航中访问。",
-      "descriptionEn": "",
-      "tags": []
+      "description": "可配置的「六个一」问卷模板、信息收集填报与台账导出工具，可在统一入口和顶部导航中访问。",
+      "descriptionEn": "Configurable 6-in-1 survey templates, submission collection, and structured Excel ledger export.",
+      "tags": [
+        "信息收集",
+        "问卷模板",
+        "台账导出"
+      ],
+      "tagsEn": [
+        "Survey",
+        "Templates",
+        "Ledger Export"
+      ]
     },
     {
       "slug": "tool-ms4xb66s",
@@ -43,26 +64,38 @@
       "nameEn": "Operation Incentive Statistics",
       "icon": "📊",
       "description": "导入夜间操作 Excel，按人员、周期和操作等级核算操作激励并生成分析与导出结果。",
-      "descriptionEn": "",
+      "descriptionEn": "Import night-operation Excel workbooks to calculate incentives by engineer, cycle, and operation level with analytics and export.",
       "tags": [
         "激励核算",
         "Excel",
         "数据分析"
+      ],
+      "tagsEn": [
+        "Incentive Calc",
+        "Excel",
+        "Analytics"
       ]
     },
     {
       "slug": "tool-msf5b7nn",
       "name": "会议考勤",
-      "nameEn": "",
+      "nameEn": "Meeting Attendance",
       "icon": "🗓️",
       "description": "批量导入QR、RFC、WFM名单及线上线下签到表，合并去重参会人员，按最早签到时间判定准时、迟到、虚假签到或缺席，并支持检索与导出。",
-      "descriptionEn": "",
+      "descriptionEn": "Batch import QR, RFC, and WFM rosters with online/offline sign-in sheets to deduplicate attendees, classify on-time, late, fake, or absent records, and search or export results.",
       "tags": [
         "表格导入",
         "名单去重",
         "签到匹配",
         "人员检索",
         "结果导出"
+      ],
+      "tagsEn": [
+        "Sheet Import",
+        "Deduplication",
+        "Attendance Check",
+        "Search",
+        "Export"
       ]
     }
   ]

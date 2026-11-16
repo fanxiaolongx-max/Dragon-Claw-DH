@@ -323,6 +323,7 @@
         plugins() { window.HomeSkillHub?.open?.('plugins'); },
         market() { window.HomeTools?.openMarket?.(); },
         importTool() { window.HomeTools?.openImport?.(); },
+        importSkill() { window.HomeTools?.openImport?.({ kind: 'skill' }); },
         compare() { window.openBuiltinToolsComparison?.(); },
         links() { openLinks(); },
         alerts() { openMessages(); },

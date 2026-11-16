@@ -14,15 +14,104 @@ const dispatcher = new Agent({
     bodyTimeout: 180_000,
 });
 
-function toOpenAiMessages(system, messages) {
+const GEMINI_PLACEHOLDER_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+
+function requiresGeminiThoughtSignature(model = '') {
+    return /gemini[-_./]?(?:[3-9]|\d{2,})(?:\.|-|_|$)/i.test(String(model || ''));
+}
+
+function isGeminiTarget(model = '', provider = '') {
+    return provider === 'gemini' || /gemini/i.test(String(model || ''));
+}
+
+function extractThoughtSignature(obj) {
+    const candidates = [
+        [obj?.extra_content?.google?.thought_signature, 'extra_content'],
+        [obj?.extra_content?.google?.thoughtSignature, 'extra_content'],
+        [obj?.provider_specific_fields?.thought_signature, 'provider_specific_fields'],
+        [obj?.provider_specific_fields?.thoughtSignature, 'provider_specific_fields'],
+        [obj?.thought_signature, 'extra_content'],
+        [obj?.thoughtSignature, 'extra_content'],
+        [obj?.function?.thought_signature, 'extra_content'],
+        [obj?.function?.thoughtSignature, 'extra_content'],
+    ];
+    for (const [value, source] of candidates) {
+        if (typeof value === 'string' && value) return { thoughtSignature: value, source };
+    }
+    return null;
+}
+
+function resolveToolCallIndex(tc, calls, totalInDelta) {
+    if (tc.index !== undefined && tc.index !== null && Number.isInteger(Number(tc.index))) {
+        return Number(tc.index);
+    }
+    if (tc.id) {
+        for (const [idx, slot] of calls.entries()) {
+            if (slot.id && slot.id === tc.id) return idx;
+        }
+    }
+    if (!tc.id && !tc.function?.name && calls.size > 0 && totalInDelta === 1) {
+        return Math.max(...calls.keys());
+    }
+    return calls.size ? Math.max(...calls.keys()) + 1 : 0;
+}
+
+function mergeNestedExtra(base, incoming) {
+    if (!incoming || typeof incoming !== 'object') return base;
+    if (!base || typeof base !== 'object') return { ...incoming };
+    const merged = { ...base };
+    for (const [k, v] of Object.entries(incoming)) {
+        if (v && typeof v === 'object' && !Array.isArray(v) && merged[k] && typeof merged[k] === 'object' && !Array.isArray(merged[k])) {
+            merged[k] = { ...merged[k], ...v };
+        } else {
+            merged[k] = v;
+        }
+    }
+    return merged;
+}
+
+function toOpenAiMessages(system, messages, { model = '', provider = '' } = {}) {
     const out = system ? [{ role: 'system', content: system }] : [];
+    const geminiTarget = isGeminiTarget(model, provider);
     for (const m of messages) {
         if (m.role === 'tool') out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
         else if (m.role === 'assistant' && m.toolCalls?.length) {
+            const hasAnySignature = m.toolCalls.some((c) => Boolean(c.thoughtSignature));
+            const needsPlaceholder = requiresGeminiThoughtSignature(model) && !hasAnySignature;
             out.push({
                 role: 'assistant',
                 content: m.content || null,
-                tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args || {}) } })),
+                tool_calls: m.toolCalls.map((c, index) => {
+                    const tc = {
+                        id: c.id,
+                        type: 'function',
+                        function: { name: c.name, arguments: JSON.stringify(c.args || {}) },
+                    };
+                    const compatibleModel = geminiTarget || !c.model || (model && c.model === model);
+                    if (compatibleModel) {
+                        if (c.thoughtSignature) {
+                            if (c.thoughtSignatureSource === 'provider_specific_fields') {
+                                tc.provider_specific_fields = {
+                                    ...(c.providerSpecificFields || {}),
+                                    thought_signature: c.thoughtSignature,
+                                };
+                            } else {
+                                tc.extra_content = {
+                                    ...(c.extraContent || {}),
+                                    google: {
+                                        ...(c.extraContent?.google || {}),
+                                        thought_signature: c.thoughtSignature,
+                                    },
+                                };
+                            }
+                        } else if (c.extraContent) {
+                            tc.extra_content = c.extraContent;
+                        } else if (needsPlaceholder && index === 0) {
+                            tc.extra_content = { google: { thought_signature: GEMINI_PLACEHOLDER_THOUGHT_SIGNATURE } };
+                        }
+                    }
+                    return tc;
+                }),
             });
         } else if (m.images?.length) {
             out.push({
@@ -284,7 +373,7 @@ export async function streamModel({
     }
 
     // OpenAI 兼容
-    const base = { ...spec.body, messages: toOpenAiMessages(system, messages), stream: true };
+    const base = { ...spec.body, messages: toOpenAiMessages(system, messages, { model: settings.model, provider: spec.provider }), stream: true };
     if (typeof base.temperature !== 'number') delete base.temperature;
     const attempts = [
         { tools: true, usage: true },
@@ -303,8 +392,8 @@ export async function streamModel({
         used = attempt;
         if (resp.ok) break;
         lastError = httpError(resp.status, await resp.text().catch(() => ''));
-        // 只有“请求格式不被接受”才值得换一种格式重试；鉴权、限流、服务端错误直接报
-        if (![400, 404, 422].includes(resp.status)) break;
+        // 只有“请求格式不被接受”才值得换一种格式重试；鉴权、限流、服务端错误或缺少 thought_signature 直接报
+        if (![400, 404, 422].includes(resp.status) || /thought_signature/i.test(String(lastError?.message || ''))) break;
     }
     if (!resp.ok) throw lastError;
 
@@ -334,15 +423,38 @@ export async function streamModel({
             text += d.content;
             await tagFilter.feed(d.content);
         }
-        for (const tc of d.tool_calls || []) {
+        const deltaCalls = Array.isArray(d.tool_calls) ? d.tool_calls : [];
+        const deltaSig = extractThoughtSignature(d) || extractThoughtSignature(choice);
+        deltaCalls.forEach((tc, pos) => {
             markToken();
-            const idx = Number(tc.index ?? calls.size);
-            if (!calls.has(idx)) calls.set(idx, { id: '', name: '', raw: '' });
+            const idx = resolveToolCallIndex(tc, calls, deltaCalls.length);
+            if (!calls.has(idx)) {
+                calls.set(idx, {
+                    id: '',
+                    name: '',
+                    raw: '',
+                    thoughtSignature: '',
+                    thoughtSignatureSource: '',
+                    extraContent: null,
+                    providerSpecificFields: null,
+                });
+            }
             const slot = calls.get(idx);
             if (tc.id) slot.id = tc.id;
             if (tc.function?.name) slot.name += tc.function.name;
             if (tc.function?.arguments) slot.raw += tc.function.arguments;
-        }
+            if (tc.extra_content && typeof tc.extra_content === 'object') {
+                slot.extraContent = mergeNestedExtra(slot.extraContent, tc.extra_content);
+            }
+            if (tc.provider_specific_fields && typeof tc.provider_specific_fields === 'object') {
+                slot.providerSpecificFields = mergeNestedExtra(slot.providerSpecificFields, tc.provider_specific_fields);
+            }
+            const sig = extractThoughtSignature(tc) || (pos === 0 && !slot.thoughtSignature ? deltaSig : null);
+            if (sig) {
+                slot.thoughtSignature = sig.thoughtSignature;
+                slot.thoughtSignatureSource = sig.source;
+            }
+        });
         if (choice.finish_reason) stopReason = choice.finish_reason;
     }
     const toolCallsRaw = [...calls.values()].map((c) => `${c.name}:${c.raw}`).join('\n');
@@ -350,6 +462,13 @@ export async function streamModel({
         id: c.id || `call_${Date.now().toString(36)}_${i}`,
         name: c.name,
         args: parseArgs(c.raw),
+        ...(c.thoughtSignature ? {
+            thoughtSignature: c.thoughtSignature,
+            thoughtSignatureSource: c.thoughtSignatureSource,
+            ...(settings?.model ? { model: settings.model } : {}),
+        } : {}),
+        ...(c.extraContent ? { extraContent: c.extraContent } : {}),
+        ...(c.providerSpecificFields ? { providerSpecificFields: c.providerSpecificFields } : {}),
     })).filter((c) => c.name);
 
     // 容错兜底：GLM 等国产大模型长文本多轮后可能退化为直接在文本中吐出 <tool_call> XML

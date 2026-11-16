@@ -234,9 +234,12 @@
         const {prompt}=await AiReportTrace.post(cellId,t('生成最终提示词','Write the final prompt'),cellId===REPORT?'/api/ai-report/report/prompt':fieldKeyOf(cellId)?'/api/ai-report/template/field/prompt':chapterOf(cellId)?'/api/ai-report/chapter/prompt':'/api/ai-report/cell/prompt',{month:state.doc.reportMonth,prompt:cell.prompt,chat:cell.chat});
         cell.prompt=AiReportInteractive.promptWithEdits(reviseLayout?M.withoutLayout(prompt):prompt,cell.output?.widgets);if(reviseLayout||M.presentationOf(prompt).mode==='text')cell.layout={};cell.chat.push({role:'ai',kind:'prompt',text:cell.prompt});if(cellId!==REPORT&&!chapterOf(cellId)&&!fieldKeyOf(cellId))syncNarrowLayout(cell);
     }
-    async function validateInteractive(cellId){
-        const widgets=find(cellId)?.cell?.output?.widgets||[];
-        if(!widgets.length||widgets.some(widget=>widget.type!=='interactive'))throw new Error('本次必须用 kit.interactive 生成默认自由编辑的 HTML；所有文字、图表和表格放在其内部，图表使用 SVG，narrative:null。保留数据来源和计算，将旧 kit.layout 布局改为内部 HTML/CSS。');
+    const isFallbackRecipe=recipe=>recipe?.summary?.en==='AI Report Cell';
+    async function validateInteractive(cellId,{interactive=false,cell=null}={}){
+        const live=cell||find(cellId)?.cell,widgets=live?.output?.widgets||[];
+        const isTemplate=!!window.AiReportTemplates?.isTemplateRender?.(live?.recipe?.render);
+        if(interactive&&!isTemplate&&(!widgets.length||widgets.some(widget=>widget.type!=='interactive')))throw new Error('本次必须用 kit.interactive 生成交互式 HTML；所有文字、图表和表格放在其内部，图表使用 SVG，narrative:null。保留数据来源和计算，将旧 kit.layout 布局改为内部 HTML/CSS。');
+        if(!widgets.some(widget=>widget.type==='interactive'))return;
         await AiReportInteractive.settle(cellId);
         const error=reportRoot.querySelector(`[data-cell="${CSS.escape(cellId)}"] [data-interactive-error]`)?.dataset.interactiveError;
         if(error)throw new Error('交互脚本运行失败：'+error);
@@ -248,16 +251,32 @@
         // otherwise the previous recipe and output come back.
         const before={recipe:cell.recipe,recipePrompt:cell.recipePrompt,output:cell.output,missing:cell.missing};
         for(let attempt=0;attempt<3;attempt++){
+            const interactive=wantsInteractive(cell);
+            const refRecipe=isFallbackRecipe(cell.recipe)?null:cell.recipe;
             state.busy.set(cellId,t('正在把提示词变成配方…','Turning the prompt into a recipe…'));render();
-            const reply=await AiReportTrace.post(cellId,t(`编译配方（第 ${attempt+1} 次）`,`Compile recipe (attempt ${attempt+1})`),'/api/ai-report/cell/compile',{month,interactive:wantsInteractive(cell),prompt:cell.prompt,recipe:cell.recipe,previousPrompt:attempt?'':cell.recipePrompt||'',error,style:styleOf(cell),outline:AiReportRunner.outline(cell),presentation:AiReportInteractive.context(cell.output?.widgets)});
+            const reply=await AiReportTrace.post(cellId,t(`编译配方（第 ${attempt+1} 次）`,`Compile recipe (attempt ${attempt+1})`),'/api/ai-report/cell/compile',{month,interactive,prompt:cell.prompt,recipe:refRecipe,previousPrompt:attempt?'':(isFallbackRecipe(before.recipe)?'':cell.recipePrompt||''),error,style:styleOf(cell),outline:AiReportRunner.outline(cell),presentation:AiReportInteractive.context(cell.output?.widgets)});
             if(reply.type==='ask'){
                 // A cell that ran before and now cannot find its data after a wording change can keep its data and rename only.
                 const keep=before.recipe&&/找不到|没有找到|未找到|不存在|找到以下|哪一个/.test(reply.question||'')?[t('数据不变，只改显示文字','Keep the data, rename the text only')]:[];
                 cell.chat.push({role:'ai',kind:'ask',text:reply.question,choices:[...keep,...(reply.choices||[])]});return;
             }
+            if(reply.fallback){
+                const reason=reply.fallbackReason||reply.aiError||t('模型未能生成有效配方','AI did not return a valid recipe');
+                AiReportTrace.note(cellId,t(`编译回退（第 ${attempt+1} 次）`,`Compile fallback (attempt ${attempt+1})`),reason,{error:true});
+                // An upstream outage / timeout won't cure itself on blind retries; a format/JSON slip gets 1 repair retry.
+                if(reply.aiError||attempt>=1){
+                    error=reason;
+                    if(!before.output||before.output.error){
+                        cell.recipe=reply.recipe;cell.recipePrompt=cell.prompt;
+                        try{await AiReportRunner.run(cell,month,{style:styleOf(cell)});await validateInteractive(cellId,{interactive,cell});usable={recipe:cell.recipe,output:cell.output,missing:cell.missing};}catch(_){}
+                    }
+                    break;
+                }
+                error=reason;continue;
+            }
             cell.recipe=reply.recipe;cell.recipePrompt=cell.prompt;
             state.busy.set(cellId,t('正在计算本月数据…','Computing this month…'));render();
-            try{await AiReportRunner.run(cell,month,{style:styleOf(cell)});AiReportTrace.note(cellId,t(`运行配方（第 ${attempt+1} 次）：成功`,`Run recipe (attempt ${attempt+1}): ok`),t('沙箱里计算和展示都完成了。','Compute and render finished in the sandbox.'));render();await validateInteractive(cellId);const crowdedRow=reportRoot.querySelector(`[data-cell="${CSS.escape(cellId)}"]`)?.dataset.layoutIssue;
+            try{await AiReportRunner.run(cell,month,{style:styleOf(cell)});AiReportTrace.note(cellId,t(`运行配方（第 ${attempt+1} 次）：成功`,`Run recipe (attempt ${attempt+1}): ok`),t('沙箱里计算和展示都完成了。','Compute and render finished in the sandbox.'));render();await validateInteractive(cellId,{interactive,cell});const crowdedRow=reportRoot.querySelector(`[data-cell="${CSS.escape(cellId)}"]`)?.dataset.layoutIssue;
                 // Explicit side-by-side layouts must pass the final check; only default layouts may keep a wrapped fallback.
                 if(crowdedRow&&(attempt<2||M.horizontalLayout(cell.prompt)))throw new Error(`${crowdedRow}。${M.horizontalLayout(cell.prompt)?'用户明确要求左右并排，必须保留同一行的图表与表格；缩短表头、减少列数、收紧图表边距，文字总结可放在单独一行，不能改成图表和表格上下排列。':'请缩短表头、减少列数或把放不下的内容块换到下一行，保证内容完整显示。'}`);const lost=AiReportRunner.missingTitle(cell);if(lost&&String(cell.output?.html||'').replace(/<[^>]*>/g,'').trim()){usable={recipe:cell.recipe,output:cell.output,missing:cell.missing};}if(lost)throw new Error(`提示词要求显示标题“${lost}”，但格子里没有这个标题。请用 kit.layout(rows,{title:'${lost}'}) 或 kit.chart(option,{title:'${lost}'}) 把它显示在最上方。`);reconcileLayout(cell);rememberResult(cell);return;}catch(problem){error=problem.message;AiReportTrace.note(cellId,t(`运行出错（第 ${attempt+1} 次），交回 AI 修正`,`Run failed (attempt ${attempt+1}), sent back to the AI`),error,{error:true});}
         }

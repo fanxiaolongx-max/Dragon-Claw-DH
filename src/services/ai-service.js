@@ -250,29 +250,33 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
     };
 }
 
-export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens } = {}) {
+export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens, timeoutMs = 90_000 } = {}) {
     const profiles = await listProfiles();
     const baseSettings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
     const modelOverride = String(model || '').trim();
     const settings = modelOverride ? { ...baseSettings, model: modelOverride } : baseSettings;
+    const provider = settings.provider || 'openai';
     if (!settings.apiKey) {
         return {
             ok: false,
             text: '',
             error: '未配置 API Key，请在左下角头像 →「全局设置」→「AI 助手」中配置模型网关和密钥。',
             model: settings.model,
+            provider,
+            latencyMs: 0,
         };
     }
 
     const reqSpec = buildCompletionRequest(settings, messages, { stream: false, maxTokens });
     const started = Date.now();
+    const clampedTimeout = Math.max(1000, Math.min(300_000, Number(timeoutMs) || 90_000));
     try {
         const resp = await undiciFetch(reqSpec.url, {
             method: 'POST',
             headers: reqSpec.headers,
             body: JSON.stringify(reqSpec.body),
             dispatcher: aiAgent,
-            signal: AbortSignal.timeout(60_000),
+            signal: AbortSignal.timeout(clampedTimeout),
         });
         const raw = await resp.text();
         let data;
@@ -283,23 +287,51 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
                 status: resp.status,
                 error: data?.error?.message || data?.message || `模型接口 HTTP ${resp.status}: ${raw.slice(0, 200)}`,
                 model: settings.model,
+                provider: reqSpec.provider,
+                latencyMs: Date.now() - started,
             };
         }
-        const text = reqSpec.provider === 'anthropic'
-            ? (Array.isArray(data?.content) ? data.content.map((c) => c.text || '').join('') : '')
-            : (data?.choices?.[0]?.message?.content ?? '');
+        const rawContent = reqSpec.provider === 'anthropic'
+            ? data?.content
+            : data?.choices?.[0]?.message?.content;
+        const text = Array.isArray(rawContent)
+            ? rawContent.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('')
+            : String(rawContent ?? '');
+        const finishReason = String(
+            reqSpec.provider === 'anthropic'
+                ? (data?.stop_reason || '')
+                : (data?.choices?.[0]?.finish_reason || ''),
+        );
+        const reasoningTokensOnly = !text.trim()
+            && Boolean(data?.choices?.[0]?.message?.reasoning_content || (Array.isArray(data?.content) && data.content.some((c) => c?.type === 'thinking')));
 
         const usage = data?.usage || {};
+        const latencyMs = Date.now() - started;
         pushLog({
             level: 'INFO',
             category: 'AI',
-            durationMs: Date.now() - started,
+            durationMs: latencyMs,
             message: `completion model=${settings.model} provider=${reqSpec.provider}`,
             detail: { promptTokens: usage.prompt_tokens || usage.input_tokens || 0, completionTokens: usage.completion_tokens || usage.output_tokens || 0 },
         });
-        return { ok: true, text, usage, model: settings.model, latencyMs: Date.now() - started };
+        return {
+            ok: true,
+            text,
+            usage,
+            model: settings.model,
+            provider: reqSpec.provider,
+            finishReason,
+            latencyMs,
+            ...(reasoningTokensOnly ? { reasoningTokensOnly: true } : {}),
+        };
     } catch (error) {
-        return { ok: false, error: error.message || '模型请求失败', model: settings.model };
+        return {
+            ok: false,
+            error: error.message || '模型请求失败',
+            model: settings.model,
+            provider: reqSpec.provider,
+            latencyMs: Date.now() - started,
+        };
     }
 }
 

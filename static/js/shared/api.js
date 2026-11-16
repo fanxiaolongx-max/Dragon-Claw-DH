@@ -256,7 +256,8 @@ function ensureJSZip() {
     if (window.JSZip) return Promise.resolve(true);
     jsZipPromise ||= new Promise(resolve => {
         const script = document.createElement('script');
-        script.src = '/js/shared/jszip.min.js';
+        const resolvedSrc = typeof window.dhResolveUrl === 'function' ? window.dhResolveUrl('/js/shared/jszip.min.js') : '/js/shared/jszip.min.js';
+        script.src = resolvedSrc;
         script.onload = () => resolve(Boolean(window.JSZip));
         script.onerror = () => { jsZipPromise = null; resolve(false); };
         document.head.append(script);

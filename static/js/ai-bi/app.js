@@ -45,12 +45,20 @@
     // Compiling asks the AI for a recipe (template first); a failed run goes back once with the error.
     async function compileItem(entry){
         // A rebuild after a failed run starts from that error, so the AI fixes it instead of repeating it.
+        const isFallback=r=>r?.summary?.en==='AI Report Cell';
         let error=entry.recipe&&entry.prompt===entry.recipePrompt?entry.output?.error||'':'';
         for(let attempt=0;attempt<3;attempt++){
             const zoom=B.scaleOf(entry,state.board.canvas);
             const prompt=`${entry.prompt}\n【尺寸约束】格子宽 ${Math.round(entry.w/zoom)}px、高 ${Math.round(entry.h/zoom)}px，全部内容必须在这个范围内完整显示，不出现滚动条。`;
-            const reply=await window.AiReportTrace.post(entry.id,t('生成格子','Build cell'),'/api/ai-report/cell/compile',{month:month(),interactive:false,prompt,recipe:entry.recipe,previousPrompt:entry.recipePrompt||'',error});
+            const ref=isFallback(entry.recipe)?null:entry.recipe;
+            const reply=await window.AiReportTrace.post(entry.id,t('生成格子','Build cell'),'/api/ai-report/cell/compile',{month:month(),interactive:false,prompt,recipe:ref,previousPrompt:isFallback(entry.recipe)?'':entry.recipePrompt||'',error});
             if(reply.type==='ask')throw Object.assign(new Error(reply.question),{ask:true});
+            if(reply.fallback){
+                const reason=reply.fallbackReason||reply.aiError||t('模型未能生成有效配方','AI did not return a valid recipe');
+                window.AiReportTrace.note?.(entry.id,t(`编译回退（第 ${attempt+1} 次）`,`Compile fallback (attempt ${attempt+1})`),reason,{error:true});
+                if(reply.aiError||attempt>=1)throw new Error(reason);
+                error=reason;continue;
+            }
             entry.recipe=reply.recipe;
             try{await runItem(entry);entry.recipePrompt=entry.prompt;return;}catch(problem){error=problem.message||String(problem);}
         }
