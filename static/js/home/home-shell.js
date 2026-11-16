@@ -181,6 +181,36 @@
         openPop.anchor?.setAttribute('aria-expanded', 'false');
         openPop = null;
     }
+    function collapsePopSeparators(pop) {
+        if (!pop) return;
+        const isVisibleNode = node => {
+            if (!node || node.nodeType !== 1 || node.hidden) return false;
+            if (node.classList.contains('v2-pop-sep')) return false;
+            const cs = getComputedStyle(node);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            if (node.classList.contains('v2-sidebar-more-items') && ![...node.children].some(isVisibleNode)) return false;
+            return true;
+        };
+        pop.querySelectorAll('.v2-pop-sep').forEach(sep => { sep.hidden = false; });
+        let seenVisible = false;
+        let lastSep = null;
+        for (const child of pop.children) {
+            if (child.classList.contains('v2-pop-sep')) {
+                if (!seenVisible) {
+                    child.hidden = true;
+                } else {
+                    if (lastSep) lastSep.hidden = true;
+                    lastSep = child;
+                }
+                continue;
+            }
+            if (isVisibleNode(child)) {
+                seenVisible = true;
+                lastSep = null;
+            }
+        }
+        if (lastSep) lastSep.hidden = true;
+    }
     function showPop(pop, anchor, place) {
         if (openPop?.pop === pop && openPop?.anchor === anchor) return;
         closePop();
@@ -189,6 +219,7 @@
         else if (place === 'up') { pop.style.left = `${rect.left}px`; pop.style.bottom = `${window.innerHeight - rect.top + 8}px`; pop.style.top = ''; }
         else { pop.style.left = `${rect.left}px`; pop.style.top = `${rect.bottom + 6}px`; pop.style.bottom = ''; }
         pop.classList.add('is-open');
+        collapsePopSeparators(pop);
         anchor.setAttribute('aria-expanded', 'true');
         openPop = { pop, anchor };
         // 超出视口边界时自动收进视口内
@@ -365,7 +396,6 @@
                 workflow.length ? `<div class="v2-pop-cap">${esc(window.NavWorkflow.label())}</div>${workflow.map(item => toolLink(item.href, getNavLabel(item))).join('')}` : '',
                 personal ? '<div class="v2-sidebar-more-items"></div>' : [
                     menuItem('link', t('links'), 'links', '›').replace('role="menuitem"', 'role="menuitem" aria-haspopup="menu" aria-controls="v2LinksSubmenu" aria-expanded="false"'),
-                    menuItem('target', t('requirements'), 'requirements'),
                     menuItem('compass', lang() === 'en-US' ? 'Promotions' : '平台推广', 'promotions')
                 ].join(''),
                 links.length ? `<div class="v2-pop-cap">${esc(navT('nav.sidebarShortcuts'))}</div>${links.join('')}` : ''

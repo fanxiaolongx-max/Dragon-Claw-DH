@@ -176,3 +176,48 @@ test('dragon-claw fallback TPS/TTFT, pinned sidebar section, and theme CSS check
     assert.match(themeCss, /html\.platform-home\[data-theme="dark"\] #toolMarketModal/);
     assert.match(themeCss, /#customToolImportModal \.tool-import-dialog[^}]*width:\s*min\(460px/);
 });
+
+test('home-shell collapsePopSeparators collapses consecutive separators separated only by hidden items', () => {
+    const shellCode = readStatic('js/home/home-shell.js');
+    const fnMatch = shellCode.match(/function collapsePopSeparators\(pop\)\s*\{[\s\S]*?\n    \}/);
+    assert.ok(fnMatch, 'collapsePopSeparators exists in home-shell.js');
+
+    const mk = (tag, { cls = [], hidden = false, display = 'flex', children = [] } = {}) => ({
+        nodeType: 1,
+        tagName: tag,
+        hidden,
+        _display: display,
+        classList: { contains: (c) => cls.includes(c) },
+        children,
+        querySelectorAll(sel) {
+            if (sel === '.v2-pop-sep') return children.filter((c) => c.classList.contains('v2-pop-sep'));
+            return [];
+        },
+    });
+
+    const leadSep = mk('div', { cls: ['v2-pop-sep'], display: 'block' });
+    const visibleItem1 = mk('div', { cls: ['v2-pop-item'] });
+    const sepBeforeLinks = mk('div', { cls: ['v2-pop-sep'], display: 'block' });
+    const hiddenLinks = mk('button', { cls: ['v2-pop-item'], display: 'none' });
+    const sepBeforeCustomize = mk('div', { cls: ['v2-pop-sep'], display: 'block' });
+    const customizeItem = mk('button', { cls: ['v2-pop-item'] });
+    const trailSep = mk('div', { cls: ['v2-pop-sep'], display: 'block' });
+
+    const pop = mk('div', {
+        cls: ['v2-pop'],
+        children: [leadSep, visibleItem1, sepBeforeLinks, hiddenLinks, sepBeforeCustomize, customizeItem, trailSep],
+    });
+
+    const collapsePopSeparators = vm.runInNewContext(`(${fnMatch[0]})`, {
+        getComputedStyle: (el) => ({ display: el._display || 'block', visibility: 'visible' }),
+    });
+    collapsePopSeparators(pop);
+
+    assert.equal(leadSep.hidden, true, 'leading separator hidden');
+    assert.equal(sepBeforeLinks.hidden, true, 'first separator before hidden links item hidden to prevent double line');
+    assert.equal(sepBeforeCustomize.hidden, false, 'single separator before visible customizeMenu kept');
+    assert.equal(trailSep.hidden, true, 'trailing separator hidden');
+
+    const shellCss = readStatic('css/home-shell.css');
+    assert.match(shellCss, /\.v2-pop-sep\[hidden\]/);
+});
