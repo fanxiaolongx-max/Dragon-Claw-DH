@@ -190,29 +190,86 @@ function extractFallbackToolCalls(rawText) {
     return { calls, text: cleanedText.trim() };
 }
 
+export function estimateTokens(text) {
+    const value = String(text || '');
+    if (!value) return 0;
+    const cjk = (value.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+    return Math.max(1, Math.round(cjk / 1.6 + (value.length - cjk) / 4));
+}
+
+function finalizeRoundMetrics({ settings, system, messages, usage, text, thinkingText, toolCallsRaw, startedAt, firstTokenAt, chunks, cachedInputTokens, reasoningOutputTokens }) {
+    const endedAt = Date.now();
+    const ms = Math.max(1, endedAt - startedAt);
+    const reportedIn = Number(usage.inputTokens) || 0;
+    const reportedOut = Number(usage.outputTokens) || 0;
+    if (!reportedIn) {
+        const promptChars = [system || '', ...(Array.isArray(messages) ? messages.map((m) => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || ''))) : [])].join('\n');
+        usage.inputTokens = estimateTokens(promptChars);
+    }
+    if (!reportedOut) {
+        usage.outputTokens = estimateTokens(`${text || ''}${thinkingText || ''}${toolCallsRaw || ''}`);
+    }
+    const usageEstimated = !reportedOut;
+    const hasStreamTiming = firstTokenAt > 0 && endedAt - firstTokenAt >= 15 && chunks > 1;
+    const ttftMs = firstTokenAt > 0 ? Math.max(1, firstTokenAt - startedAt) : Math.max(1, Math.min(ms, Math.round(ms * 0.22)));
+    const generationMs = hasStreamTiming ? (endedAt - firstTokenAt) : Math.max(10, ms - ttftMs);
+    const timingEstimated = !hasStreamTiming || usageEstimated;
+    const decodeTokens = hasStreamTiming && usage.outputTokens > 1 ? usage.outputTokens - 1 : Math.max(1, usage.outputTokens);
+    const tps = generationMs > 0 ? Math.max(0.1, Math.round((decodeTokens / (generationMs / 1000)) * 10) / 10) : null;
+    return {
+        model: settings?.model || settings?.name || '',
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimated: usageEstimated,
+        cachedInputTokens: Number.isFinite(cachedInputTokens) && cachedInputTokens >= 0 ? cachedInputTokens : null,
+        reasoningOutputTokens: Number.isFinite(reasoningOutputTokens) && reasoningOutputTokens >= 0 ? reasoningOutputTokens : (thinkingText ? estimateTokens(thinkingText) : 0),
+        timingSource: 'request-stream',
+        timingEstimated,
+        decodeTokens,
+        ms,
+        ttftMs,
+        generationMs,
+        tps,
+        at: new Date(startedAt).toISOString(),
+    };
+}
+
 export async function streamModel({
  settings, system, messages, tools = [], signal, onDelta = () => {}, onThinking = () => {} }) {
     const spec = buildCompletionRequest(settings, [], { stream: true, maxTokens: Number(settings.maxOutputTokens) || 4096 });
     const usage = { inputTokens: 0, outputTokens: 0 };
     let text = '';
+    let thinkingText = '';
     let stopReason = '';
+    let startedAt = Date.now();
+    let firstTokenAt = 0;
+    let chunks = 0;
+    let cachedInputTokens = null;
+    let reasoningOutputTokens = null;
+    const markToken = () => { if (!firstTokenAt) firstTokenAt = Date.now(); chunks += 1; };
 
     if (spec.provider === 'anthropic') {
         const body = { ...spec.body, system: system || undefined, messages: toAnthropicMessages(messages) };
         if (typeof body.temperature !== 'number') delete body.temperature;
         if (tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+        startedAt = Date.now();
         const resp = await post(spec.url, spec.headers, body, signal);
         if (!resp.ok) throw httpError(resp.status, await resp.text().catch(() => ''));
         const blocks = new Map();
         for await (const ev of sseEvents(resp.body)) {
-            if (ev.type === 'message_start') usage.inputTokens += Number(ev.message?.usage?.input_tokens || 0);
-            else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+            if (ev.type === 'message_start') {
+                usage.inputTokens += Number(ev.message?.usage?.input_tokens || 0);
+                if (Number.isFinite(Number(ev.message?.usage?.cache_read_input_tokens))) {
+                    cachedInputTokens = (cachedInputTokens || 0) + Number(ev.message.usage.cache_read_input_tokens);
+                }
+            } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+                markToken();
                 blocks.set(ev.index, { id: ev.content_block.id, name: ev.content_block.name, raw: '' });
             } else if (ev.type === 'content_block_delta') {
                 const d = ev.delta || {};
-                if (d.type === 'text_delta' && d.text) { text += d.text; await onDelta(d.text); }
-                else if (d.type === 'thinking_delta' && d.thinking) await onThinking(d.thinking);
-                else if (d.type === 'input_json_delta' && blocks.has(ev.index)) blocks.get(ev.index).raw += d.partial_json || '';
+                if (d.type === 'text_delta' && d.text) { markToken(); text += d.text; await onDelta(d.text); }
+                else if (d.type === 'thinking_delta' && d.thinking) { markToken(); thinkingText += d.thinking; await onThinking(d.thinking); }
+                else if (d.type === 'input_json_delta' && blocks.has(ev.index)) { markToken(); blocks.get(ev.index).raw += d.partial_json || ''; }
             } else if (ev.type === 'message_delta') {
                 usage.outputTokens += Number(ev.usage?.output_tokens || 0);
                 if (ev.delta?.stop_reason) stopReason = ev.delta.stop_reason;
@@ -220,8 +277,10 @@ export async function streamModel({
                 throw new BusinessError(`模型服务返回错误：${ev.error?.message || JSON.stringify(ev.error).slice(0, 200)}`, 502);
             }
         }
+        const toolCallsRaw = [...blocks.values()].map((b) => `${b.name}:${b.raw}`).join('\n');
         const toolCalls = [...blocks.values()].map((b) => ({ id: b.id, name: b.name, args: parseArgs(b.raw) }));
-        return { text, toolCalls, usage, stopReason, toolsSupported: true };
+        const metrics = finalizeRoundMetrics({ settings, system, messages, usage, text, thinkingText, toolCallsRaw, startedAt, firstTokenAt, chunks, cachedInputTokens, reasoningOutputTokens });
+        return { text, toolCalls, usage, stopReason, toolsSupported: true, metrics };
     }
 
     // OpenAI 兼容
@@ -239,6 +298,7 @@ export async function streamModel({
         const body = { ...base };
         if (attempt.tools) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
         if (attempt.usage) body.stream_options = { include_usage: true };
+        startedAt = Date.now();
         resp = await post(spec.url, spec.headers, body, signal);
         used = attempt;
         if (resp.ok) break;
@@ -253,19 +313,29 @@ export async function streamModel({
     for await (const ev of sseEvents(resp.body)) {
         if (ev.error) throw new BusinessError(`模型服务返回错误：${ev.error.message || JSON.stringify(ev.error).slice(0, 200)}`, 502);
         if (ev.usage) {
-            usage.inputTokens = Number(ev.usage.prompt_tokens || usage.inputTokens);
-            usage.outputTokens = Number(ev.usage.completion_tokens || usage.outputTokens);
+            usage.inputTokens = Number(ev.usage.prompt_tokens || ev.usage.input_tokens || usage.inputTokens);
+            usage.outputTokens = Number(ev.usage.completion_tokens || ev.usage.output_tokens || usage.outputTokens);
+            const cached = ev.usage.prompt_tokens_details?.cached_tokens ?? ev.usage.cache_read_input_tokens ?? ev.usage.cached_tokens;
+            if (Number.isFinite(Number(cached)) && Number(cached) >= 0) cachedInputTokens = Number(cached);
+            const reasoning = ev.usage.completion_tokens_details?.reasoning_tokens ?? ev.usage.reasoning_tokens;
+            if (Number.isFinite(Number(reasoning)) && Number(reasoning) >= 0) reasoningOutputTokens = Number(reasoning);
         }
         const choice = ev.choices?.[0];
         if (!choice) continue;
         const d = choice.delta || {};
         const thinking = d.reasoning_content || d.reasoning;
-        if (typeof thinking === 'string' && thinking) await onThinking(thinking);
+        if (typeof thinking === 'string' && thinking) {
+            markToken();
+            thinkingText += thinking;
+            await onThinking(thinking);
+        }
         if (typeof d.content === 'string' && d.content) {
+            markToken();
             text += d.content;
             await tagFilter.feed(d.content);
         }
         for (const tc of d.tool_calls || []) {
+            markToken();
             const idx = Number(tc.index ?? calls.size);
             if (!calls.has(idx)) calls.set(idx, { id: '', name: '', raw: '' });
             const slot = calls.get(idx);
@@ -275,6 +345,7 @@ export async function streamModel({
         }
         if (choice.finish_reason) stopReason = choice.finish_reason;
     }
+    const toolCallsRaw = [...calls.values()].map((c) => `${c.name}:${c.raw}`).join('\n');
     let toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([i, c]) => ({
         id: c.id || `call_${Date.now().toString(36)}_${i}`,
         name: c.name,
@@ -293,5 +364,6 @@ export async function streamModel({
     }
     await tagFilter.flush(hasFallback);
 
-    return { text, toolCalls, usage, stopReason, toolsSupported: used.tools };
+    const metrics = finalizeRoundMetrics({ settings, system, messages, usage, text, thinkingText, toolCallsRaw, startedAt, firstTokenAt, chunks, cachedInputTokens, reasoningOutputTokens });
+    return { text, toolCalls, usage, stopReason, toolsSupported: used.tools, metrics };
 }

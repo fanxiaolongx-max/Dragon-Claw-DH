@@ -216,8 +216,18 @@ export async function aiRoutes(fastify) {
                 secrets: [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean),
             });
             const usedModel = res.model || selected;
+            const roundMetrics = Array.isArray(res.roundMetrics) ? res.roundMetrics : [];
             if (persist && sessionId && (res.text || res.events.length)) {
-                await appendMessage(sessionId, 'model', res.text, { modelName: usedModel.model, ...(res.events.length ? { events: res.events } : {}) });
+                await appendMessage(sessionId, 'model', res.text, {
+                    modelName: usedModel.model,
+                    model_name: usedModel.model,
+                    input_tokens: res.usage?.inputTokens || 0,
+                    output_tokens: res.usage?.outputTokens || 0,
+                    inputTokens: res.usage?.inputTokens || 0,
+                    outputTokens: res.usage?.outputTokens || 0,
+                    rounds: roundMetrics,
+                    ...(res.events.length ? { events: res.events } : {}),
+                });
             }
             addUsage(res.usage, usedModel);
             if (titlePromise) {
@@ -233,6 +243,7 @@ export async function aiRoutes(fastify) {
                 model: { id: usedModel.id, name: usedModel.model },
                 tokens: res.usage.inputTokens + res.usage.outputTokens,
                 usage: res.usage,
+                rounds: roundMetrics,
             });
         } catch (err) {
             if (abort.signal.aborted) {

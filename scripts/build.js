@@ -27,7 +27,32 @@ const MAX_ZIP_MB = Number(process.env.DH_MAX_ZIP_MB || 30);
 const LITE_SKIP = [/^static\/downloads\/.*\.zip$/];
 const SKIP_NAMES = new Set(['.DS_Store', 'Thumbs.db', '.git', 'node_modules', 'dist', '.env']);
 
-function addDirToZip(zip, absDir, zipPrefix) {
+function hashStaticAssets(dir) {
+    const hash = crypto.createHash('sha1');
+    const walk = (cur) => {
+        if (!fs.existsSync(cur)) return;
+        for (const entry of fs.readdirSync(cur, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const abs = path.join(cur, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name !== 'vendor' && entry.name !== 'downloads') walk(abs);
+            } else if (entry.isFile() && /\.(?:css|js|html)$/i.test(entry.name)) {
+                hash.update(entry.name).update(fs.readFileSync(abs));
+            }
+        }
+    };
+    walk(dir);
+    return hash.digest('hex').slice(0, 8);
+}
+
+function bustHtmlAssets(html, assetTag) {
+    const tag = encodeURIComponent(assetTag);
+    return String(html).replace(
+        /(<(?:link|script)\b[^>]*?\b(?:href|src)\s*=\s*["'])(?!https?:|\/\/|data:|#)([^"'?#]+\.(?:css|js))(["'])/gi,
+        (_, prefix, assetPath, quote) => `${prefix}${assetPath}?v=${tag}${quote}`,
+    );
+}
+
+function addDirToZip(zip, absDir, zipPrefix, assetTag) {
     if (!fs.existsSync(absDir)) return 0;
     let count = 0;
     for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
@@ -36,10 +61,14 @@ function addDirToZip(zip, absDir, zipPrefix) {
         const relZip = zipPrefix ? `${zipPrefix}/${entry.name}` : entry.name;
         if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) {
-            count += addDirToZip(zip, absPath, relZip);
+            count += addDirToZip(zip, absPath, relZip, assetTag);
         } else if (entry.isFile()) {
             if (LITE && LITE_SKIP.some((re) => re.test(relZip))) continue;
-            zip.file(relZip, fs.readFileSync(absPath), {
+            const raw = fs.readFileSync(absPath);
+            const content = assetTag && /\.html?$/i.test(relZip)
+                ? Buffer.from(bustHtmlAssets(raw.toString('utf8'), assetTag), 'utf8')
+                : raw;
+            zip.file(relZip, content, {
                 unixPermissions: 0o644,
             });
             count += 1;
@@ -60,6 +89,8 @@ const version = fs.existsSync(path.join(ROOT, 'dragon-claw-dh.version'))
     ? fs.readFileSync(path.join(ROOT, 'dragon-claw-dh.version'), 'utf8').trim() || pkg.version
     : pkg.version;
 
+const assetTag = `${version}-${hashStaticAssets(path.join(ROOT, 'static'))}`;
+
 const distDir = path.join(ROOT, 'dist');
 fs.mkdirSync(distDir, { recursive: true });
 
@@ -76,7 +107,7 @@ for (const name of ROOT_FILES) {
 }
 
 for (const dirName of INCLUDE_DIRS) {
-    totalFiles += addDirToZip(zip, path.join(ROOT, dirName), dirName);
+    totalFiles += addDirToZip(zip, path.join(ROOT, dirName), dirName, dirName === 'static' ? assetTag : '');
 }
 
 const zipBuffer = await zip.generateAsync({

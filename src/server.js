@@ -36,6 +36,42 @@ const gzipAsync = promisify(zlib.gzip);
 const DH_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+(?=\/|$|\?)/i;
 const DH_BARE_SUBPATH_RE = /^\/digital-human\/dh\/[0-9a-f-]+$/i;
 
+let cachedAssetTag = '';
+let cachedAssetTagAt = 0;
+
+function getStaticAssetTag() {
+    const now = Date.now();
+    if (cachedAssetTag && now - cachedAssetTagAt < 1000) return cachedAssetTag;
+    let latestMtime = 0;
+    const scan = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name === 'vendor' || entry.name === 'downloads') continue;
+            const abs = path.join(dir, entry.name);
+            if (entry.isDirectory()) scan(abs);
+            else if (entry.isFile() && /\.(?:css|js)$/i.test(entry.name)) {
+                try {
+                    const st = fs.statSync(abs);
+                    if (st.mtimeMs > latestMtime) latestMtime = st.mtimeMs;
+                } catch { /* ignore */ }
+            }
+        }
+    };
+    scan(path.join(STATIC_DIR, 'css'));
+    scan(path.join(STATIC_DIR, 'js'));
+    cachedAssetTag = latestMtime ? Math.floor(latestMtime).toString(36) : String(process.pid);
+    cachedAssetTagAt = now;
+    return cachedAssetTag;
+}
+
+function bustHtmlAssets(html, tag) {
+    const encoded = encodeURIComponent(tag);
+    return String(html).replace(
+        /(<(?:link|script)\b[^>]*?\b(?:href|src)\s*=\s*["'])(?!https?:|\/\/|data:|#)([^"'?#]+\.(?:css|js))(["'])/gi,
+        (_, prefix, assetPath, quote) => `${prefix}${assetPath}?v=${encoded}${quote}`,
+    );
+}
+
 const PHASE1_PAGES = new Map([
     ['/uivf12', 'uivf12.html'],
     ['/sla', 'sla.html'],
@@ -122,6 +158,11 @@ function sendHtmlFile(reply, relPath, statusCode = 200) {
     reply.header('Cache-Control', 'no-store');
     reply.type('text/html; charset=utf-8');
     if (statusCode !== 200) reply.code(statusCode);
+    const abs = path.join(STATIC_DIR, relPath);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        const html = bustHtmlAssets(fs.readFileSync(abs, 'utf8'), getStaticAssetTag());
+        return reply.send(html);
+    }
     return reply.sendFile(relPath);
 }
 
@@ -175,6 +216,8 @@ export async function createServer() {
             setHeaders(res, filePath) {
                 if (/\.html?$/i.test(filePath)) {
                     res.setHeader('Cache-Control', 'no-store');
+                } else if (/\.(?:css|js)$/i.test(filePath)) {
+                    res.setHeader('Cache-Control', 'no-cache');
                 }
             },
         });
@@ -382,6 +425,15 @@ export async function createServer() {
 
     for (const [routePath, relHtml] of PHASE1_PAGES.entries()) {
         app.get(routePath, async (req, reply) => sendProtectedHtml(req, reply, relHtml));
+    }
+    const handledHtml = new Set(['index.html', '401.html', 'login.html', 'custom-tool.html']);
+    const protectedHtml = new Set(PHASE1_PAGES.values());
+    if (fs.existsSync(STATIC_DIR)) {
+        for (const entry of fs.readdirSync(STATIC_DIR, { withFileTypes: true })) {
+            if (!entry.isFile() || !/\.html?$/i.test(entry.name) || handledHtml.has(entry.name)) continue;
+            const fileName = entry.name;
+            app.get(`/${fileName}`, async (req, reply) => (protectedHtml.has(fileName) ? sendProtectedHtml(req, reply, fileName) : sendHtmlFile(reply, fileName)));
+        }
     }
 
     app.get('/ai-report', async (req, reply) => {

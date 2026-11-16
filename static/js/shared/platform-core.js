@@ -1680,7 +1680,8 @@ async function loadRecentNavTools() {
 
 function trackCurrentPageAsRecentNavTool() {
     try {
-        const path = window.location.pathname;
+        const rawPath = window.location.pathname;
+        const path = window.dhStripBase ? window.dhStripBase(rawPath) : rawPath;
         const allItems = getAllNavItems();
         const currentItem = allItems.find(item => item && typeof item.match === 'function' && item.match(path));
         if (currentItem && currentItem.id) {
@@ -2017,7 +2018,9 @@ function ensureMigrationStatusLoaded() {
 }
 
 function trackCurrentToolOpen() {
-    const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+    const rawPath = window.location.pathname;
+    const stripped = window.dhStripBase ? window.dhStripBase(rawPath) : rawPath;
+    const pathname = stripped.replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
     const builtinTools = new Set([
         'uivf12', 'sla', 'report', 'expedite', 'monthly', 'ai-bi', 'bigscreen',
         'frt', 'requirements', 'praudit', 'storage', 'db-explorer', 'netcare-explorer'

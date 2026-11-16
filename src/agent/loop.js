@@ -141,6 +141,21 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     };
     let continuations = 0;
     const usage = { inputTokens: 0, outputTokens: 0 };
+    const roundMetrics = [];
+    const recordRound = (result, modelSettings) => {
+        const u = result?.usage || {};
+        if (u.cachedInputTokens) usage.cachedInputTokens = (usage.cachedInputTokens || 0) + u.cachedInputTokens;
+        if (u.reasoningOutputTokens) usage.reasoningOutputTokens = (usage.reasoningOutputTokens || 0) + u.reasoningOutputTokens;
+        const roundRecord = {
+            index: roundMetrics.length + 1,
+            ...(result?.metrics || {}),
+            model: modelSettings?.model || result?.metrics?.model || '',
+            inputTokens: u.inputTokens ?? result?.metrics?.inputTokens ?? 0,
+            outputTokens: u.outputTokens ?? result?.metrics?.outputTokens ?? 0,
+        };
+        roundMetrics.push(roundRecord);
+        emit({ type: 'model_round', round: roundRecord });
+    };
     let finalText = '';
     let rounds = 0;
     let toolsOn = true;
@@ -186,6 +201,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         }
         usage.inputTokens += res.usage.inputTokens;
         usage.outputTokens += res.usage.outputTokens;
+        recordRound(res, active);
         if (!res.toolsSupported) toolsOn = false;
         finalText += res.text;
 
@@ -278,8 +294,10 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                     delivered: () => Boolean(summaryRoundText),
                 });
                 const summaryRes = summaryOut.res;
+                if (summaryOut.settings) active = summaryOut.settings;
                 usage.inputTokens += summaryRes.usage.inputTokens;
                 usage.outputTokens += summaryRes.usage.outputTokens;
+                recordRound(summaryRes, active);
                 if (summaryRes.text) {
                     finalText += (finalText && !/\n\s*$/.test(finalText) ? '\n\n' : '') + summaryRes.text;
                     messages.push({ role: 'assistant', content: summaryRes.text });
@@ -300,5 +318,5 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         message: `agent model=${active.model} rounds=${rounds} tools=${toolCallCount}`,
         detail: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
     });
-    return { text: finalText.trim(), usage, rounds, toolCallCount, events, toolsSupported: toolsOn, model: active };
+    return { text: finalText.trim(), usage, rounds, roundMetrics, toolCallCount, events, toolsSupported: toolsOn, model: active };
 }

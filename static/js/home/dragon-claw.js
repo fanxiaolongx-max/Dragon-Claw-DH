@@ -64,12 +64,12 @@
             prRunning: '正在创建 PR…', prDone: 'PR 已创建', prOpen: '打开 PR', prFailedAt: '「{step}」失败，流程已停止', prDeniedAt: '「{step}」被拒绝，流程已停止', prAborted: '创建 PR 已中止', prRetry: '重试', prClose: '关闭',
             tool_list_uiv_scripts: '查找抓取脚本', tool_read_uiv_script: '读取抓取脚本', tool_save_uiv_script: '保存抓取脚本', tool_delete_uiv_script: '删除抓取脚本',
             tool_list_uiv_categories: '查看脚本分类与站点', tool_move_uiv_script: '移动脚本分类', tool_manage_uiv_category: '管理脚本分类',
-            categoryTasks: '任务', categorySpaces: '空间', newChatInWorkspace: '新建任务',
+            categoryPinned: '置顶', categoryTasks: '任务', categorySpaces: '空间', newChatInWorkspace: '新建任务',
             workspaceDisabled: '工作区仅在本机或管理员账号下可用'
         },
         'en-US': {
             messageExpand: 'Show more', messageCollapse: 'Show less',
-            categoryTasks: 'Tasks', categorySpaces: 'Workspaces', newChatInWorkspace: 'New task',
+            categoryPinned: 'Pinned', categoryTasks: 'Tasks', categorySpaces: 'Workspaces', newChatInWorkspace: 'New task',
             ctxCompacted: 'Context compacted. Usage updates after the next reply.',
             slashCompact: 'Compact context while keeping the full history', compactRunning: 'Compacting context…', compactEmpty: 'Start a conversation before compacting its context', compactSmall: 'The context is already compact', compactDone: 'Context compacted. Full chat and tool history kept.', compactFailed: 'Could not compact context. History was not deleted.',
             slashSchedule: 'Run an instruction later or on a schedule (no args: list tasks)', slashPlan: 'Draft a step plan first, run it after you confirm', slashBtw: 'Quick side question that stays out of this chat',
@@ -972,6 +972,44 @@
         return `<button type="button" class="dc-msg-tool dc-msg-icon" ${attrs} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ICONS[icon]}</button>`;
     }
 
+    function estimateTokensClient(text) {
+        const s = String(text || '');
+        if (!s) return 0;
+        const cjk = (s.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+        const other = s.length - cjk;
+        return Math.max(1, Math.round(cjk / 1.5 + other / 3.8));
+    }
+
+    function buildFallbackRounds({ modelName = '', text = '', usage = null, clientTiming = null, historyTiming = null } = {}) {
+        const outTokens = Math.max(0, Number(usage?.outputTokens || 0)) || estimateTokensClient(text);
+        const inTokens = Math.max(0, Number(usage?.inputTokens || 0));
+        if (!outTokens && !modelName && !String(text || '').trim()) return [];
+        const tokens = Math.max(1, outTokens);
+        const ct = clientTiming && Number(clientTiming.startedAt) > 0 && Number(clientTiming.endedAt) > Number(clientTiming.startedAt) ? clientTiming : null;
+        if (ct) {
+            const elapsedMs = Math.max(120, ct.endedAt - ct.startedAt);
+            const hasFirst = Number(ct.firstDeltaAt) >= ct.startedAt && Number(ct.firstDeltaAt) <= ct.endedAt;
+            const firstAt = hasFirst ? ct.firstDeltaAt : (ct.startedAt + Math.min(900, Math.round(elapsedMs * 0.25)));
+            const ttftMs = Math.max(30, firstAt - ct.startedAt);
+            const generationMs = Math.max(150, ct.endedAt - firstAt);
+            const tps = Math.min(999, Math.max(0.5, Number(((tokens * 1000) / generationMs).toFixed(2))));
+            return [{ index: 1, model: modelName, inputTokens: inTokens, outputTokens: tokens, ttftMs, generationMs, elapsedMs, tps, timingEstimated: true, estimated: true, timingSource: 'client-stream' }];
+        }
+        const ht = historyTiming && Number.isFinite(historyTiming.modelTime) && Number.isFinite(historyTiming.prevTime) ? historyTiming : null;
+        const delta = ht ? (ht.modelTime - ht.prevTime) : 0;
+        if (delta >= 120 && delta <= 600_000) {
+            const ttftMs = Math.min(Math.max(300, Math.round(delta * 0.22)), Math.max(300, delta - 150), 8000);
+            const generationMs = Math.max(200, delta - ttftMs);
+            const tps = Math.min(999, Math.max(0.5, Number(((tokens * 1000) / generationMs).toFixed(2))));
+            return [{ index: 1, model: modelName, inputTokens: inTokens, outputTokens: tokens, ttftMs, generationMs, elapsedMs: delta, tps, timingEstimated: true, estimated: true, timingSource: 'history-delta' }];
+        }
+        const estTps = tokens >= 300 ? 32 : tokens >= 80 ? 28 : 24;
+        const generationMs = Math.max(300, Math.round((tokens * 1000) / estTps));
+        const ttftMs = Math.min(1800, 450 + Math.round(Math.min(inTokens, 60000) / 120));
+        const tps = Number(((tokens * 1000) / generationMs).toFixed(2));
+        return [{ index: 1, model: modelName, inputTokens: inTokens, outputTokens: tokens, ttftMs, generationMs, elapsedMs: ttftMs + generationMs, tps, timingEstimated: true, estimated: true, timingSource: 'client-fallback' }];
+    }
+
     // 每轮模型调用的速度汇总（与 backend/models/ai-round-tracker.js 的 summarizeRounds 一致）：平均 = 总输出 token ÷ 总生成时间
     function speedSummary(rounds = []) {
         const all = (Array.isArray(rounds) ? rounds : []).filter(Boolean);
@@ -979,17 +1017,27 @@
         const nativeAll = all.filter(r => r.timingSource === 'native-metadata' && r.nativeStreamMs > 0 && r.nativeStreamTokens > 0 && Number.isFinite(r.nativeStreamTps));
         const reportedNative = nativeAll.filter(r => r.nativeStreamScope !== 'visible-output-observed');
         const native = reportedNative.length ? reportedNative : nativeAll;
+        const estimatedList = all.filter(r => Number(r.tps) > 0);
         const nativeOnly = !list.length && native.length > 0;
-        const speeds = nativeOnly ? native.map(r => r.nativeStreamTps) : list.map(r => Number(r.tps));
-        const tokens = nativeOnly ? native.reduce((n,r)=>n+r.nativeStreamTokens,0) : list.reduce((n,r) => n + (r.decodeTokens ?? Math.max(0, r.outputTokens - 1)), 0);
-        const ms = nativeOnly ? native.reduce((n,r)=>n+r.nativeStreamMs,0) : list.reduce((n,r) => n + (Number(r.generationMs) || 0), 0);
+        const isEstimated = !list.length && !native.length && estimatedList.length > 0;
+        const effectiveList = list.length ? list : (native.length ? native : estimatedList);
+        const speeds = nativeOnly ? native.map(r => r.nativeStreamTps) : effectiveList.map(r => Number(r.tps));
+        const tokens = nativeOnly ? native.reduce((n, r) => n + r.nativeStreamTokens, 0) : (isEstimated ? estimatedList.reduce((n, r) => n + Math.max(1, Number(r.decodeTokens ?? r.outputTokens ?? 0)), 0) : list.reduce((n, r) => n + (r.decodeTokens ?? Math.max(0, r.outputTokens - 1)), 0));
+        const ms = nativeOnly ? native.reduce((n, r) => n + r.nativeStreamMs, 0) : effectiveList.reduce((n, r) => n + (Number(r.generationMs || r.elapsedMs) || 0), 0);
         const first = all.find(r => typeof r.ttftMs === 'number' && Number.isFinite(r.ttftMs) && r.ttftMs >= 0);
         const observed = all.find(r => r.firstTextSource === 'workbuddy-native-sdk-log' && Number.isFinite(r.observedFirstTextMs) && r.observedFirstTextMs >= 0);
         const turn = all.find(r => typeof r.turnTtftMs === 'number' && Number.isFinite(r.turnTtftMs) && r.turnTtftMs >= 0);
-        return { rounds: all.length, rateSamples:nativeOnly?native.length:list.length, nativeOnly, observedStream: nativeOnly && native.some(r=>r.nativeStreamScope==='visible-output-observed'), min: speeds.length ? Math.min(...speeds) : null, max: speeds.length ? Math.max(...speeds) : null,
-            avg: ms > 0 ? tokens * 1000 / ms : null, ttft: first?.ttftMs ?? turn?.turnTtftMs ?? observed?.observedFirstTextMs ?? null,
+        const fallbackSource = isEstimated ? (estimatedList[0]?.timingSource || 'estimated') : '';
+        return {
+            rounds: all.length, rateSamples: effectiveList.length, nativeOnly, isEstimated, fallbackSource,
+            observedStream: nativeOnly && native.some(r => r.nativeStreamScope === 'visible-output-observed'),
+            min: speeds.length ? Math.min(...speeds) : null, max: speeds.length ? Math.max(...speeds) : null,
+            avg: ms > 0 && tokens > 0 ? tokens * 1000 / ms : null,
+            ttft: first?.ttftMs ?? turn?.turnTtftMs ?? observed?.observedFirstTextMs ?? null,
             observedTiming: !first && !turn && Boolean(observed),
-            turnTiming: !first && Boolean(turn), estimated: all.some(r => r.estimated) };
+            turnTiming: !first && Boolean(turn),
+            estimated: isEstimated || all.some(r => r.estimated || r.timingEstimated)
+        };
     }
     const fmtTps = value => (value >= 100 ? Math.round(value) : Math.round(value * 10) / 10).toString();
 
@@ -1033,46 +1081,79 @@
         window.addEventListener('resize', hide);
     }
 
-    function addMessageTools(message, text, { modelName = '', usage = null, rounds = null } = {}) {
-        if (!external.active) workspace()?.performance?.(message, rounds || []);
+    function addMessageTools(message, text, { modelName = '', usage = null, rounds = null, clientTiming = null, historyTiming = null } = {}) {
+        const rawRecords = (Array.isArray(rounds) ? rounds : []).filter(Boolean);
+        let speed = speedSummary(rawRecords);
+        let records = rawRecords;
+        let usingSynthFallback = false;
+        if (speed.avg === null || speed.ttft === null) {
+            const fb = buildFallbackRounds({ modelName, text, usage, clientTiming, historyTiming });
+            if (!records.length && fb.length) {
+                records = fb;
+                usingSynthFallback = true;
+                speed = speedSummary(records);
+            } else if (fb.length) {
+                usingSynthFallback = true;
+                const f0 = fb[0];
+                speed = {
+                    ...speed,
+                    min: speed.min ?? f0.tps,
+                    avg: speed.avg ?? f0.tps,
+                    max: speed.max ?? f0.tps,
+                    ttft: speed.ttft ?? f0.ttftMs,
+                    isEstimated: true,
+                    estimated: true,
+                    fallbackSource: speed.fallbackSource || f0.timingSource,
+                };
+            }
+        }
+        if (!external.active) workspace()?.performance?.(message, records);
         const bar = document.createElement('div');
         bar.className = 'dc-msg-tools';
-        const records = (Array.isArray(rounds) ? rounds : []).filter(Boolean);
-        const input = records.length ? records.reduce((n,r) => n + (Number(r.inputTokens) || 0),0) : Number(usage?.inputTokens || 0);
-        const output = records.length ? records.reduce((n,r) => n + (Number(r.outputTokens) || 0),0) : Number(usage?.outputTokens || 0);
-        const speed = speedSummary(records);
+        const input = rawRecords.length ? rawRecords.reduce((n, r) => n + (Number(r.inputTokens) || 0), 0) : Number(usage?.inputTokens || 0);
+        const output = rawRecords.length ? rawRecords.reduce((n, r) => n + (Number(r.outputTokens) || 0), 0) : (Number(usage?.outputTokens || 0) || (records[0]?.outputTokens || 0));
         const en = lang() === 'en-US';
         // 缓存命中：多步调用每次都会重发前文，命中缓存的部分按缓存价计费（通常为原价一到两成）
-        const cacheKnown = records.filter(r => Number.isFinite(Number(r.cachedInputTokens)) && r.cachedInputTokens !== null);
-        const cached = cacheKnown.reduce((n,r) => n + Number(r.cachedInputTokens),0);
-        const cacheInput = cacheKnown.reduce((n,r) => n + (Number(r.inputTokens) || 0),0);
+        const cacheKnown = rawRecords.filter(r => Number.isFinite(Number(r.cachedInputTokens)) && r.cachedInputTokens !== null);
+        const cached = cacheKnown.reduce((n, r) => n + Number(r.cachedInputTokens), 0);
+        const cacheInput = cacheKnown.reduce((n, r) => n + (Number(r.inputTokens) || 0), 0);
         const cacheLine = cached > 0 && cacheInput > 0
-            ? (en ? `Cache hit: ${cached.toLocaleString()} of ${cacheInput.toLocaleString()} input tokens (${Math.round(cached/cacheInput*100)}%), billed at the provider's cached rate. Each tool step resends the conversation, so summed input grows quickly; cached tokens are much cheaper.`
-                : `缓存命中：${cached.toLocaleString()} / ${cacheInput.toLocaleString()} 输入 tokens（${Math.round(cached/cacheInput*100)}%），按供应商缓存价计费。多步工具调用每步都会重发前文，所以累计输入涨得快，但命中缓存的部分便宜得多。`)
+            ? (en ? `Cache hit: ${cached.toLocaleString()} of ${cacheInput.toLocaleString()} input tokens (${Math.round(cached / cacheInput * 100)}%), billed at the provider's cached rate. Each tool step resends the conversation, so summed input grows quickly; cached tokens are much cheaper.`
+                : `缓存命中：${cached.toLocaleString()} / ${cacheInput.toLocaleString()} 输入 tokens（${Math.round(cached / cacheInput * 100)}%），按供应商缓存价计费。多步工具调用每步都会重发前文，所以累计输入涨得快，但命中缓存的部分便宜得多。`)
             : '';
         const cacheBadge = cached > 0 && cacheInput > 0 ? (en ? ` (cached ${formatTokenCount(cached)})` : `（缓存 ${formatTokenCount(cached)}）`) : '';
         const rate = value => value === null ? '—' : fmtTps(value);
-        const timing = speed.ttft === null ? '—' : (speed.ttft/1000).toFixed(2)+' s';
+        const timing = speed.ttft === null ? '—' : (speed.ttft / 1000).toFixed(2) + ' s';
+        const fallbackNote = speed.fallbackSource === 'client-stream'
+            ? (en ? 'Estimated from client stream timing & output tokens.' : '已根据前端流式接收计时与输出 Token 进行估算。')
+            : speed.fallbackSource === 'history-delta'
+            ? (en ? 'Estimated from saved message timestamps & output tokens.' : '来源未记录逐次计时，已按历史消息耗时与输出 Token 兜底估算。')
+            : speed.fallbackSource === 'client-fallback'
+            ? (en ? 'Fallback estimation from output length (no per-call timing stored).' : '缺少流式计时记录，已按输出长度与常规速率兜底估算。')
+            : (en ? 'Rough estimation based on event timestamps and provider output tokens.' : '根据事件时间戳和供应商输出 Token 进行估算。');
+        const roundLine = (!usingSynthFallback && rawRecords.length)
+            ? `${speed.rounds} ${en ? 'model calls' : '次模型调用'} · ${en ? 'rate samples' : '流速样本'} ${speed.rateSamples}`
+            : (en ? 'Estimated fallback (per-call stream records unavailable)' : '兜底估算（来源未提供逐次调用流式记录）');
         const unavailable = speed.ttft === null
             ? (en ? 'The source did not provide request-stream timing. Token counts alone cannot establish decode TPS or TTFT.' : '来源未提供请求流式计时，仅有 Token 数无法计算真实 TPS 或 TTFT。')
             : (en ? 'TPS unavailable: the source did not provide per-request decode timing. TTFT is reported separately.' : 'TPS 未提供：来源没有逐请求解码计时。TTFT 按已上报数据单独展示。');
         const details = [
-            tx('usageTitle', {input:input.toLocaleString(),output:output.toLocaleString()}),
-            `${en?'Total tokens':'总 Token'}: ${(input+output).toLocaleString()}`,
+            tx('usageTitle', { input: input.toLocaleString(), output: output.toLocaleString() }),
+            `${en ? 'Total tokens' : '总 Token'}: ${(input + output).toLocaleString()}`,
             ...(cacheLine ? [cacheLine] : []),
-            `TPS${speed.nativeOnly ? (speed.observedStream ? (en?' (observed text)':'（文字观测）') : (en?' (native stream)':'（原生流）')) : ''} ${en?'min / avg / max':'最低 / 平均 / 最高'}: ${rate(speed.min)} / ${rate(speed.avg)} / ${rate(speed.max)}`,
-            `${speed.observedTiming ? (en?'First text (observed)':'首文字（观测）') : 'TTFT'}${speed.turnTiming ? (en?' (turn)':'（轮次级）') : ''}: ${timing}`,
-            speed.rounds ? `${speed.rounds} ${en?'model calls':'次模型调用'} · ${en?'rate samples':'流速样本'} ${speed.rateSamples}` : (en?'Per-call records unavailable':'未提供逐次调用记录'),
-            speed.avg === null ? (speed.observedTiming ? (en?'First text is measured from the recorded user turn to native SDK text arrival. It is not per-model-request TTFT; decode TPS remains unavailable.':'首文字为用户本轮消息到原生 SDK 收到文字的观测延迟，包含工具等等待，不是单次模型请求 TTFT；解码 TPS 仍未提供。') : unavailable) : speed.nativeOnly ? (speed.observedStream ? (en?'Observed text rate: visible output tokens (reasoning excluded) divided by native message start-to-end time. Only final text-only model calls are counted; chunk buffering may affect this rate.':'文字观测速率：扣除推理后的输出 Token ÷ 原生消息起止时长；仅统计最终纯文字调用，分块缓冲可能影响数值。') : (en?'Native reported output ÷ native streaming duration; includes reasoning tokens. Chunk buffering may affect this rate; it is not pure visible-text decode.':'原生输出 Token ÷ 原生 streamingDuration，包含推理 Token；分块缓冲可能影响数值，不等同于纯可见文字解码速度。')) : (en?'Decode only; duration-weighted average, excluding the first token.':'仅统计解码；平均按解码时长加权，排除首个 Token。'),
+            `TPS${speed.nativeOnly ? (speed.observedStream ? (en ? ' (observed text)' : '（文字观测）') : (en ? ' (native stream)' : '（原生流）')) : speed.isEstimated ? (en ? ' (est.)' : '（估算）') : ''} ${en ? 'min / avg / max' : '最低 / 平均 / 最高'}: ${rate(speed.min)} / ${rate(speed.avg)} / ${rate(speed.max)}`,
+            `${speed.observedTiming ? (en ? 'First text (observed)' : '首文字（观测）') : 'TTFT'}${speed.turnTiming ? (en ? ' (turn)' : '（轮次级）') : speed.isEstimated ? (en ? ' (est.)' : '（估算）') : ''}: ${timing}`,
+            roundLine,
+            speed.avg === null ? (speed.observedTiming ? (en ? 'First text is measured from the recorded user turn to native SDK text arrival. It is not per-model-request TTFT; decode TPS remains unavailable.' : '首文字为用户本轮消息到原生 SDK 收到文字的观测延迟，包含工具等等待，不是单次模型请求 TTFT；解码 TPS 仍未提供。') : unavailable) : speed.nativeOnly ? (speed.observedStream ? (en ? 'Observed text rate: visible output tokens (reasoning excluded) divided by native message start-to-end time. Only final text-only model calls are counted; chunk buffering may affect this rate.' : '文字观测速率：扣除推理后的输出 Token ÷ 原生消息起止时长；仅统计最终纯文字调用，分块缓冲可能影响数值。') : (en ? 'Native reported output ÷ native streaming duration; includes reasoning tokens. Chunk buffering may affect this rate; it is not pure visible-text decode.' : '原生输出 Token ÷ 原生 streamingDuration，包含推理 Token；分块缓冲可能影响数值，不等同于纯可见文字解码速度。')) : speed.isEstimated ? fallbackNote : (en ? 'Decode only; duration-weighted average, excluding the first token.' : '仅统计解码；平均按解码时长加权，排除首个 Token。'),
             ...(speed.estimated ? [tx('speedEstimated')] : []),
-            ...(records.length > 3 ? [en ? 'Latest 3 calls:' : '最近 3 次调用：'] : []),
-            ...records.slice(-3).map((r,i) => `#${Math.max(0,records.length-3)+i+1} ${r.model || ''}: ${en?'in':'输入'} ${r.inputTokens ?? '—'} / ${en?'out':'输出'} ${r.outputTokens ?? '—'}; ${en?'cache read':'缓存读取'} ${r.cachedInputTokens ?? '—'}; TPS ${r.timingSource === 'native-metadata' && r.nativeStreamTps > 0 ? fmtTps(r.nativeStreamTps)+' ('+(en?'native':'原生流')+')' : !r.timingEstimated && r.timingSource === 'request-stream' && r.tps > 0 ? fmtTps(r.tps) : '—'}; TTFT ${typeof r.ttftMs === 'number' ? (r.ttftMs/1000).toFixed(2)+' s' : '—'}`)
+            ...(rawRecords.length > 3 ? [en ? 'Latest 3 calls:' : '最近 3 次调用：'] : []),
+            ...rawRecords.slice(-3).map((r, i) => `#${Math.max(0, rawRecords.length - 3) + i + 1} ${r.model || ''}: ${en ? 'in' : '输入'} ${r.inputTokens ?? '—'} / ${en ? 'out' : '输出'} ${r.outputTokens ?? '—'}; ${en ? 'cache read' : '缓存读取'} ${r.cachedInputTokens ?? '—'}; TPS ${r.timingSource === 'native-metadata' && r.nativeStreamTps > 0 ? fmtTps(r.nativeStreamTps) + ' (' + (en ? 'native' : '原生流') + ')' : (!r.timingEstimated && r.timingSource === 'request-stream' && r.tps > 0) || (r.timingEstimated && r.tps > 0) ? fmtTps(r.tps) + (r.timingEstimated ? (en ? ' (est.)' : '（估）') : '') : '—'}; TTFT ${typeof r.ttftMs === 'number' ? (r.ttftMs / 1000).toFixed(2) + ' s' + (r.timingEstimated ? (en ? ' (est.)' : '（估）') : '') : '—'}`)
         ].join('\n');
-        if (Array.isArray(rounds) && rounds.length) message.dcRounds = rounds;
+        if (Array.isArray(records) && records.length) message.dcRounds = records;
         bar.innerHTML = `${iconButton('copy', tx('copy'), 'data-dc-copy')}
             ${modelName ? `<span class="dc-msg-model" title="${escapeHtml(tx('modelCurrent', { name: modelName }))}">${escapeHtml(modelName)}</span>` : ''}
             ${records.length || input || output ? `<span class="dc-msg-usage" tabindex="0" data-dc-metric-tip="${escapeHtml(details)}">${escapeHtml(tx('usageText', { input: formatTokenCount(input) + cacheBadge, output: formatTokenCount(output) }))}${speed.estimated ? ' ≈' : ''}</span>` : ''}
-            ${records.length || modelName || input || output ? `<span class="dc-msg-speed" tabindex="0" data-dc-metric-tip="${escapeHtml(details)}">${escapeHtml(`TPS${speed.nativeOnly ? (speed.observedStream ? (en?' (observed text)':'（文字观测）') : (en?' (native)':'（原生流）')) : ''} ${rate(speed.min)}/${rate(speed.avg)}/${rate(speed.max)} · ${speed.observedTiming ? (en?'First text (observed)':'首文字（观测）') : 'TTFT'} ${timing}${speed.turnTiming ? (en ? ' (turn)' : '（轮次）') : ''}${speed.rounds ? ' · '+tx('speedRounds', {n:speed.rounds}) : ''}`)}</span>` : ''}`;
+            ${records.length || modelName || input || output ? `<span class="dc-msg-speed" tabindex="0" data-dc-metric-tip="${escapeHtml(details)}">${escapeHtml(`TPS${speed.nativeOnly ? (speed.observedStream ? (en ? ' (observed text)' : '（文字观测）') : (en ? ' (native)' : '（原生流）')) : speed.isEstimated ? (en ? ' (est.)' : '（估）') : ''} ${rate(speed.min)}/${rate(speed.avg)}/${rate(speed.max)} · ${speed.observedTiming ? (en ? 'First text (observed)' : '首文字（观测）') : 'TTFT'}${speed.turnTiming ? (en ? ' (turn)' : '（轮次）') : speed.isEstimated ? (en ? ' (est.)' : '（估）') : ''} ${timing}${!usingSynthFallback && speed.rounds ? ' · ' + tx('speedRounds', { n: speed.rounds }) : ''}`)}</span>` : ''}`;
         bar.querySelector('[data-dc-copy]').dataset.dcCopy = text;
         message.querySelector('.dc-msg-main').appendChild(bar);
     }
@@ -1987,6 +2068,8 @@
             window.DragonHtmlSwarm.startSession({ prompt: content });
         }
         let started = false;
+        const streamStartedAt = Date.now();
+        let streamFirstDeltaAt = 0;
         try {
             const clientToolData = await collectClientToolData(`${state.messages.slice(-3, -1).map(item => item.role === 'user' ? item.content : '').join('\n')}\n${content}`);
             const data = await api.requestStreamingChat({
@@ -2009,6 +2092,7 @@
                 signal: controller.signal,
                 onDelta: delta => {
                     if (!delta || controller.signal.aborted || !reply.isConnected) return;
+                    if (!streamFirstDeltaAt) streamFirstDeltaAt = Date.now();
                     started = true;
                     renderer.append(delta);
                     if (isNormalChat) window.DragonHtmlSwarm?.onStreamDelta?.(renderer.current(), { prompt: content });
@@ -2078,7 +2162,12 @@
             state.messages.push({ role: 'model', content: finalText });
             const grounding = api.renderGrounding ? api.renderGrounding(data.grounding) : '';
             if (grounding) reply.querySelector('.dc-msg-main').insertAdjacentHTML('beforeend', grounding);
-            addMessageTools(reply, finalText, { modelName: data.model?.name || model?.name || '', usage: data.usage, rounds: data.rounds || reply.dcLiveRounds });
+            addMessageTools(reply, finalText, {
+                modelName: data.model?.name || model?.name || '',
+                usage: data.usage,
+                rounds: data.rounds || reply.dcLiveRounds,
+                clientTiming: { startedAt: streamStartedAt, firstDeltaAt: streamFirstDeltaAt, endedAt: Date.now() },
+            });
             const skillCardScrollTop = nearBottom() ? el.thread.scrollTop : null;
             await window.DragonClawSkills?.offerSave?.(reply, finalText); // 等待保存/恢复卡片挂载，再结束生成
             if (skillCardScrollTop !== null && Math.abs(el.thread.scrollTop - skillCardScrollTop) < 2) scrollThread(true);
@@ -2135,11 +2224,21 @@
         }
     }
 
+    function isScratchDirectory(dir) {
+        if (!dir || typeof dir !== 'string') return false;
+        const trimmed = dir.trim();
+        if (!trimmed) return false;
+        if (trimmed.includes('dragon-claw-scratch')) return true;
+        if (/[\\/]scratch[\\/][a-f0-9]+$/i.test(trimmed)) return true;
+        return false;
+    }
+
     // agent：这次对话用过的工作区智能体会话 { agentSessionId, root }，续接时一并接回，模型才记得做过的工具操作
     function rememberLastChat(sessionId, agent = null) {
         if (!sessionId) return;
         const previous = readLastChat();
-        const keptAgent = agent?.agentSessionId && agent?.root ? agent : (previous?.sessionId === sessionId ? previous.agent : null);
+        const validAgent = agent && !isScratchDirectory(agent.root) ? agent : null;
+        const keptAgent = validAgent?.agentSessionId && validAgent?.root ? validAgent : (previous?.sessionId === sessionId && !isScratchDirectory(previous?.agent?.root) ? previous.agent : null);
         try {
             localStorage.setItem(LAST_CHAT_KEY, JSON.stringify({ sessionId, user: currentUser(), updatedAt: Date.now(), ...(keptAgent ? { agent: keptAgent } : {}) }));
         } catch { /* 存储不可用时不提供续接 */ }
@@ -2276,8 +2375,23 @@
             if (Array.isArray(events) && events.length) workspace()?.replayEvents?.(message, events);
             const skillIds = (Array.isArray(events) ? events : []).find(event => event?.type === 'skills')?.skills;
             if (skillIds?.length) window.DragonClawSkills?.badge?.(message, skillIds);
-            const rounds = (Array.isArray(events) ? events : []).filter(event => event?.type === 'model_round' && event.round).map(event => event.round);
-            addMessageTools(message, text, { modelName: item.model_name || '', usage: { inputTokens: item.input_tokens, outputTokens: item.output_tokens }, rounds });
+            const evRounds = (Array.isArray(events) ? events : []).filter(event => event?.type === 'model_round' && event.round).map(event => event.round);
+            const rounds = evRounds.length ? evRounds : (Array.isArray(item.rounds) ? item.rounds : []);
+            let prevTime = NaN;
+            let prevEl = message.previousElementSibling;
+            while (prevEl) {
+                if (prevEl.dataset?.dcTime) { prevTime = Number(prevEl.dataset.dcTime); break; }
+                prevEl = prevEl.previousElementSibling;
+            }
+            addMessageTools(message, text, {
+                modelName: item.model_name || item.modelName || '',
+                usage: {
+                    inputTokens: item.input_tokens ?? item.inputTokens ?? 0,
+                    outputTokens: item.output_tokens ?? item.outputTokens ?? 0,
+                },
+                rounds,
+                historyTiming: { modelTime: time, prevTime },
+            });
             if (!provider && !external.active) window.DragonHtmlSwarm?.decorateMessageHtmlBlocks?.(message, text);
             window.DragonClawSkills?.offerSave?.(message, text);
         } else {
@@ -2566,7 +2680,8 @@
         }
         list.innerHTML = sessionPicker.items.map((item, index) => {
             const title = item.title || item.firstQuestion || item.lastQuestion || item.id;
-            const folder = item.agent?.root ? item.agent.root.split(/[\\/]/).filter(Boolean).pop() : '';
+            const dir = getChatDirectory(item);
+            const folder = dir ? dir.split(/[\\/]/).filter(Boolean).pop() : '';
             return `<button type="button" class="dc-session-item${index === sessionPicker.active ? ' is-active' : ''}" role="option" aria-selected="${index === sessionPicker.active}" data-dc-session="${index}">
                 <span class="dc-session-title">${escapeHtml(title)}${item.id === state.sessionId ? `<em class="dc-session-tag is-current">${escapeHtml(tx('sessionCurrent'))}</em>` : ''}${item.archived ? `<em class="dc-session-tag">${escapeHtml(tx('sessionArchived'))}</em>` : ''}</span>
                 ${item.lastQuestion && item.lastQuestion !== item.firstQuestion ? `<span class="dc-session-last">${escapeHtml(item.lastQuestion)}</span>` : ''}
@@ -2717,8 +2832,10 @@
         // 2. 桌面 Agent 会话 (Codex, Claude Code, Antigravity)
         const desktopItems = window.HomeDesktopAgents?.getItems?.() || [];
         for (const item of desktopItems) {
+            const uid = 'desktop:' + item.provider + ':' + item.id;
             unified.push({
-                _id: 'desktop:' + item.provider + ':' + item.id,
+                id: uid,
+                _id: uid,
                 _sourceType: item.provider, // 'codex', 'claudecode', 'antigravity'
                 _raw: item,
                 title: item.title || item.id,
@@ -2733,8 +2850,10 @@
         const channelThreads = ['weixin', 'welink'].includes(sourceFilter) ? (window.HomeWelinkThreads?.getAllThreads?.() || []) : [];
         for (const thread of channelThreads) {
             const ch = thread.channel || 'welink';
+            const uid = ch + ':' + thread.kind + ':' + thread.id;
             unified.push({
-                _id: ch + ':' + thread.kind + ':' + thread.id,
+                id: uid,
+                _id: uid,
                 _sourceType: ch, // 'weixin', 'welink'
                 _raw: thread,
                 title: thread.name || thread.id,
@@ -2837,8 +2956,11 @@
     }
 
     function getChatDirectory(item) {
+        if (item?.scratch || item?.agent?.scratch || item?._raw?.agent?.scratch || item?._raw?.scratch) return '';
         const root = item?.agent?.root || item?._raw?.agent?.root || item?.cwd || item?._raw?.cwd || '';
-        return typeof root === 'string' ? root.trim() : '';
+        const trimmed = typeof root === 'string' ? root.trim() : '';
+        if (isScratchDirectory(trimmed)) return '';
+        return trimmed;
     }
 
     function getDirectoryBaseName(fullPath) {
@@ -2848,6 +2970,7 @@
     }
 
     function renderChatList() {
+        if (window.HomeConversationList?.deferRender?.(el.chatList, renderChatList)) return;
         if (!el.chatList) return;
         if (!chatList.loaded) {
             el.chatList.innerHTML = '<div class="home-chat-skeleton" aria-hidden="true"><span></span><span></span><span></span><span></span></div>';
@@ -2952,22 +3075,31 @@
                 return timeB - timeA || a.index - b.index;
             }
 
+            const pinnedEntries = [];
             const taskEntries = [];
             const projectMap = new Map();
 
             for (let i = 0; i < allItems.length; i++) {
                 const item = allItems[i];
                 if (!passesFilter(item)) continue;
-                const root = getChatDirectory(item);
+                const pref = window.HomeConversationList?.get?.('mine', item.id || item._id) || {};
                 const entry = { item, index: i, running: isItemRunning(item) };
-                if (root) {
-                    if (!projectMap.has(root)) projectMap.set(root, []);
-                    projectMap.get(root).push(entry);
+                if (pref.pinned) {
+                    pinnedEntries.push(entry);
                 } else {
-                    taskEntries.push(entry);
+                    const root = getChatDirectory(item);
+                    if (root) {
+                        if (!projectMap.has(root)) projectMap.set(root, []);
+                        projectMap.get(root).push(entry);
+                    } else {
+                        taskEntries.push(entry);
+                    }
                 }
             }
 
+            pinnedEntries.sort((a, b) => window.HomeConversationList.comparePins(
+                window.HomeConversationList.get('mine', a.item.id || a.item._id),
+                window.HomeConversationList.get('mine', b.item.id || b.item._id)) || sortEntries(a, b));
             taskEntries.sort(sortEntries);
             for (const entries of projectMap.values()) {
                 entries.sort(sortEntries);
@@ -2989,7 +3121,7 @@
                 }
             }
 
-            if (taskEntries.length === 0 && sortedProjects.length === 0) {
+            if (pinnedEntries.length === 0 && taskEntries.length === 0 && sortedProjects.length === 0) {
                 el.chatList.innerHTML = `<div class="home-chat-empty">${escapeHtml(tx('chatNoMatch'))}</div>`;
                 window.HomeConversationList?.enhance(el.chatList, config);
                 return;
@@ -2998,9 +3130,19 @@
             // 保持一个隐藏的 .home-chat-group 占位，供自动化测试与样式选择器向下兼容
             html.push('<div class="home-chat-group" hidden style="display:none;" aria-hidden="true"></div>');
 
-            // 1. 任务 (未选目录)：顶级分类，可折叠，「展开更多」只作用于本分类（conversation-list.js 按 data-batch-scope 分别计数）
             const searching = Boolean(query);
-            if (taskEntries.length > 0 || sortedProjects.length === 0) {
+
+            // 0. 置顶 (全部类型的置顶会话：第三方 Agent、空间对话、普通任务)：顶级独立分类；没有置顶项时不显示
+            if (pinnedEntries.length > 0) {
+                const open = searching || !collapsedSections.has('pinned');
+                html.push(`<section class="home-chat-section" data-section="pinned">${sectionHead('pinned', tx('categoryPinned'), pinnedEntries.length)}
+                    <div class="home-chat-section-body" data-batch-scope="pinned"${open ? '' : ' hidden'}>
+                        ${pinnedEntries.map(({ item, index }) => renderItemHtml(item, index, false)).join('')}
+                    </div></section>`);
+            }
+
+            // 1. 任务 (未选目录)：顶级分类，可折叠，「展开更多」只作用于本分类（conversation-list.js 按 data-batch-scope 分别计数）
+            if (taskEntries.length > 0 || (sortedProjects.length === 0 && pinnedEntries.length === 0)) {
                 const open = searching || !collapsedSections.has('tasks');
                 html.push(`<section class="home-chat-section" data-section="tasks">${sectionHead('tasks', tx('categoryTasks'), taskEntries.length)}
                     <div class="home-chat-section-body" data-batch-scope="tasks" data-batch-remote${open ? '' : ' hidden'}>

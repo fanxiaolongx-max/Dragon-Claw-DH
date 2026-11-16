@@ -13,7 +13,7 @@
     const staticNav = window.ToolsStaticNavigation;
     let root, frame, titleEl, iconEl, surface, skeleton, surfaceMessage, retry;
     let assistantObserver, surfaceObserver, resizeObserver, surfaceFrame, surfaceId = 0, activeSurface = 0;
-    let leaveConfirming = false, leaveBypass = false;
+    let leaveConfirming = false, leaveBypass = false, frameGuard = false;
 
     function toolConfirmLeaveHook() {
         if (!root || root.hidden || activeSurface) return null;
@@ -349,30 +349,37 @@
                 : { url: origin.pathname + origin.search + origin.hash, hub: Boolean(window.HomeSkillHub?.isOpen?.()),
                     mainScroll: document.querySelector('.home-main')?.scrollTop || 0, windowScroll: window.scrollY };
         }
-        window.HomeSkillHub?.close?.();
-        window.HomeShell?.closePop?.();
-        const path = url.pathname + url.search + url.hash;
-        const info = toolInfo(url);
-        closeSurface();
-        assistantObserver?.disconnect();
-        document.body.classList.remove('v2-tool-has-assistant');
-        state.href = path;
-        titleEl.textContent = info.title || (useSurface ? L('数通协议专家', 'Datacom Protocol Expert') : decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || ''));
-        iconEl.innerHTML = iconHtml(info.icon);
-        frame.title = titleEl.textContent;
-        root.hidden = false;
-        root.querySelector('[data-frame-act=browser]').hidden = !window.DragonBrowser || Boolean(useSurface);
-        document.body.classList.add('v2-tool-open');
-        if (useSurface) {
-            if (frame.hasAttribute('src')) frame.contentWindow.location.replace('about:blank');
-            openSurface(path);
-        } else {
-            // iframe 导航不额外占用浏览器历史，返回键交给宿主页的 app 状态处理。
-            if (!frame.hasAttribute('src')) frame.src = path;
-            else frame.contentWindow.location.replace(path);
+        frameGuard = true;
+        setTimeout(() => { frameGuard = false; }, 160);
+        try {
+            window.HomeSkillHub?.close?.();
+            window.HomeShell?.closePop?.();
+            const path = url.pathname + url.search + url.hash;
+            const info = toolInfo(url);
+            closeSurface();
+            assistantObserver?.disconnect();
+            document.body.classList.remove('v2-tool-has-assistant');
+            state.href = path;
+            titleEl.textContent = info.title || (useSurface ? L('数通协议专家', 'Datacom Protocol Expert') : decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || ''));
+            iconEl.innerHTML = iconHtml(info.icon);
+            frame.title = titleEl.textContent;
+            root.hidden = false;
+            root.querySelector('[data-frame-act=browser]').hidden = !window.DragonBrowser || Boolean(useSurface);
+            document.body.classList.add('v2-tool-open');
+            if (useSurface) {
+                if (frame.hasAttribute('src')) frame.contentWindow.location.replace('about:blank');
+                openSurface(path);
+            } else {
+                // iframe 导航不额外占用浏览器历史，返回键交给宿主页的 app 状态处理。
+                if (!frame.hasAttribute('src')) frame.src = path;
+                else frame.contentWindow.location.replace(path);
+            }
+            window.dispatchEvent(new CustomEvent('home:tool-frame', { detail: { open: true, href: path, browserAllowed: !useSurface } }));
+            if (push) writeUrl(path, false);
+        } catch (err) {
+            frameGuard = false;
+            throw err;
         }
-        window.dispatchEvent(new CustomEvent('home:tool-frame', { detail: { open: true, href: path, browserAllowed: !useSurface } }));
-        if (push) writeUrl(path, false);
         return true;
     }
     function close({ push = true, restore = true, skipConfirm = false } = {}) {
@@ -457,8 +464,8 @@
             if (info.title) { titleEl.textContent = info.title; frame.title = info.title; iconEl.innerHTML = iconHtml(info.icon); }
         });
         // 打开技能中心、切换对话或点侧栏其他入口时先确认再离开，点击取消则保持在当前工具页面
-        window.addEventListener('home:hub', event => { if (event.detail?.open) close({ restore: false }); });
-        window.addEventListener('home:mode', () => close({ restore: false }));
+        window.addEventListener('home:hub', event => { if (event.detail?.open && !frameGuard) close({ restore: false }); });
+        window.addEventListener('home:mode', () => { if (!frameGuard) close({ restore: false }); });
         document.getElementById('homeSidebar')?.addEventListener('click', event => {
             if (!window.HomeToolFrame.isOpen() || event.target.closest('.v2-userbar, .v2-side-tools, [aria-haspopup], #friendLinksManageBtn')) return;
             const trigger = event.target.closest('button, [role="button"], [data-conversation-id], a[href]');

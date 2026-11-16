@@ -73,11 +73,15 @@
     // Route-based glyphs stay consistent across language changes and platform catalog.
     function appGlyph(href) {
         let path = '';
-        try { path = new URL(href, location.href).pathname.replace(/^\/pages\//, '/').replace(/\.html$/, '').replace(/\/$/, ''); } catch { /* Use a generic application glyph. */ }
-        const routes = { '/uivf12': 'capture', '/sla': 'importData', '/report': 'chart', '/custom-report': 'chart', '/expedite': 'bolt', '/monthly': 'calendar', '/ai-report': 'calendar', '/ai-bi': 'dashboard', '/duty-roster': 'moon', '/bigscreen': 'dashboard', '/topic-analysis': 'analytics', '/topical-analysis': 'analytics', '/frt': 'calculator', '/praudit': 'checklist', '/storage': 'server', '/db-explorer': 'database', '/netcare-explorer': 'compass' };
+        try {
+            const rawPath = new URL(href, location.href).pathname;
+            const stripped = window.dhStripBase ? window.dhStripBase(rawPath) : rawPath;
+            path = stripped.replace(/^\/pages\//, '/').replace(/\.html$/, '').replace(/\/$/, '');
+        } catch { /* Use a generic application glyph. */ }
+        const routes = { '/uivf12': 'capture', '/sla': 'importData', '/report': 'chart', '/custom-report': 'chart', '/expedite': 'bolt', '/monthly': 'calendar', '/monthly-legacy': 'calendar', '/ai-report': 'calendar', '/ai-bi': 'dashboard', '/duty-roster': 'moon', '/bigscreen': 'dashboard', '/topic-analysis': 'analytics', '/topical-analysis': 'analytics', '/frt': 'calculator', '/praudit': 'checklist', '/storage': 'server', '/db-explorer': 'database', '/netcare-explorer': 'compass', '/requirements': 'target', '/promotions': 'compass' };
         if (routes[path]) return routes[path];
         if (/network_safety_meeting_summary|nis_2026h1_summary|slide|presentation|ppt/i.test(path)) return 'presentation';
-        return path.startsWith('/custom-tools/') ? 'puzzle' : 'grid';
+        return (path.startsWith('/custom-tools/') || path === '/custom-tool') ? 'puzzle' : 'grid';
     }
 
     const TEXT = {
@@ -330,9 +334,12 @@
                 if (!raw) return '';
                 try {
                     const u = new URL(raw, location.origin);
-                    return u.pathname.replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+                    const p = window.dhStripBase ? window.dhStripBase(u.pathname) : u.pathname;
+                    return p.replace(/^\/pages\//, '/').replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
                 } catch {
-                    return String(raw).split(/[?#]/)[0].replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
+                    const p = String(raw).split(/[?#]/)[0];
+                    const sp = window.dhStripBase ? window.dhStripBase(p) : p;
+                    return sp.replace(/^\/pages\//, '/').replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
                 }
             };
             const workflow = window.NavWorkflow?.links() || [];

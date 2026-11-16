@@ -2330,61 +2330,61 @@ html.platform-home #customToolImportModal {
 html.platform-home[data-theme="dark"] #customToolImportModal { background: rgba(0, 0, 0, .24); }
 
 html.platform-home #customToolImportModal .tool-import-dialog {
-    display: flex; flex-direction: column; width: min(560px, 100%);
-    max-height: min(720px, calc(100dvh - 48px)); overflow: hidden;
+    display: flex; flex-direction: column; width: min(460px, 100%);
+    max-height: min(600px, calc(100dvh - 48px)); overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--v2-line) 80%, transparent);
-    border-radius: 18px; color: var(--v2-ink);
-    background: color-mix(in srgb, var(--v2-pop) 80%, transparent);
+    border-radius: 16px; color: var(--v2-ink);
+    background: color-mix(in srgb, var(--v2-pop) 92%, transparent);
     -webkit-backdrop-filter: blur(24px) saturate(135%); backdrop-filter: blur(24px) saturate(135%);
     box-shadow: 0 20px 64px rgba(15, 23, 42, .18), inset 0 1px 0 rgba(255, 255, 255, .12);
 }
 
-html.platform-home #customToolImportModal .tool-import-head { flex: none; padding: 18px 20px 14px; gap: 14px; border-color: var(--v2-line); }
+html.platform-home #customToolImportModal .tool-import-head { flex: none; padding: 14px 18px 12px; gap: 10px; border-color: var(--v2-line); }
 
-html.platform-home #customToolImportModal .tool-import-title { color: var(--v2-ink); font-size: 19px; font-weight: 650; }
+html.platform-home #customToolImportModal .tool-import-title { color: var(--v2-ink); font-size: 16px; font-weight: 650; }
 
-html.platform-home #customToolImportModal .tool-import-subtitle { color: var(--v2-ink2); font-size: 12px; line-height: 1.5; margin-top: 6px; }
+html.platform-home #customToolImportModal .tool-import-subtitle { color: var(--v2-ink2); font-size: 11.5px; line-height: 1.45; margin-top: 4px; }
 
 /* Only the fields scroll; actions stay visible as metadata and upload logs grow. */
 html.platform-home #customToolImportModal .tool-import-form { display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 0; overflow: hidden; }
 
-html.platform-home #customToolImportModal .tool-import-body { min-height: 0; padding: 16px 20px 20px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+html.platform-home #customToolImportModal .tool-import-body { min-height: 0; padding: 14px 18px 16px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 
-html.platform-home #customToolImportModal .tool-import-ai-status { overflow-wrap: anywhere; }
+html.platform-home #customToolImportModal .tool-import-ai-status { overflow-wrap: anywhere; font-size: 11.5px; }
 
-html.platform-home #customToolImportModal .tool-import-close { width: 28px; height: 28px; border-radius: 8px; border-color: var(--v2-line); background: transparent; color: var(--v2-ink2); font-size: 19px; }
+html.platform-home #customToolImportModal .tool-import-close { width: 26px; height: 26px; border-radius: 7px; border-color: var(--v2-line); background: transparent; color: var(--v2-ink2); font-size: 17px; }
 
 html.platform-home #customToolImportModal .tool-import-close:hover { color: var(--v2-ink); background: var(--v2-hover); }
 
-html.platform-home #customToolImportModal .tool-import-file { gap: 12px; padding: 13px 14px; margin-bottom: 16px; border-radius: 12px; border-color: var(--v2-focus); background: color-mix(in srgb, var(--v2-pop) 92%, var(--v2-accent) 8%); }
+html.platform-home #customToolImportModal .tool-import-file { gap: 10px; padding: 11px 12px; margin-bottom: 12px; border-radius: 10px; border-color: var(--v2-focus); background: color-mix(in srgb, var(--v2-pop) 92%, var(--v2-accent) 8%); }
 
 html.platform-home #customToolImportModal .tool-import-file:is(:hover, .has-file) { border-color: var(--v2-accent); background: var(--v2-accent-soft); }
 
-html.platform-home #customToolImportModal .tool-import-file-icon { font-size: 25px; }
+html.platform-home #customToolImportModal .tool-import-file-icon { font-size: 20px; }
 
-html.platform-home #customToolImportModal .tool-import-file-title { color: var(--v2-ink); font-size: 13px; font-weight: 600; }
+html.platform-home #customToolImportModal .tool-import-file-title { color: var(--v2-ink); font-size: 12.5px; font-weight: 600; }
 
-html.platform-home #customToolImportModal .tool-import-file-hint { color: var(--v2-ink2); line-height: 1.5; }
+html.platform-home #customToolImportModal .tool-import-file-hint { color: var(--v2-ink2); font-size: 11px; line-height: 1.45; }
 
-html.platform-home #customToolImportModal .tool-import-file-name { color: var(--v2-accent); }
+html.platform-home #customToolImportModal .tool-import-file-name { color: var(--v2-accent); font-size: 11.5px; }
 
-html.platform-home #customToolImportModal .tool-import-fields { grid-template-columns: 68px 1fr; gap: 12px 14px; }
+html.platform-home #customToolImportModal .tool-import-fields { grid-template-columns: 60px 1fr; gap: 10px 12px; }
 
-html.platform-home #customToolImportModal .tool-import-field { gap: 5px; }
+html.platform-home #customToolImportModal .tool-import-field { gap: 4px; }
 
-html.platform-home #customToolImportModal .tool-import-field label { color: var(--v2-ink2); font-weight: 550; }
+html.platform-home #customToolImportModal .tool-import-field label { color: var(--v2-ink2); font-size: 11.5px; font-weight: 550; }
 
-html.platform-home #customToolImportModal .tool-import-checkbox-label { color: var(--v2-ink); }
+html.platform-home #customToolImportModal .tool-import-checkbox-label { color: var(--v2-ink); font-size: 12px; }
 
 html.platform-home #customToolImportModal .tool-import-checkbox-label input[type="checkbox"] { accent-color: var(--v2-accent, #38bdf8); }
 
-html.platform-home #customToolImportModal .tool-import-field-hint { color: var(--v2-ink3); }
+html.platform-home #customToolImportModal .tool-import-field-hint { color: var(--v2-ink3); font-size: 11px; }
 
 html.platform-home #customToolImportModal .tool-import-field label span { color: var(--v2-danger); }
 
 html.platform-home #customToolImportModal :is(.tool-import-input, .tool-import-textarea) {
-    border-color: var(--v2-line-strong); border-radius: 9px; padding: 8px 10px;
-    background: var(--v2-bg); color: var(--v2-ink);
+    border-color: var(--v2-line-strong); border-radius: 8px; padding: 7px 10px;
+    background: var(--v2-bg); color: var(--v2-ink); font-size: 12.5px;
 }
 
 html.platform-home #customToolImportModal :is(.tool-import-input, .tool-import-textarea):focus { border-color: var(--v2-accent); box-shadow: 0 0 0 3px var(--v2-accent-soft); }
@@ -2398,20 +2398,20 @@ html.platform-home #customToolImportModal :is(.tool-import-input, .tool-import-t
 
 html.platform-home #customToolImportModal .tool-import-locked-hint {
     grid-column: 1 / -1;
-    font-size: 12px;
-    line-height: 1.5;
-    padding: 8px 12px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    padding: 7px 10px;
     border-radius: 8px;
     color: var(--v2-ink2);
     background: color-mix(in srgb, var(--v2-accent) 12%, transparent);
     border: 1px dashed color-mix(in srgb, var(--v2-accent) 35%, transparent);
 }
 
-html.platform-home #customToolImportModal .tool-import-textarea { min-height: 56px; height: 56px; }
+html.platform-home #customToolImportModal .tool-import-textarea { min-height: 48px; height: 48px; }
 
-html.platform-home #customToolImportModal .tool-import-actions { flex: none; gap: 8px; margin: 0; padding: 12px 20px max(16px, env(safe-area-inset-bottom)); border-top: 1px solid var(--v2-line); background: var(--v2-pop); }
+html.platform-home #customToolImportModal .tool-import-actions { flex: none; gap: 8px; margin: 0; padding: 10px 18px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--v2-line); background: var(--v2-pop); }
 
-html.platform-home #customToolImportModal .tool-import-btn { min-width: 80px; padding: 8px 14px; border-radius: 9px; border-color: var(--v2-line-strong); background: color-mix(in srgb, var(--v2-bg) 65%, transparent); color: var(--v2-ink2); }
+html.platform-home #customToolImportModal .tool-import-btn { min-width: 72px; padding: 6px 12px; border-radius: 8px; border-color: var(--v2-line-strong); background: color-mix(in srgb, var(--v2-bg) 65%, transparent); color: var(--v2-ink2); font-size: 12.5px; }
 
 html.platform-home #customToolImportModal .tool-import-btn.primary { border-color: var(--v2-accent); background: var(--v2-accent); color: var(--v2-bg); }
 
@@ -2823,3 +2823,148 @@ html.platform-home body.v2-mobile-side-open .v2-side-float {visibility:hidden}
 
 html.platform-home .home-sidebar > .v2-side-top {flex:0 1 auto;min-height:0;max-height:calc(100dvh - 144px);overflow-y:auto;overscroll-behavior:contain}
 }
+
+/* ── 浅色与深色主题精细适配：思考过程、继续对话、表格/命令条、工具市场弹窗 ── */
+html.platform-home:not([data-theme="dark"]) .dc-resume {
+    background: #f0fdf8;
+    border-color: color-mix(in srgb, #087f62 32%, var(--v2-line));
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+html.platform-home:not([data-theme="dark"]) .dc-resume-icon { background: #dcfce7; color: #065f46; }
+html.platform-home:not([data-theme="dark"]) .dc-resume-text b { color: #0f172a; }
+html.platform-home:not([data-theme="dark"]) .dc-resume-question { color: #334155; }
+html.platform-home:not([data-theme="dark"]) .dc-resume-text small { color: #475569; }
+html.platform-home:not([data-theme="dark"]) .dc-resume-dismiss { color: #475569; }
+
+html.platform-home:not([data-theme="dark"]) .dc-activity { color: #334155; }
+html.platform-home:not([data-theme="dark"]) .dc-activity.is-waiting { color: #475569; }
+html.platform-home:not([data-theme="dark"]) .dc-activity-orbit { color: #087f62; }
+html.platform-home:not([data-theme="dark"]) .dc-activity-time { color: var(--v2-ink2); }
+
+html.platform-home .dc-think { background: transparent; border: 0; box-shadow: none; }
+html.platform-home:not([data-theme="dark"]) .dc-think-head { color: #334155; }
+html.platform-home:not([data-theme="dark"]) .dc-think-head:hover,
+html.platform-home:not([data-theme="dark"]) .dc-think-head:focus-visible { border-color: var(--v2-line-strong); color: #0f172a; background: rgba(15, 23, 42, 0.04); }
+html.platform-home:not([data-theme="dark"]) .dc-think-chevron { color: #475569; }
+html.platform-home:not([data-theme="dark"]) .dc-think:not(.is-active) .dc-think-label { color: #1e293b; }
+html.platform-home:not([data-theme="dark"]) .dc-think.is-active .dc-think-label {
+    background: linear-gradient(90deg, #334155 0%, #059669 50%, #334155 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+html.platform-home:not([data-theme="dark"]) .dc-think-phase {
+    background: #e6f6f0;
+    color: #065f46;
+    border: 1px solid #a7dfc8;
+    font-weight: 600;
+}
+html.platform-home:not([data-theme="dark"]) .dc-think-time { color: #475569; }
+html.platform-home:not([data-theme="dark"]) .dc-think-body { color: #334155; border-left-color: var(--v2-line-strong); }
+
+html.platform-home[data-theme="dark"] .dc-activity { color: #a7f3d0; }
+html.platform-home[data-theme="dark"] .dc-activity.is-waiting { color: var(--v2-ink2); }
+html.platform-home[data-theme="dark"] .dc-think-head { color: #cbd5e1; }
+html.platform-home[data-theme="dark"] .dc-think:not(.is-active) .dc-think-label { color: #e2e8f0; }
+html.platform-home[data-theme="dark"] .dc-think.is-active .dc-think-label {
+    background: linear-gradient(90deg, #cbd5e1 0%, #5eead4 50%, #cbd5e1 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+html.platform-home[data-theme="dark"] .dc-think-phase {
+    background: rgba(62, 207, 158, 0.14);
+    color: #5eead4;
+    border: 1px solid rgba(62, 207, 158, 0.3);
+}
+html.platform-home[data-theme="dark"] .dc-think-time { color: var(--v2-ink3); }
+
+/* 深色模式聊天区表格、代码块、工具执行条与按钮统一深色调 */
+html.platform-home[data-theme="dark"] .dc-msg-body table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--v2-bg);
+    color: var(--v2-ink);
+    border: 1px solid var(--v2-line);
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 13px;
+}
+html.platform-home[data-theme="dark"] .dc-msg-body table th {
+    padding: 9px 13px;
+    background: var(--v2-side);
+    color: var(--v2-ink);
+    border-bottom: 1px solid var(--v2-line-strong);
+    border-right: 1px solid var(--v2-line);
+    font-weight: 650;
+    text-align: left;
+}
+html.platform-home[data-theme="dark"] .dc-msg-body table td {
+    padding: 8px 13px;
+    background: var(--v2-bg);
+    color: var(--v2-ink);
+    border-bottom: 1px solid var(--v2-line);
+    border-right: 1px solid var(--v2-line);
+}
+html.platform-home[data-theme="dark"] .dc-msg-body table th:last-child,
+html.platform-home[data-theme="dark"] .dc-msg-body table td:last-child { border-right: 0; }
+html.platform-home[data-theme="dark"] .dc-msg-body table tr:last-child td { border-bottom: 0; }
+html.platform-home[data-theme="dark"] .dc-msg-body table tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.025); }
+html.platform-home[data-theme="dark"] .dc-msg-body table tbody tr:hover td { background: var(--v2-hover); }
+
+html.platform-home[data-theme="dark"] .dc-msg-body .ai-table-wrap { border-color: var(--v2-line) !important; background: var(--v2-bg) !important; }
+html.platform-home[data-theme="dark"] .dc-msg-body .ai-markdown-table th { background: var(--v2-side) !important; color: var(--v2-ink) !important; border-color: var(--v2-line) !important; }
+html.platform-home[data-theme="dark"] .dc-msg-body .ai-markdown-table td { background: var(--v2-bg) !important; color: var(--v2-ink) !important; border-color: var(--v2-line) !important; }
+html.platform-home[data-theme="dark"] .dc-msg-body .ai-markdown-table tbody tr:nth-child(even) td { background: var(--v2-side) !important; }
+html.platform-home[data-theme="dark"] .dc-msg-body .ai-markdown-table tbody tr:hover td { background: var(--v2-hover) !important; }
+
+html.platform-home[data-theme="dark"] .dc-tool-row {
+    background: var(--v2-side) !important;
+    border-color: var(--v2-line) !important;
+    color: var(--v2-ink2) !important;
+}
+html.platform-home[data-theme="dark"] .dc-tool-row:hover {
+    background: var(--v2-hover) !important;
+    border-color: var(--v2-line-strong) !important;
+}
+html.platform-home[data-theme="dark"] .dc-tool-name { color: var(--v2-ink) !important; }
+html.platform-home[data-theme="dark"] .dc-tool-args { color: var(--v2-ink3) !important; }
+html.platform-home[data-theme="dark"] .dc-tool-output pre { background: var(--v2-side); border-color: var(--v2-line); color: var(--v2-ink); }
+html.platform-home[data-theme="dark"] .dc-cmd-note { border-color: var(--v2-line-strong); color: var(--v2-ink2); background: var(--v2-side); }
+
+/* 工具市场弹窗深色适配 */
+html.platform-home[data-theme="dark"] #toolMarketModal {
+    --market-accent: var(--v2-accent, #3ecf9e);
+    --market-accent-soft: var(--v2-accent-soft);
+    --market-ink: var(--v2-ink);
+    --market-muted: var(--v2-ink2);
+    --market-faint: var(--v2-ink3);
+    --market-line: var(--v2-line);
+    --market-soft: var(--v2-side);
+    background: rgba(0, 0, 0, 0.56);
+    color: var(--v2-ink);
+}
+html.platform-home[data-theme="dark"] #toolMarketModal,
+html.platform-home[data-theme="dark"] #toolMarketModal :is(input, button, select, textarea) { color-scheme: dark !important; }
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-market-dialog {
+    background: var(--v2-pop);
+    color: var(--v2-ink);
+    border-color: var(--v2-line);
+    box-shadow: 0 24px 68px rgba(0, 0, 0, 0.52);
+}
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-market-card,
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-market-card.is-actionable,
+html.platform-home[data-theme="dark"] #toolMarketModal .builtin-sync-loading-card,
+html.platform-home[data-theme="dark"] #toolMarketModal :is(.tool-market-help, .tool-market-details, .tool-market-progress) {
+    background: var(--v2-side);
+    border-color: var(--v2-line);
+    color: var(--v2-ink);
+}
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-import-actions { background: var(--v2-pop); border-top-color: var(--v2-line); }
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-import-btn:not(.primary) { background: var(--v2-chip); border-color: var(--v2-line-strong); color: var(--v2-ink); }
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-import-btn:disabled { background: var(--v2-side); color: var(--v2-ink3); border-color: var(--v2-line); }
+html.platform-home[data-theme="dark"] #toolMarketModal .tool-import-btn.primary { color: #04121f; }
+html.platform-home[data-theme="dark"] #toolMarketModal :is(.tool-market-progress-track, .builtin-sync-loading-bar) { background: var(--v2-line); }
