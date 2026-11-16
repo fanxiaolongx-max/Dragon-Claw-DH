@@ -3,7 +3,7 @@ import { BusinessError } from '../core/errors.js';
 import { listAlerts, alertSummary, markAlertsRead, removeAlerts, backfillAlertSummaries } from '../services/alert-service.js';
 import { logoStatus, logoImage, saveLogo, resetLogo } from '../services/logo-service.js';
 import { toolCatalog, setToolAccess } from '../services/tool-catalog-service.js';
-import { runSelect, tableCatalog } from '../agent/tools.js';
+import { runSelect, explorerCatalog, explorerDatabases } from '../agent/tools.js';
 
 // 消息只属于本人：每个接口都按当前工号取
 export async function alertCenterRoutes(fastify) {
@@ -64,9 +64,17 @@ export async function agentToolsRoutes(fastify) {
 
 // 数据探索页：只读查询业务表，与对话里的查库工具共用同一套守卫（只允许 SELECT、只允许业务表、最多 500 行）
 export async function dbExplorerRoutes(fastify) {
-    fastify.get('/tables', async () => ({ tables: tableCatalog() }));
+    // 进入页面时实查：应用库列出库里实际存在的表（敏感表除外），业务库列出平台授权数据源里的表
+    fastify.get('/databases', async () => ({ databases: explorerDatabases() }));
+    fastify.get('/tables', async (req, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        return explorerCatalog(req.query?.database === 'business' ? 'business' : 'app');
+    });
     fastify.post('/query', async (req, reply) => {
-        const out = await runSelect({ sql: String(req.body?.sql || ''), limit: req.body?.limit });
+        const business = req.body?.database === 'business';
+        const source = explorerDatabases().find((d) => d.id === 'business');
+        if (business && !source.configured) return reply.code(400).send({ error: '还没有配置业务数据源' });
+        const out = await runSelect({ database: business ? source.source : undefined, sql: String(req.body?.sql || ''), limit: req.body?.limit, explorer: true });
         reply.header('Cache-Control', 'no-store');
         if (!out.ok) return reply.code(400).send({ error: out.content });
         return JSON.parse(out.content);

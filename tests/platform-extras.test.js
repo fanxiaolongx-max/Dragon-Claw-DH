@@ -218,6 +218,21 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
             const denied = await call('alice', 'POST', '/api/db-explorer/query', { sql });
             assert.equal(denied.status, 400, sql);
         }
+        // 表清单不再只是写死的那份：库里其它表（对话、技能等）也列出来并且能查，分片表和密钥表除外
+        assert.ok(tables.some((t) => t.name === 'ai_chat_sessions'), '应用库列出全部表');
+        assert.equal(tables.some((t) => t.name === 'dh_chunks'), false, '分片表不在目录里');
+        assert.equal((await call('alice', 'POST', '/api/db-explorer/query', { sql: 'SELECT id FROM ai_chat_sessions LIMIT 5' })).status, 200);
+        assert.equal((await call('alice', 'POST', '/api/db-explorer/query', { sql: 'SELECT * FROM dh_chunks' })).status, 400);
+        assert.equal((await call('alice', 'POST', '/api/db-explorer/query', { sql: 'SELECT TABLE_NAME FROM information_schema.TABLES' })).status, 400, '应用库不能查系统库');
+        // 业务库：没配置数据源时说明原因，查询直接拒绝；普通用户同样进不来
+        const databases = (await call('alice', 'GET', '/api/db-explorer/databases')).data.databases;
+        assert.deepEqual(databases.map((d) => d.id), ['app', 'business']);
+        const business = (await call('alice', 'GET', '/api/db-explorer/tables?database=business')).data;
+        if (!databases[1].configured) {
+            assert.equal(business.configured, false);
+            assert.equal((await call('alice', 'POST', '/api/db-explorer/query', { database: 'business', sql: 'SELECT 1' })).status, 400);
+        }
+        assert.equal((await call('bob', 'GET', '/api/db-explorer/databases')).status, 403);
 
         // ── 10. 请求体不是合法 JSON：返回 422（规范 §8.4），不是 500 ──
         const broken = await fetch(`${url}/api/ai/conversation-list`, { method: 'PUT', headers: json(as('bob')), body: '{"source":' });

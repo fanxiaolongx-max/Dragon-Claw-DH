@@ -2021,6 +2021,8 @@ html.platform-home:not([data-theme="dark"]) .home-workspace-panel :is(.wsp-pr--d
 html.platform-home:not([data-theme="dark"]) .home-workspace-panel :is(.wsp-pr--failed, .wsp-pr--blocked) { border-color: #fecaca; }
 /* Workspace context: folder, Git branch, worktree and permissions form one quiet toolbar. */
 html.platform-home #dcWorkspaceChip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+/* 上面的 display 会盖掉 hidden 属性；没有工作空间内容时这一栏不能留一条空底 */
+html.platform-home #dcWorkspaceChip[hidden] { display: none; }
 
 html.platform-home .dc-workspace-search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; margin-bottom: 7px; border: 1px solid transparent; border-radius: 9px; background: var(--v2-side); color: var(--v2-ink3); transition: border-color 140ms ease, box-shadow 140ms ease; }
 

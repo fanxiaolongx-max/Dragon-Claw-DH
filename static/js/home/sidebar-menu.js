@@ -8,7 +8,6 @@
         ['library', 'book', '资料库', 'Library'],
         ['opsDrafts', 'inbox', '运维待办', 'Ops drafts'],
         ['links', 'link', '友情链接', 'Links'],
-        ['requirements', 'target', '需求管理', 'Requirements'],
         ['promotions', 'compass', '平台推广', 'Promotions']
     ];
     const defaults = () => ({ primary: entries.slice(0, 5).map(item => item[0]), more: entries.slice(5).map(item => item[0]) });

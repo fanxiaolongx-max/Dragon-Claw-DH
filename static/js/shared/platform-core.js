@@ -33,7 +33,7 @@ const NAV_BUILTIN_LINKS = [
     { id: 'db-explorer', href: '/db-explorer', icon: '🗄️', label: '数据探索', labelKey: 'nav.dbExplorer', defaultCategory: 'system', match: p => p.startsWith('/db-explorer') },
     // 数字人基座的 NetCare 业务库探查：接口第一期只开放给管理员，普通账号不显示入口
     { id: 'netcare-explorer', href: '/netcare-explorer', icon: '🧭', label: 'NetCare 数据探查', labelEn: 'NetCare Explorer', labelKey: 'nav.netcareExplorer', defaultCategory: 'system', adminOnly: true, match: p => p.startsWith('/netcare-explorer') }
-];
+].filter(item => !window.dhIsPhase2Href?.(item.href)); // 基座 Web 版：二期才开放的页面不进导航和工具列表
 const NAV_WORKFLOW_IDS = ['uivf12', 'sla', 'report', 'expedite', 'monthly', 'ai-bi', 'bigscreen'];
 const NAV_WORKFLOW_CATEGORY = '__workflow';
 window.NavWorkflow = {

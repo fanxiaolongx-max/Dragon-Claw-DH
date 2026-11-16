@@ -19,6 +19,9 @@
  };
 
  const TOOL_SKILLS={'welink-cli':'welink-office',netcare:'netcare-data'};
+ // 基座 Web 版在内网：桌面 Agent 和微信连不上，直接不显示；WeLink 与 NetCare 后续会接入，先标「正在开发中」
+ const isDhWeb=()=>document.documentElement.classList.contains('dh-web');
+ const DH_WEB_PLANNED=['welink-cli','welink','netcare'];
  const L=(zh,en)=>/^en/.test(window.ToolsI18n?.getLanguage?.()||localStorage.getItem('tools_lang')||'')?en:zh;
  const who=()=>['tools_user','tools_tenant_id','tools_token'].map(k=>localStorage.getItem(k)||sessionStorage.getItem(k)||'').join('|');
  function isSuperAdmin(){
@@ -219,6 +222,18 @@
         row.title=locked?L('对话已开始，连接器不可修改','Conversation started; connectors cannot be changed'):readiness[key].ready?L('已就绪','Ready'):connectorReason(key);
         const description=connectorDescription(key);if(description)row.title+='\n\n'+description;
 
+        if(isDhWeb()){
+          const planned=DH_WEB_PLANNED.includes(key);
+          row.hidden=!planned;
+          if(planned){
+            input.checked=false;input.disabled=true;
+            row.classList.add('is-unavailable');
+            row.title=L('正在开发中','In development');
+            if(detail)detail.textContent=L('正在开发中','In development');
+            visibleCount++;
+          }
+          return;
+        }
         const isEnabled = Boolean(readiness[key]?.ready || connectors[key]);
         const showRow = superAdmin || isEnabled;
         row.hidden = !showRow;
@@ -232,12 +247,12 @@
       empty.textContent = L('暂无可用连接器','No connectors available');
     }
     const divider = popover.querySelector('.dc-connector-divider');
-    if(divider) divider.hidden = !superAdmin;
+    if(divider) divider.hidden = !superAdmin || isDhWeb();
     const manageBtn = popover.querySelector('.dc-connector-manage');
-    if(manageBtn) manageBtn.hidden = !superAdmin;
+    if(manageBtn) manageBtn.hidden = !superAdmin || isDhWeb(); // Web 版的全局设置里没有连接器页签
     const note = root.querySelector('[data-connector-note]');
     if(note){
-      note.hidden = !superAdmin && visibleCount === 0;
+      note.hidden = isDhWeb() || (!superAdmin && visibleCount === 0);
       note.textContent=locked?L('本对话已绑定连接器；新建对话可重新选择','Bound to this conversation. Start a new chat to change connectors.'):L('仅预选新对话 · 发送后固定','Choose for your new chat · fixed after sending');
     }
   }

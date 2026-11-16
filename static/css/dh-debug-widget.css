@@ -21,6 +21,27 @@
     user-select: none;
 }
 
+/* 平时收成一个小圆点，不挡页面右下角的按钮；鼠标移上去或键盘聚焦时再展开文字 */
+#dhDebugPill > span:not(.dh-pill-dot) {
+    max-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 0;
+    transition: max-width 0.18s ease, opacity 0.18s ease;
+}
+
+#dhDebugPill:not(:hover):not(:focus-visible) {
+    gap: 0;
+    padding: 7px;
+    opacity: 0.72;
+}
+
+#dhDebugPill:hover > span:not(.dh-pill-dot),
+#dhDebugPill:focus-visible > span:not(.dh-pill-dot) {
+    max-width: 120px;
+    opacity: 1;
+}
+
 #dhDebugPill:hover {
     transform: translateY(-2px);
     border-color: rgba(56, 189, 248, 0.85);

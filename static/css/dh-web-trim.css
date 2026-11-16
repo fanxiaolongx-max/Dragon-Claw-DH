@@ -10,6 +10,9 @@ html.dh-web .v2-nav-item[data-v2-action="library"],
 html.dh-web .v2-nav-item[data-v2-action="opsDrafts"],
 /* 「更多」菜单里的桌面版入口：平台推广在首页打开的是介绍视频，视频不随 Web 版发布 */
 html.dh-web .v2-pop-item[data-v2-action="promotions"],
+/* 友情链接：Web 版首页不带链接清单，子菜单是空的 */
+html.dh-web .v2-pop-item[data-v2-action="links"],
+html.dh-web .v2-nav-item[data-v2-action="links"],
 html.dh-web #homeKnowledgeGraphEntry,
 /* 快速提问里依赖已隐藏能力的场景：知识图谱 */
 html.dh-web .v2-scenes [data-scene="graph"],

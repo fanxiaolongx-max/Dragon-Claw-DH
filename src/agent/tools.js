@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
-import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
+import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, listAppTables, listBusinessTables, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
 import { listSkills, getSkill, saveSkill, skillFilesNote, readSkillFile } from '../services/skill-service.js';
 import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
@@ -55,6 +55,46 @@ export function tableCatalog() {
     return [...ALLOWED].sort().map((name) => ({ name, note: TABLE_NOTES[name], columns: SCHEMA.get(name).map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) })) }));
 }
 
+// ── 数据探索页（仅管理员）：进入页面时实查库里有哪些表，不再只给写死的那份名单 ──
+// 存模型 API Key 的表，以及大字段分片表（里面是其它表内容的碎片，可能含密钥）不开放
+const EXPLORER_HIDDEN = new Set(['ai_settings_profiles', 'dh_chunks']);
+const EXPLORER_TTL_MS = 30_000;
+let explorerAppCache = { at: 0, tables: null };
+
+async function explorerAppTables({ fresh = false } = {}) {
+    if (!fresh && explorerAppCache.tables && Date.now() - explorerAppCache.at < EXPLORER_TTL_MS) return explorerAppCache.tables;
+    let live = null;
+    try { live = await listAppTables(); } catch { /* 读不到系统表时退回建表脚本里的定义 */ }
+    // 实查结果与建表脚本取并集：启动时按脚本建的表都算上，库里多出来的表（后来加的、别处建的）也不漏
+    const byName = new Map([...SCHEMA.keys()].map((name) => [name, { name, columns: SCHEMA.get(name) }]));
+    for (const t of live || []) byName.set(t.name, { name: t.name, columns: t.columns.length ? t.columns : (SCHEMA.get(t.name) || []) });
+    const source = [...byName.values()].sort((x, y) => x.name.localeCompare(y.name));
+    const tables = source.filter((t) => !EXPLORER_HIDDEN.has(t.name.toLowerCase()))
+        .map((t) => ({ name: t.name, note: TABLE_NOTES[t.name] || '', columns: t.columns.map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) })) }));
+    explorerAppCache = { at: Date.now(), tables };
+    return tables;
+}
+
+/** 数据探索页有哪些库可看 */
+export function explorerDatabases() {
+    return [
+        { id: 'app', name: '应用库', configured: true },
+        { id: 'business', name: '业务库', configured: hasBusinessDatasource(), source: hasBusinessDatasource() ? config.businessDatasourceName : '' },
+    ];
+}
+
+/** 数据探索页的表目录：database 为 app（应用库）或 business（平台授权的业务数据源） */
+export async function explorerCatalog(database = 'app') {
+    if (database !== 'business') return { database: 'app', tables: await explorerAppTables({ fresh: true }) };
+    if (!hasBusinessDatasource()) return { database: 'business', configured: false, tables: [] };
+    try {
+        const tables = (await listBusinessTables()).map((t) => ({ name: t.name, note: '', columns: t.columns.map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) || /^(LONGTEXT|MEDIUMTEXT|LONGBLOB|MEDIUMBLOB|BLOB)/.test(c.type) })) }));
+        return { database: 'business', configured: true, tables };
+    } catch (error) {
+        return { database: 'business', configured: true, tables: [], error: `表清单没有读出来：${error.message}。可以到 SQL 终端直接写查询。` };
+    }
+}
+
 /** 给系统提示词用的紧凑目录：模型不用先花一轮去查结构 */
 export function schemaDigest() {
     return [...ALLOWED].map((t) => `- ${t}(${SCHEMA.get(t).map((c) => c.name).join(', ')})：${TABLE_NOTES[t]}`).join('\n');
@@ -63,7 +103,7 @@ export function schemaDigest() {
 // ── 只读 SQL 守卫 ──
 const stripLiterals = (sql) => sql.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
 
-function guardSelect(rawSql, { appDb }) {
+function guardSelect(rawSql, { appDb, allowed = ALLOWED, blocked = null }) {
     let sql = String(rawSql || '').trim().replace(/;\s*$/, '');
     if (!sql) return { error: 'sql 不能为空' };
     if (sql.length > 8000) return { error: 'SQL 过长（超过 8000 字符）' };
@@ -83,11 +123,11 @@ function guardSelect(rawSql, { appDb }) {
         for (const ref of refs) {
             if (cteNames.has(ref)) continue;
             if (ref.includes('.')) return { error: `不能跨库查询：${ref}` };
-            if (!ALLOWED.has(ref)) return { error: `表 ${ref} 不在可查询范围内。可查的表：${[...ALLOWED].join('、')}` };
+            if (!allowed.has(ref)) return { error: `表 ${ref} 不在可查询范围内。可查的表：${[...allowed].join('、')}` };
         }
         // 兜底：即使解析漏了，受保护的表名也不能出现在语句里
-        for (const t of SCHEMA.keys()) {
-            if (!ALLOWED.has(t) && new RegExp(`\\b${t}\\b`, 'i').test(bare)) return { error: `表 ${t} 不允许查询` };
+        for (const t of blocked || SCHEMA.keys()) {
+            if (!allowed.has(t) && new RegExp(`\\b${t}\\b`, 'i').test(bare)) return { error: `表 ${t} 不允许查询` };
         }
     }
     return { sql };
@@ -112,16 +152,19 @@ function shapeRows(rows, maxRows = 200, maxChars = 24_000) {
     return { rows: out, total, truncated: out.length < total };
 }
 
-export async function runSelect({ database, sql, limit }) {
+// explorer：来自数据探索页（仅管理员），应用库放开到实查出来的全部表（敏感表除外），结果也不为模型上下文截短
+export async function runSelect({ database, sql, limit, explorer = false }) {
     const isApp = !database || database === APP_DB || database === config.appSchema;
     if (!isApp && !hasBusinessDatasource()) return { ok: false, summary: '数据库不存在', content: `没有名为 ${database} 的数据库。可用：${APP_DB}` };
-    const guarded = guardSelect(sql, { appDb: isApp });
+    const guarded = explorer && isApp
+        ? guardSelect(sql, { appDb: true, allowed: new Set((await explorerAppTables()).map((t) => t.name.toLowerCase())), blocked: EXPLORER_HIDDEN })
+        : guardSelect(sql, { appDb: isApp });
     if (guarded.error) return { ok: false, summary: guarded.error.slice(0, 60), content: guarded.error };
     const cap = Math.max(1, Math.min(Number(limit) || 100, 500));
     const finalSql = /\bLIMIT\s+\d+(\s*,\s*\d+|\s+OFFSET\s+\d+)?\s*$/i.test(guarded.sql) ? guarded.sql : `${guarded.sql} LIMIT ${cap}`;
     try {
         const rows = isApp ? await scopedQuery(finalSql, cap) : await businessQuery(finalSql, cap);
-        const shaped = shapeRows(rows);
+        const shaped = explorer ? shapeRows(rows, 500, 600_000) : shapeRows(rows);
         const note = shaped.truncated ? `（共 ${shaped.total} 行，只返回前 ${shaped.rows.length} 行；需要更多请加条件或聚合）` : '';
         return {
             ok: true,

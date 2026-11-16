@@ -92,6 +92,38 @@ export async function businessQuery(sql, limit = 100) {
     return queryBusiness(sql, Math.min(Number(limit) || 100, PAGE));
 }
 
+// 数据探索页用：实查库里有哪些表和列。基座返回的列名大小写不固定，统一按不区分大小写取值。
+const pick = (row, key) => row?.[key] ?? row?.[key.toLowerCase()] ?? row?.[key.toUpperCase()];
+function groupTables(tables, columns) {
+    const map = new Map();
+    for (const row of tables) {
+        const name = String(pick(row, 'TABLE_NAME') || '');
+        if (name) map.set(name, { name, rows: Number(pick(row, 'TABLE_ROWS')) || 0, columns: [] });
+    }
+    for (const row of columns) {
+        const table = map.get(String(pick(row, 'TABLE_NAME') || ''));
+        if (table) table.columns.push({ name: String(pick(row, 'COLUMN_NAME') || ''), type: String(pick(row, 'COLUMN_TYPE') || '').toUpperCase() });
+    }
+    return [...map.values()];
+}
+
+/** 应用库的全部表；本机内存演示模式没有真实库，返回 null 让调用方退回建表脚本 */
+export async function listAppTables() {
+    if (isMemoryMode()) return null;
+    const schema = sqlVal(config.appSchema);
+    const tables = await queryAppSchema(`SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${schema} ORDER BY TABLE_NAME`, PAGE);
+    const columns = await queryAppSchema(`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${schema} ORDER BY TABLE_NAME, ORDINAL_POSITION`, PAGE);
+    return groupTables(tables, columns);
+}
+
+/** 业务数据源当前库的全部表（只读）。数据源不允许读系统表时会抛错，由调用方提示 */
+export async function listBusinessTables() {
+    if (isMemoryMode()) return [];
+    const tables = await queryBusiness('SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME', PAGE);
+    const columns = await queryBusiness('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION', PAGE);
+    return groupTables(tables, columns);
+}
+
 export function hasBusinessDatasource() {
     return Boolean(String(config.businessDatasourceName || '').trim());
 }

@@ -1,124 +1,359 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <script src="js/shared/dh-runtime.js"></script><script src="js/shared/tool-navigation.js"></script>
+    <script src="js/shared/dh-runtime.js"></script><script src="js/shared/platform-theme.js" data-tool-theme="light"></script><script src="js/shared/elegant-scrollbars.js"></script><script src="js/shared/tool-navigation.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>数据探索 - Dragon Claw</title>
     <style>
-        :root { --line: #e3e6eb; --ink: #1c2430; --ink2: #5b6573; --bg: #f6f7f9; --accent: #1f6feb; --bad: #b42318; }
+        :root { --line: #e2e8f0; --ink: #243449; --ink2: #64748b; --ink3: #94a3b8; --bg: #f3f5f8; --card: #fff; --soft: #f1f5f9; --accent: #2563eb; --accent-soft: #eff6ff; --bad: #b42318; --warn-soft: #fff7ed; --warn: #c2410c; }
         * { box-sizing: border-box; }
         html, body { height: 100%; margin: 0; }
-        body { display: flex; flex-direction: column; font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
-        header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); }
-        header a { color: var(--accent); text-decoration: none; }
-        header b { font-size: 16px; }
-        header small { color: var(--ink2); margin-left: auto; }
-        main { flex: 1; display: flex; min-height: 0; }
-        aside { width: 270px; flex: none; display: flex; flex-direction: column; background: #fff; border-right: 1px solid var(--line); }
-        aside input { margin: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
-        #tables { flex: 1; overflow: auto; padding: 0 6px 10px; }
-        .tbl { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 8px; background: none; font: inherit; color: inherit; cursor: pointer; }
-        .tbl:hover { background: #f1f4f8; }
-        .tbl.is-active { background: #e8f0fe; }
+        body { display: flex; flex-direction: column; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
+        button, input, textarea { font: inherit; color: inherit; }
+        code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+        /* 独立窗口打开时才有页头；在平台外壳里外壳已有标题和返回 */
+        .page-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px 0; }
+        .page-head a { color: var(--accent); text-decoration: none; font-size: 13px; }
+        .page-head h1 { margin: 0; font-size: 20px; font-weight: 650; }
+        html.is-embedded-tool .page-head { display: none; }
+
+        .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 78px 280px minmax(0, 1fr); gap: 14px; padding: 14px 20px 18px; }
+        .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+
+        /* 左侧图标导航 */
+        .rail { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+        .rail button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 9px 2px; border: 0; border-radius: 10px; background: none; color: var(--ink2); cursor: pointer; font-size: 11px; line-height: 1.2; white-space: nowrap; }
+        .rail button:hover { background: var(--soft); }
+        .rail button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+        .rail svg { width: 20px; height: 20px; }
+
+        /* 表清单 */
+        .tables { display: flex; flex-direction: column; min-height: 0; }
+        .tables-head { padding: 14px 14px 10px; }
+        .tables-head strong { display: block; font-size: 15px; }
+        .tables-head small { color: var(--ink2); font-size: 12px; }
+        .link { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+        .link:hover { text-decoration: underline; }
+        .tables-head input { width: 100%; margin-top: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); }
+        #tables { flex: 1; overflow: auto; padding: 0 8px 10px; }
+        .tbl { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 9px; background: none; cursor: pointer; }
+        .tbl:hover { background: var(--soft); }
+        .tbl.is-active { background: var(--accent-soft); }
         .tbl code { font-size: 13px; }
         .tbl span { display: block; font-size: 12px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        section { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 12px 16px; gap: 10px; }
-        #cols { font-size: 12px; color: var(--ink2); max-height: 76px; overflow: auto; }
-        #cols code { display: inline-block; margin: 0 6px 4px 0; padding: 1px 6px; border-radius: 6px; background: #eef1f5; color: var(--ink); }
-        #cols code.heavy { background: #fff1e6; }
-        textarea { width: 100%; height: 110px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
+
+        /* 右侧内容 */
+        .content { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 12px; }
+        .view { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 12px; }
+        .view[hidden] { display: none; }
+        .view-head small { color: var(--ink3); font-size: 12px; }
+        .view-head h2 { margin: 2px 0 2px; font-size: 20px; font-weight: 650; overflow-wrap: anywhere; }
+        .view-head p { margin: 0; color: var(--ink2); font-size: 13px; }
+        .panel { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 14px 16px 16px; gap: 12px; }
         .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        button.act { padding: 7px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
-        button.act.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-        button.act:disabled { opacity: .5; cursor: default; }
-        #status { color: var(--ink2); font-size: 13px; }
-        #status.bad { color: var(--bad); }
-        #result { flex: 1; min-height: 0; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+        .bar[hidden] { display: none; }
+        .bar .grow { flex: 1; }
+        .tabs { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--soft); }
+        .tabs button { padding: 5px 14px; border: 0; border-radius: 8px; background: none; color: var(--ink2); cursor: pointer; }
+        .tabs button[aria-selected="true"] { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px #0f172a14; }
+        .act { padding: 7px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); cursor: pointer; white-space: nowrap; }
+        .act:hover:not(:disabled) { background: var(--soft); }
+        .act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+        .act.primary:hover:not(:disabled) { background: #1d4ed8; }
+        .act:disabled { opacity: .5; cursor: default; }
+        .chip { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
+        .status { color: var(--ink2); font-size: 13px; }
+        .status.bad { color: var(--bad); }
+        textarea { width: 100%; height: 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
+        :is(input, textarea, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+        .grid { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
         table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
-        th, td { padding: 6px 10px; border-bottom: 1px solid #eef0f3; text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
-        th { position: sticky; top: 0; background: #f8f9fb; font-weight: 600; }
-        td.null { color: #a0a7b2; font-style: italic; }
-        .empty { padding: 40px; text-align: center; color: var(--ink2); }
-        @media (max-width: 760px) { main { flex-direction: column; } aside { width: auto; max-height: 34vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+        th, td { padding: 7px 12px; border-bottom: 1px solid #eef2f6; text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+        th { position: sticky; top: 0; background: #f8fafc; font-weight: 600; color: var(--ink2); }
+        tbody tr:hover td { background: #fafcff; }
+        td.null { color: var(--ink3); font-style: italic; }
+        td.num { color: var(--ink3); width: 1%; }
+        .tag-heavy { margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 12px; }
+        .empty { padding: 44px 20px; text-align: center; color: var(--ink2); }
+
+        @media (max-width: 900px) {
+            .layout { grid-template-columns: 1fr; grid-auto-rows: min-content; padding: 10px; overflow: auto; }
+            .rail { flex-direction: row; }
+            .rail button { flex: 1; }
+            .tables { max-height: 34vh; }
+            .content { min-height: 70vh; }
+        }
     </style>
 </head>
 <body>
-<header><a href="./">← 返回首页</a><b>🗂 数据探索</b><small>只读查询 · 仅限业务表 · 单次最多 500 行</small></header>
-<main>
-    <aside>
-        <input id="filter" type="search" placeholder="搜索表名或说明" aria-label="搜索表">
-        <div id="tables"><div class="empty">正在加载…</div></div>
-    </aside>
-    <section>
-        <div id="cols">从左侧选一张表，或直接写一条 SELECT。</div>
-        <textarea id="sql" spellcheck="false" placeholder="SELECT ... FROM ...（只支持只读 SELECT，MySQL 8 语法）" aria-label="SQL"></textarea>
-        <div class="bar">
-            <button class="act primary" id="run" type="button">运行（Ctrl+Enter）</button>
-            <button class="act" id="csv" type="button" disabled>导出 CSV</button>
-            <span id="status"></span>
+<header class="page-head"><a href="./">← 返回首页</a><h1>数据探索</h1></header>
+<div class="layout">
+    <nav class="rail card" role="tablist" aria-label="功能">
+        <button type="button" role="tab" data-view="app" aria-selected="true" title="本应用自己的库：导入快照、报表、对话、技能等">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9.5h17M9 9.5v10"/></svg>应用库</button>
+        <button type="button" role="tab" data-view="business" aria-selected="false" title="平台授权给本应用的业务数据源（只读）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6.5M4.5 12v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V12"/></svg>业务库</button>
+        <button type="button" role="tab" data-view="sql" aria-selected="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="m7.5 10 3 2.5-3 2.5M12.5 15h4"/></svg>SQL 终端</button>
+    </nav>
+
+    <aside class="tables card">
+        <div class="tables-head">
+            <strong id="dbTitle">应用库</strong>
+            <small id="tableCount">正在加载…</small><button type="button" class="link" id="reloadTables" title="重新查询这个库有哪些表">重新查询</button>
+            <input id="filter" type="search" placeholder="搜索表名或说明" aria-label="搜索表">
         </div>
-        <div id="result"><div class="empty">查询结果会显示在这里</div></div>
-    </section>
-</main>
+        <div id="tables"></div>
+    </aside>
+
+    <div class="content">
+        <!-- 数据表：字段结构 / 表数据 -->
+        <section class="view" id="viewTable">
+            <div class="view-head">
+                <small id="tableCrumb">应用库</small>
+                <h2 id="tableName">请选择一张表</h2>
+                <p id="tableNote">从左侧选一张表，查看它的字段结构和数据。</p>
+            </div>
+            <div class="panel card">
+                <div class="bar">
+                    <div class="tabs" role="tablist" aria-label="表视图">
+                        <button type="button" role="tab" data-tab="schema" aria-selected="true">字段结构</button>
+                        <button type="button" role="tab" data-tab="data" aria-selected="false">表数据</button>
+                    </div>
+                    <span class="status" id="tableStatus"></span>
+                    <span class="grow"></span>
+                    <button class="act" id="toSql" type="button" disabled>在 SQL 终端中查询</button>
+                    <button class="act" id="reload" type="button" disabled>刷新</button>
+                </div>
+                <div class="grid" id="tableGrid"><div class="empty">还没有选择表</div></div>
+                <div class="bar" id="pager" hidden>
+                    <button class="act" id="prev" type="button">上一页</button>
+                    <span class="status" id="pageInfo"></span>
+                    <button class="act" id="next" type="button">下一页</button>
+                    <span class="grow"></span>
+                    <button class="act" id="tableCsv" type="button">导出本页 CSV</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- SQL 终端 -->
+        <section class="view" id="viewSql" hidden>
+            <div class="view-head">
+                <small>SQL 终端</small>
+                <h2>只读查询</h2>
+                <p>只支持 SELECT，单次最多返回 500 行。点左侧的表可以填入查询模板。</p>
+            </div>
+            <div class="panel card">
+                <div class="bar">
+                    <span class="status">查询哪个库</span>
+                    <div class="tabs" role="tablist" aria-label="查询的库">
+                        <button type="button" role="tab" data-db="app" aria-selected="true">应用库</button>
+                        <button type="button" role="tab" data-db="business" aria-selected="false">业务库</button>
+                    </div>
+                </div>
+                <textarea id="sql" spellcheck="false" placeholder="SELECT ... FROM ...（MySQL 8 语法）" aria-label="SQL"></textarea>
+                <div class="bar">
+                    <button class="act primary" id="run" type="button">执行 <span class="mono" style="opacity:.8;font-size:12px">Ctrl+Enter</span></button>
+                    <button class="act" id="clear" type="button">清空</button>
+                    <button class="act" id="csv" type="button" disabled>导出 CSV</button>
+                    <span class="status" id="status" role="status"></span>
+                </div>
+                <div class="grid" id="result"><div class="empty">查询结果会显示在这里</div></div>
+            </div>
+        </section>
+    </div>
+</div>
 <script>
 (function () {
+    const PAGE = 50;
     const $ = (id) => document.getElementById(id);
-    const state = { tables: [], active: '', rows: [], columns: [] };
+    const DB_NAMES = { app: '应用库', business: '业务库' };
+    const catalogs = {}; // 每个库的表清单，进入时各查一次
+    const state = { db: 'app', tables: [], active: null, view: 'app', tab: 'schema', page: 0, total: null, tableRows: [], tableCols: [], rows: [], columns: [], seq: 0 };
     const api = async (path, options) => {
         const res = await fetch(path, { credentials: 'same-origin', ...options });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
         return data;
     };
+    const query = (sql, limit) => api('api/db-explorer/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ database: state.db, sql: sql, limit: limit || 500 }) });
     const el = (tag, props, children) => {
         const node = Object.assign(document.createElement(tag), props || {});
         for (const child of children || []) node.append(child);
         return node;
     };
+    const show = (value) => (value === null || value === undefined ? null : (typeof value === 'object' ? JSON.stringify(value) : String(value)));
+    const quote = (name) => '`' + name + '`';
+    // 大字段（整份 JSON 之类）默认不查，免得一页数据就把页面撑爆
+    const lightColumns = (table) => {
+        const light = table.columns.filter((c) => !c.heavy).map((c) => quote(c.name));
+        return light.length === table.columns.length ? '*' : light.join(', ');
+    };
+    const orderBy = (table) => (table.columns.some((c) => c.name === 'id') ? ' ORDER BY `id`' : '');
+
+    function dataTable(columns, rows, startIndex) {
+        const head = el('tr', null, [el('th', { textContent: '#' })].concat(columns.map((c) => el('th', { textContent: c }))));
+        const body = rows.map((row, index) => el('tr', null, [el('td', { className: 'num', textContent: String(startIndex + index + 1) })].concat(columns.map((c) => {
+            const text = show(row[c]);
+            return el('td', text === null ? { className: 'null', textContent: 'NULL' } : { textContent: text.length > 300 ? text.slice(0, 300) + '…' : text, title: text.slice(0, 2000) });
+        }))));
+        return el('table', null, [el('thead', null, [head]), el('tbody', null, body)]);
+    }
+    function downloadCsv(columns, rows, name) {
+        const cell = (value) => { const text = show(value) ?? ''; return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; };
+        const lines = [columns.map(cell).join(',')].concat(rows.map((row) => columns.map((c) => cell(row[c])).join(',')));
+        const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const link = el('a', { href: URL.createObjectURL(blob), download: name + '-' + new Date().toISOString().slice(0, 10) + '.csv' });
+        document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    }
+
+    // ── 表清单 ──
     function renderTables() {
         const q = $('filter').value.trim().toLowerCase();
         const list = state.tables.filter((t) => !q || t.name.includes(q) || String(t.note || '').toLowerCase().includes(q));
+        const catalog = catalogs[state.db];
+        $('dbTitle').textContent = DB_NAMES[state.db];
+        if (!catalog || catalog.loading || catalog.message) {
+            $('tableCount').textContent = !catalog || catalog.loading ? '正在查询…' : '';
+            $('tables').replaceChildren(el('div', { className: 'empty', textContent: !catalog || catalog.loading ? '正在查询有哪些表…' : catalog.message }));
+            return;
+        }
+        $('tableCount').textContent = q ? list.length + ' / ' + state.tables.length + ' 张表' : state.tables.length + ' 张表';
         $('tables').replaceChildren(...(list.length ? list.map((t) => {
-            const btn = el('button', { type: 'button', className: 'tbl' + (t.name === state.active ? ' is-active' : ''), title: t.note || '' }, [el('code', { textContent: t.name }), el('span', { textContent: t.note || '' })]);
+            const btn = el('button', { type: 'button', className: 'tbl' + (state.active && t.name === state.active.name ? ' is-active' : ''), title: t.note || '' }, [el('code', { textContent: t.name }), el('span', { textContent: t.note || '' })]);
             btn.addEventListener('click', () => pick(t));
             return btn;
-        }) : [el('div', { className: 'empty', textContent: '没有匹配的表' })]));
+        }) : [el('div', { className: 'empty', textContent: state.tables.length ? '没有匹配的表' : '这个库里还没有表' })]));
     }
     function pick(table) {
-        state.active = table.name;
+        state.active = table;
+        state.page = 0;
+        state.total = null;
         renderTables();
-        $('cols').replaceChildren(...table.columns.map((c) => el('code', { className: c.heavy ? 'heavy' : '', textContent: c.name + ' ' + c.type.toLowerCase(), title: c.heavy ? '大字段：默认不查，需要时请单独指定' : '' })));
-        const light = table.columns.filter((c) => !c.heavy).map((c) => '`' + c.name + '`');
-        $('sql').value = 'SELECT ' + (light.length === table.columns.length ? '*' : light.join(', ')) + '\nFROM `' + table.name + '`\nLIMIT 50';
-        run();
+        if (state.view === 'sql') { fillSql(table); return; }
+        renderTableView();
     }
-    const show = (value) => (value === null || value === undefined ? null : (typeof value === 'object' ? JSON.stringify(value) : String(value)));
-    function renderResult() {
-        if (!state.rows.length) { $('result').replaceChildren(el('div', { className: 'empty', textContent: '没有符合条件的数据' })); return; }
-        const head = el('tr', null, state.columns.map((c) => el('th', { textContent: c })));
-        const body = state.rows.map((row) => el('tr', null, state.columns.map((c) => {
-            const text = show(row[c]);
-            return el('td', text === null ? { className: 'null', textContent: 'NULL' } : { textContent: text.length > 300 ? text.slice(0, 300) + '…' : text, title: text.slice(0, 2000) });
-        })));
-        $('result').replaceChildren(el('table', null, [el('thead', null, [head]), el('tbody', null, body)]));
+
+    // ── 数据表视图 ──
+    // 切到某个库：第一次进入时实查一遍它有哪些表，之后用缓存（表清单旁的「重新查询」可重查）
+    async function useDb(db, { reload = false } = {}) {
+        if (state.db !== db) { state.db = db; state.active = null; state.page = 0; state.total = null; state.seq += 1; }
+        document.querySelectorAll('[data-db]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.db === db)));
+        state.tables = (catalogs[db] && catalogs[db].tables) || [];
+        if (!catalogs[db] || reload) {
+            catalogs[db] = { loading: true, tables: [] };
+            renderTables(); renderTableView();
+            try {
+                const data = await api('api/db-explorer/tables?database=' + db);
+                catalogs[db] = { tables: data.tables || [], message: data.configured === false ? '还没有配置业务数据源。平台为本应用授权业务库后，这里会列出它的表。' : (data.error || '') };
+            } catch (error) {
+                catalogs[db] = { tables: [], message: '加载失败：' + error.message };
+            }
+            if (state.db !== db) return;
+            state.tables = catalogs[db].tables;
+        }
+        renderTables(); renderTableView();
+    }
+    function setView(view) {
+        state.view = view;
+        document.querySelectorAll('.rail [data-view]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)));
+        $('viewTable').hidden = view === 'sql';
+        $('viewSql').hidden = view !== 'sql';
+        useDb(view === 'sql' ? state.db : view);
+    }
+    function setTab(tab) {
+        state.tab = tab;
+        renderTableView();
+    }
+    function renderTableView() {
+        const table = state.active;
+        document.querySelectorAll('.tabs [data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
+        $('toSql').disabled = $('reload').disabled = !table;
+        $('tableCrumb').textContent = DB_NAMES[state.db];
+        if (!table) {
+            const catalog = catalogs[state.db];
+            $('tableName').textContent = '请选择一张表';
+            $('tableNote').textContent = (catalog && catalog.message) || '从左侧选一张表，查看它的字段结构和数据。';
+            $('tableStatus').textContent = '';
+            $('pager').hidden = true;
+            $('tableGrid').replaceChildren(el('div', { className: 'empty', textContent: '还没有选择表' }));
+            return;
+        }
+        $('tableName').textContent = table.name;
+        $('tableNote').textContent = table.note || (table.columns.length + ' 个字段');
+        if (state.tab === 'schema') {
+            $('pager').hidden = true;
+            $('tableStatus').className = 'status';
+            $('tableStatus').textContent = table.columns.length ? table.columns.length + ' 个字段' : '字段结构没有取到，可以直接看表数据';
+            const head = el('tr', null, ['#', '字段', '类型'].map((c) => el('th', { textContent: c })));
+            const body = table.columns.map((c, index) => el('tr', null, [
+                el('td', { className: 'num', textContent: String(index + 1) }),
+                el('td', null, [el('code', { textContent: c.name })].concat(c.heavy ? [el('span', { className: 'tag-heavy', textContent: '大字段', title: '内容很大，表数据里默认不显示；需要时到 SQL 终端单独查这一列' })] : [])),
+                el('td', null, [el('code', { textContent: String(c.type || '').toLowerCase() })]),
+            ]));
+            $('tableGrid').replaceChildren(el('table', null, [el('thead', null, [head]), el('tbody', null, body)]));
+            return;
+        }
+        loadPage();
+    }
+    async function loadPage() {
+        const table = state.active;
+        const seq = ++state.seq; // 快速连点时只认最后一次
+        const offset = state.page * PAGE;
+        $('pager').hidden = false;
+        $('prev').disabled = $('next').disabled = true;
+        $('tableStatus').className = 'status';
+        $('tableStatus').textContent = '加载中…';
+        try {
+            if (state.total === null) {
+                const counted = await query('SELECT COUNT(*) AS total FROM ' + quote(table.name), 1);
+                if (seq !== state.seq) return;
+                state.total = Number(counted.rows && counted.rows[0] && counted.rows[0].total) || 0;
+            }
+            const data = await query('SELECT ' + lightColumns(table) + ' FROM ' + quote(table.name) + orderBy(table) + ' LIMIT ' + PAGE + ' OFFSET ' + offset, PAGE);
+            if (seq !== state.seq) return;
+            state.tableRows = Array.isArray(data.rows) ? data.rows : [];
+            state.tableCols = state.tableRows.length ? Object.keys(state.tableRows[0]) : table.columns.filter((c) => !c.heavy).map((c) => c.name);
+            const pages = Math.max(1, Math.ceil(state.total / PAGE));
+            $('tableStatus').textContent = '共 ' + state.total + ' 行' + (data.memoryMode ? ' · ' + data.memoryMode : '');
+            $('pageInfo').textContent = '第 ' + (state.page + 1) + ' / ' + pages + ' 页';
+            $('prev').disabled = state.page <= 0;
+            $('next').disabled = state.page >= pages - 1;
+            $('tableCsv').disabled = !state.tableRows.length;
+            $('tableGrid').replaceChildren(state.tableRows.length ? dataTable(state.tableCols, state.tableRows, offset) : el('div', { className: 'empty', textContent: '这张表还没有数据' }));
+        } catch (error) {
+            if (seq !== state.seq) return;
+            $('tableStatus').className = 'status bad';
+            $('tableStatus').textContent = error.message;
+            $('tableGrid').replaceChildren(el('div', { className: 'empty', textContent: '数据没有读出来，可以点「刷新」重试' }));
+        }
+    }
+
+    // ── SQL 终端 ──
+    function fillSql(table) {
+        $('sql').value = 'SELECT ' + lightColumns(table) + '\nFROM ' + quote(table.name) + '\nLIMIT 50';
+        $('sql').focus();
     }
     async function run() {
         const sql = $('sql').value.trim();
         if (!sql) return;
         $('run').disabled = true;
-        $('status').className = '';
+        $('status').className = 'status';
         $('status').textContent = '查询中…';
         const started = performance.now();
         try {
-            const data = await api('api/db-explorer/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: sql, limit: 500 }) });
+            const data = await query(sql, 500);
             state.rows = Array.isArray(data.rows) ? data.rows : [];
             state.columns = state.rows.length ? Object.keys(state.rows[0]) : [];
             $('status').textContent = (data.rowCount ?? state.rows.length) + ' 行 · ' + Math.round(performance.now() - started) + ' ms' + (data.note ? ' · ' + data.note : '') + (data.memoryMode ? ' · ' + data.memoryMode : '');
-            renderResult();
+            $('result').replaceChildren(state.rows.length ? dataTable(state.columns, state.rows, 0) : el('div', { className: 'empty', textContent: '没有符合条件的数据' }));
         } catch (error) {
             state.rows = []; state.columns = [];
-            $('status').className = 'bad';
+            $('status').className = 'status bad';
             $('status').textContent = error.message;
             $('result').replaceChildren(el('div', { className: 'empty', textContent: '查询没有成功，请按上面的提示修改后重试' }));
         } finally {
@@ -126,20 +361,30 @@
             $('csv').disabled = !state.rows.length;
         }
     }
-    function exportCsv() {
-        const cell = (value) => { const text = show(value) ?? ''; return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; };
-        const lines = [state.columns.map(cell).join(',')].concat(state.rows.map((row) => state.columns.map((c) => cell(row[c])).join(',')));
-        const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-        const link = el('a', { href: URL.createObjectURL(blob), download: (state.active || 'query') + '-' + new Date().toISOString().slice(0, 10) + '.csv' });
-        document.body.append(link); link.click(); link.remove();
-        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    }
+
+    document.querySelectorAll('.rail [data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+    document.querySelectorAll('.tabs [data-tab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
     $('filter').addEventListener('input', renderTables);
+    $('reload').addEventListener('click', () => { state.total = null; renderTableView(); });
+    $('reloadTables').addEventListener('click', () => useDb(state.db, { reload: true }));
+    $('prev').addEventListener('click', () => { if (state.page > 0) { state.page -= 1; loadPage(); } });
+    $('next').addEventListener('click', () => { state.page += 1; loadPage(); });
+    $('tableCsv').addEventListener('click', () => downloadCsv(state.tableCols, state.tableRows, state.active.name + '-p' + (state.page + 1)));
+    $('toSql').addEventListener('click', () => { const table = state.active; state.view = 'sql'; document.querySelectorAll('.rail [data-view]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === 'sql'))); $('viewTable').hidden = true; $('viewSql').hidden = false; fillSql(table); run(); });
+    document.querySelectorAll('[data-db]').forEach((b) => b.addEventListener('click', () => useDb(b.dataset.db)));
     $('run').addEventListener('click', run);
-    $('csv').addEventListener('click', exportCsv);
+    $('clear').addEventListener('click', () => { $('sql').value = ''; $('sql').focus(); });
+    $('csv').addEventListener('click', () => downloadCsv(state.columns, state.rows, 'query'));
     $('sql').addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); run(); } });
-    api('api/db-explorer/tables').then((data) => { state.tables = data.tables || []; renderTables(); })
-        .catch((error) => $('tables').replaceChildren(el('div', { className: 'empty', textContent: '加载失败：' + error.message })));
+    // 进入页面就把两个库各查一遍：应用库马上显示，业务库在后台备好，点过去不用再等
+    useDb('app').then(() => {
+        if (catalogs.business) return;
+        catalogs.business = { loading: true, tables: [] };
+        api('api/db-explorer/tables?database=business')
+            .then((data) => { catalogs.business = { tables: data.tables || [], message: data.configured === false ? '还没有配置业务数据源。平台为本应用授权业务库后，这里会列出它的表。' : (data.error || '') }; })
+            .catch((error) => { catalogs.business = { tables: [], message: '加载失败：' + error.message }; })
+            .then(() => { if (state.db === 'business') { state.tables = catalogs.business.tables; renderTables(); renderTableView(); } });
+    });
 })();
 </script>
 </body>

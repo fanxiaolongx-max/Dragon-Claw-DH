@@ -131,7 +131,8 @@
         const tool = (window.HomeWorkspace?.getTools?.() || []).find(item => {
             try {
                 const iu = new URL(item.href, location.origin);
-                return normalizeToolTarget(iu) === target || iu.pathname === url.pathname;
+                // 自定义工具共用 custom-tool.html，靠 ?slug 区分：路径相同还要比查询串，否则都会取到第一个工具的标题
+                return normalizeToolTarget(iu) === target || (iu.pathname === url.pathname && iu.search === url.search);
             } catch { return false; }
         });
         return { title: tool?.title || '', icon: tool?.icon || '' };

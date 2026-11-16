@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-    <script src="js/shared/dh-runtime.js"></script><script src="js/shared/tool-navigation.js"></script>
+    <script src="js/shared/dh-runtime.js"></script><script src="js/shared/platform-theme.js" data-tool-theme="light"></script><script src="js/shared/elegant-scrollbars.js"></script><script src="js/shared/tool-navigation.js"></script>
     <script src="js/api.js"></script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -10,6 +10,7 @@
         html, body { height: 100%; margin: 0; }
         body { display: flex; flex-direction: column; font: 14px/1.4 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1c2430; }
         header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #fff; border-bottom: 1px solid #e3e6eb; }
+        header[hidden] { display: none; }
         header a { color: #1f6feb; text-decoration: none; }
         header b { font-size: 15px; }
         header small { color: #6b7480; margin-left: auto; }
