@@ -1368,7 +1368,7 @@ export async function aiReportCellCompile({
         '- 数据集源：{"id":"d1","kind":"dataset","dataset":"report_metric_data|report_category_scores|report_snapshots","label":"...","monthOffset":0}。report_metric_data.rows 每行含 {cat_name,metric_label,label,target_val,raw_val,num_val,is_failing,gap,weight,earned_score}；report_category_scores.rows 含 {cat_name,base_score,manual_score,final_score}。',
         '- 导入表源：{"id":"s1","kind":"sheet","match":{"sourceKey":"...","tableName":"...","sheetName":"..."},"monthOffset":0}。',
         '沙箱安全约束：',
-        '- compute 禁止使用示例/假数据或 Math.random()，数值计算使用 numValue / values[label] / targets[label]，不要拿带 % 的字符串做数值运算或给图表喂文本。',
+        '- compute 禁止使用示例/假数据或 Math.random()，数值计算使用 numValue / values[label] / targets[label]，不要拿带 % 的字符串做数值运算或给图表喂文本；numValue / num_val 对百分比指标本身已是 0–100 数值（例如 value:"99%" 对应 numValue:99），禁止再乘 100 或加 scale:100。',
         '- 不要用不完整的简称去读 values[...]，优先遍历 input.m1.metrics 数组筛选 metricName / category / label / isFailing。',
         '- HTML 中绝对不要出现 undefined / NaN / [object Object] / null% / **加粗**。',
         excludeKws.length

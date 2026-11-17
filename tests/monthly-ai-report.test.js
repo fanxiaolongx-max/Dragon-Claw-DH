@@ -691,3 +691,50 @@ test('AI Report frontend trace export deduplicates response and validateInteract
     assert.match(cellsById.errCell.cell.chat.at(-1)?.text || '', /模型网关返回 502/);
 });
 
+test('AiReportQuery: 百分比指标已为 0-100（如 99 / "99%"）时不重复乘 100 变成 9900%', async () => {
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const Query = require(path.join(APP_ROOT, 'static/js/ai-report/query.js'));
+
+    const input = {
+        d1: {
+            rows: [
+                { cat_name: 'TE', raw_val: '99%', num_val: 99 },
+                { cat_name: 'ORG', raw_val: '99%', num_val: 99 },
+                { cat_name: 'ET', raw_val: '96%', num_val: 96 },
+                { cat_name: 'VDF', raw_val: '99%', num_val: 99 },
+            ],
+        },
+        d2: {
+            rows: [
+                { cat_name: 'TE', ratio: 0.99 },
+                { cat_name: 'ET', ratio: 0.96 },
+            ],
+        },
+    };
+
+    const itemsPercent = Query.run({
+        shape: 'items',
+        from: 'd1',
+        label: 'cat_name',
+        value: { field: 'num_val', agg: 'avg', scale: 100, digits: 1 },
+    }, input);
+    assert.deepEqual(itemsPercent.map((x) => [x.label, x.value]), [
+        ['TE', 99],
+        ['ORG', 99],
+        ['ET', 96],
+        ['VDF', 99],
+    ]);
+
+    const itemsDecimal = Query.run({
+        shape: 'items',
+        from: 'd2',
+        label: 'cat_name',
+        value: { field: 'ratio', agg: 'avg', scale: 100, digits: 1 },
+    }, input);
+    assert.deepEqual(itemsDecimal.map((x) => [x.label, x.value]), [
+        ['TE', 99],
+        ['ET', 96],
+    ]);
+});
+
