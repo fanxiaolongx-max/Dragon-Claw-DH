@@ -5,15 +5,14 @@
 //   { role: 'tool', toolCallId, name, content }
 import { Agent, fetch as undiciFetch } from 'undici';
 import { reasoningDelta, stripReasoningText, createThinkSplitter, settleReasoningOnly, reasoningKey, reasoningHungry, TRUNCATED_FINISH_RE, REASONING_RETRY_TOKENS } from './reasoning.js';
-import { config } from '../config.js';
 import { BusinessError } from '../core/errors.js';
 import { buildCompletionRequest } from '../services/ai-service.js';
 
-const dispatcher = new Agent({
-    connect: { rejectUnauthorized: config.httpVerifySsl, timeout: 15_000 },
-    headersTimeout: 120_000,
-    bodyTimeout: 180_000,
-});
+// 每套模型方案自己决定是否校验 HTTPS 证书（默认不校验，兼容内网自签证书网关）
+const agentOptions = (verify) => ({ connect: { rejectUnauthorized: verify, timeout: 15_000 }, headersTimeout: 120_000, bodyTimeout: 180_000 });
+const strictDispatcher = new Agent(agentOptions(true));
+const insecureDispatcher = new Agent(agentOptions(false));
+const dispatcherFor = (settings) => (settings?.verifySsl === true ? strictDispatcher : insecureDispatcher);
 
 const GEMINI_PLACEHOLDER_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
@@ -186,7 +185,7 @@ function httpError(status, text) {
 
 // 限流、网关抖动、连接被重置这类瞬时故障：在还没开始输出之前重试一次（间隔 1.2 秒）
 const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504, 529]);
-async function post(url, headers, body, signal) {
+async function post(url, headers, body, signal, dispatcher) {
     for (let attempt = 1; ; attempt += 1) {
         try {
             const resp = await undiciFetch(url, { method: 'POST', headers, body: JSON.stringify(body), dispatcher, signal });
@@ -362,7 +361,7 @@ async function streamModelOnce({
         if (typeof body.temperature !== 'number') delete body.temperature;
         if (tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
         startedAt = Date.now();
-        const resp = await post(spec.url, spec.headers, body, signal);
+        const resp = await post(spec.url, spec.headers, body, signal, dispatcherFor(settings));
         if (!resp.ok) throw httpError(resp.status, await resp.text().catch(() => ''));
         const blocks = new Map();
         for await (const ev of sseEvents(resp.body)) {
@@ -411,7 +410,7 @@ async function streamModelOnce({
         if (attempt.tools) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
         if (attempt.usage) body.stream_options = { include_usage: true };
         startedAt = Date.now();
-        resp = await post(spec.url, spec.headers, body, signal);
+        resp = await post(spec.url, spec.headers, body, signal, dispatcherFor(settings));
         used = attempt;
         if (resp.ok) break;
         lastError = httpError(resp.status, await resp.text().catch(() => ''));

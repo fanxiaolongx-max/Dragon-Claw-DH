@@ -364,7 +364,7 @@ export async function aiSettingsRoutes(fastify) {
         error: '已取消模型名称映射，对话直接显示真实模型名称',
     }));
 
-    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models', 'authMode', 'customAuthHeader'];
+    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models', 'authMode', 'customAuthHeader', 'verifySsl'];
     const handleProfileTest = async (req, reply) => {
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const paramId = String(req.params?.profileId || body.profileId || '').trim();

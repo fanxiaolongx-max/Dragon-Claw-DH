@@ -27,7 +27,7 @@ export function buildConnectionHint({ httpStatus, upstreamStatus, causeCode, isT
     const code = `${causeCode || ''} ${raw}`;
     if (isTimeout) return `连接或等待模型响应超过 ${TIMEOUT_SECONDS} 秒。请确认应用所在环境能否访问网关地址，以及网关当前负载是否过高。`;
     if (/DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_|ERR_TLS_/i.test(code)) {
-        return 'HTTPS/TLS 证书校验失败（常见于内网自签或内部 CA 证书）。请联系平台管理员为应用配置受信任的根证书。';
+        return 'HTTPS/TLS 证书校验失败（常见于内网自签或内部 CA 证书）。可在模型方案里取消勾选「校验 HTTPS 证书」，或为应用配置受信任的根证书。';
     }
     if (/ENOTFOUND|EAI_AGAIN/i.test(code)) return '域名解析失败，应用所在环境无法解析网关主机名。请检查 API URL 拼写，以及网关是否对本应用开放。';
     if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_/i.test(code)) return 'TCP 连接被拒绝、重置或超时。请检查 API URL 的协议和端口，以及网关的访问策略。';

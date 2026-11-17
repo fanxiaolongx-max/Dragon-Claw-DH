@@ -88,7 +88,3 @@ html.dh-web .is-dh-uiv-disabled {
     box-shadow: none !important;
     pointer-events: auto !important;
 }
-
-
-/* 基座 Web 版始终校验 HTTPS 证书（是否允许关闭待定），隐藏主线版设置页的开关 */
-.dh-web .nav-ai-verify-ssl-check { display: none !important; }

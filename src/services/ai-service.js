@@ -7,10 +7,10 @@ import { encryptSecret, decryptSecret } from '../core/secrets.js';
 import { kvGet, kvSet, selectTable, insertRow, upsertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import { pushLog } from '../core/log-ring.js';
 
-const aiAgent = new Agent({
-    connect: { rejectUnauthorized: false, timeout: 20_000 },
-    keepAliveTimeout: 10_000,
-});
+// 模型方案的「校验 HTTPS 证书」开关：默认不校验（兼容内网自签证书网关），勾选后严格校验
+const aiAgent = new Agent({ connect: { rejectUnauthorized: false, timeout: 20_000 }, keepAliveTimeout: 10_000 });
+const aiStrictAgent = new Agent({ connect: { rejectUnauthorized: true, timeout: 20_000 }, keepAliveTimeout: 10_000 });
+export const aiDispatcherFor = (settings) => (settings?.verifySsl === true ? aiStrictAgent : aiAgent);
 
 const CONVERSATION_LIST_KEY_PREFIX = 'ai_conversation_list:';
 const DEFAULT_PROFILE_ID = 'default-profile';
@@ -87,8 +87,8 @@ function normalizeProfile(raw = {}) {
         isActive: Boolean(raw.isActive ?? raw.activate),
         authMode: resolveAuthMode(raw),
         customAuthHeader: HEADER_NAME_RE.test(String(raw.customAuthHeader || '').trim()) ? String(raw.customAuthHeader).trim() : '',
-        // 基座 Web 版始终校验 HTTPS 证书（是否开放关闭校验待定），不保存该开关
-        verifySsl: undefined,
+        // 默认不校验 HTTPS 证书（与主线版一致），只有明确勾选才校验
+        verifySsl: raw.verifySsl === true || raw.verifySsl === 'true',
     };
 }
 
@@ -319,7 +319,7 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
             method: 'POST',
             headers: reqSpec.headers,
             body: JSON.stringify(reqSpec.body),
-            dispatcher: aiAgent,
+            dispatcher: aiDispatcherFor(settings),
             signal: AbortSignal.timeout(clampedTimeout),
         });
         const raw = await resp.text();
@@ -395,7 +395,7 @@ export async function streamAiChat({ messages, profileId = '', onDelta }) {
         method: 'POST',
         headers: reqSpec.headers,
         body: JSON.stringify(reqSpec.body),
-        dispatcher: aiAgent,
+        dispatcher: aiDispatcherFor(settings),
         signal: AbortSignal.timeout(90_000),
     });
     if (!resp.ok) {
