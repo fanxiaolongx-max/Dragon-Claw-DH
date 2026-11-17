@@ -30,6 +30,8 @@ export const config = {
     host: process.env.HOST || '0.0.0.0',
 
     maxPageSize: num(process.env.MAX_PAGE_SIZE, 1000),
+    // 旧快照明细转成去重存储的启动延迟（毫秒）
+    snapshotRowsCompactDelayMs: num(process.env.SNAPSHOT_ROWS_COMPACT_DELAY_MS, 90_000),
     defaultPageSize: num(process.env.DEFAULT_PAGE_SIZE, 50),
 
     baseUrl: String(process.env.BASE_URL || '').trim(),

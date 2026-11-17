@@ -10,7 +10,7 @@ import {
     sqlVal,
     parseJsonCol,
 } from '../dao/scoped.js';
-import { listSnapshots as listSlaSnapshots } from './sla-service.js';
+import { listSnapshots as listSlaSnapshots, getSnapshotById } from './sla-service.js';
 import { documentRevision } from '../utils/ai-report-helpers.js';
 
 const IMPORT_SETTINGS_KEY = 'import_settings';
@@ -368,7 +368,7 @@ export async function getSourceCatalog(options = {}) {
             columns: ['id', 'file_id', 'batch_id', 'sheet_name', 'headers_json', 'row_count', 'updated_at'],
             limit: 2000,
         }),
-        (!options.stage || options.stage === 'core') ? listSlaSnapshots({ view: 'full' }).catch(() => []) : Promise.resolve([]),
+        (!options.stage || options.stage === 'core') ? listSlaSnapshots({ view: 'full', hydrate: false }).catch(() => []) : Promise.resolve([]),
     ]);
 
     const catMap = (await kvGet(SOURCE_CATEGORIES_KEY, {})) || {};
@@ -431,7 +431,7 @@ export async function getSourceCatalog(options = {}) {
                 sheetName: sec.sheetName,
                 fileIds: sec.fileIds || [],
                 headers: sec.headers || [],
-                rowCount: Array.isArray(sec.rows) ? sec.rows.length : 0,
+                rowCount: Array.isArray(sec.rows) ? sec.rows.length : (sec.rowCount || 0),
             })),
         }));
 
@@ -479,8 +479,8 @@ export async function searchImportSources(query = {}) {
 }
 
 export async function getArchivedSnapshot(snapshotId) {
-    const list = await listSlaSnapshots({ view: 'full' });
-    return list.find((s) => s.id === snapshotId) || null;
+    // 只读这一份快照（以前会把全部快照连同明细都读出来再找）
+    return getSnapshotById(snapshotId);
 }
 
 export async function getSection(snapshotId, key) {

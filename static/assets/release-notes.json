@@ -1,12 +1,8 @@
 {
   "zh": [
-    "修复 UIVF12 运行批脚本后自动导入收不到数据：抓取页逐表上传时会话改为逐表追加（之前每次上传都会覆盖成空），普通账号也能上传到自己的导入会话；站点打开后刷新或登录跳转时会重新装上下载拦截；导入完成后由服务端直接归档原始表格并清理临时会话。",
-    "数据量大时数据导入页不再卡顿：明细表先显示 200 行、滚动续加，也可一键显示全部；预警指标闪烁 3 次后停住，侧栏头像光环只在加载和悬停时转动，指标栏滚动减半帧率，回到顶部按钮不再随横向滚动反复重排。",
-    "指标规则支持条件值别名 [旧名]|[新名]，任一命中即可取数和高亮；对话新增 @指标规则条件维护，可找出零命中的条件并给出候选新值，批量修改前逐处预览命中行数，改动可按记录回退。"
+    "历史快照明细去重存储：快照不再每份都内嵌全部源表行，相同内容的表按内容压缩只存一份（放在已有的键值表里，升级不需要执行数据库脚本）；经基座写入的数据量随之大幅减少。旧快照在后台逐条转换，每条先校验能完整还原再写回。月报资料库读取单张表时只读那一份快照，不再把全部快照连同明细一起读出。"
   ],
   "en": [
-    "Fixed UIVF12 batch auto import receiving no data: per-table uploads now append to the session instead of overwriting it with an empty list, regular accounts can upload to their own import session, the download capture is re-installed after a site reloads or redirects for login, and the server archives the captured tables and clears the session after import.",
-    "The data import page stays responsive with large data: detail tables show 200 rows first and load more on scroll (or Show all); warnings pulse three times, the sidebar avatar aura spins only on load and hover, the metric ticker runs at half the frame rate, and the back-to-top button no longer re-lays out on horizontal scrolls.",
-    "Metric rules accept condition aliases [old]|[new]; the new @Metric rule conditions skill finds zero-match conditions with candidate values, previews match counts before batch edits and reverts by change ID."
+    "Deduplicated snapshot detail storage: snapshots no longer embed every source row; identical tables are compressed and stored once (in the existing key-value table, so upgrading needs no database script), which greatly reduces data written through the base. Older snapshots are converted in the background after verifying they restore exactly. The monthly report library now reads only the snapshot it needs instead of every snapshot with its rows."
   ]
 }

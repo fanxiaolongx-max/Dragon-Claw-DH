@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { optionalDep } from '../core/optional.js';
-import { TEMPLATES_DIR } from '../config.js';
+import { TEMPLATES_DIR, config } from '../config.js';
 import { isMemoryMode, kvGet, kvSet, selectTable, upsertRow, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
+import * as rowStore from './snapshot-row-store.js';
 
 const FAST_MAPPING_KEY = 'sla_fast_mapping_templates';
 const AUDIT_LOG_KEY = 'sla_audit_log';
@@ -95,6 +96,7 @@ export async function deleteCategoryCascade(catName) {
         whereSql: `\`category\` = ${sqlVal(catName)}`,
         memFilter: (r) => r.category === catName,
     });
+    rowStore.scheduleGarbageCollection();
     await deleteRows('sla_categories', {
         whereSql: `\`name\` = ${sqlVal(catName)}`,
         memFilter: (r) => r.name === catName,
@@ -270,19 +272,47 @@ export async function patchPrefsBulk(patch = {}) {
 }
 
 // ── Snapshots (MySQL-safe prune without NOT IN + LIMIT subquery) ──
-export async function listSnapshots({ view = 'full' } = {}) {
+/** hydrate=false 时不还原明细行（只要元信息、行数时用，省去解压） */
+export async function listSnapshots({ view = 'full', hydrate = true } = {}) {
     const rows = await selectTable('sla_snapshots', {
         columns: view === 'summary' ? ['id', 'seq', 'category', 'name', 'snapshot_time', 'created_at'] : ['*'],
         orderBySql: '`seq` DESC',
         limit: MAX_SNAPSHOTS,
         memSort: (a, b) => (b.seq || 0) - (a.seq || 0),
     });
-    return rows.map((r) => {
+    const items = rows.map((r) => {
         if (view === 'summary') {
             return { id: r.id, category: r.category, name: r.name, timestamp: r.snapshot_time, createdAt: r.created_at };
         }
         const payload = parseJsonCol(r.payload_json, {}) || {};
         return { ...payload, id: r.id, category: r.category || payload.category || '', name: r.name || payload.name || '', timestamp: r.snapshot_time || payload.timestamp || '' };
+    });
+    if (view === 'summary' || !hydrate) return items;
+    scheduleCompaction();
+    return rowStore.hydrateAll(items);
+}
+
+// 旧快照（明细行内嵌）在第一次读到快照列表后，于后台逐条转成去重存储（每个进程一次）
+let compactionStarted = false;
+function scheduleCompaction(delayMs = config.snapshotRowsCompactDelayMs) {
+    if (compactionStarted || isMemoryMode()) return;
+    compactionStarted = true;
+    const timer = setTimeout(() => compactSnapshotRows()
+        .then((summary) => { if (summary.converted || summary.failed) console.log('[snapshot-rows] 旧快照转换：', JSON.stringify(summary)); })
+        .then(() => rowStore.collectGarbage())
+        .catch((error) => console.warn('[snapshot-rows] 旧快照转换失败：', error.message)), delayMs);
+    timer.unref?.();
+}
+
+export async function compactSnapshotRows({ pauseMs = 50 } = {}) {
+    return rowStore.compact({
+        pauseMs,
+        listIds: async () => (await selectTable('sla_snapshots', { columns: ['id'], limit: 1000 })).map((r) => r.id),
+        read: async (id) => {
+            const rows = await selectTable('sla_snapshots', { whereSql: `\`id\` = ${sqlVal(id)}`, limit: 1, memFilter: (r) => r.id === id });
+            return rows.length ? parseJsonCol(rows[0].payload_json, null) : null;
+        },
+        write: (id, payload) => updateRows('sla_snapshots', { payload_json: JSON.stringify(payload) }, { whereSql: `\`id\` = ${sqlVal(id)}`, memFilter: (r) => r.id === id }),
     });
 }
 
@@ -294,7 +324,7 @@ export async function getLatestSnapshot() {
     });
     if (!rows.length) return null;
     const r = rows[0];
-    return { ...(parseJsonCol(r.payload_json, {}) || {}), id: r.id };
+    return rowStore.hydrate({ ...(parseJsonCol(r.payload_json, {}) || {}), id: r.id });
 }
 
 export async function getSnapshotById(id) {
@@ -308,19 +338,21 @@ export async function getSnapshotById(id) {
     if (!rows.length) return null;
     const r = rows[0];
     const payload = parseJsonCol(r.payload_json, {}) || {};
-    return { ...payload, id: r.id, category: r.category || payload.category || '', name: r.name || payload.name || '', timestamp: r.snapshot_time || payload.timestamp || '' };
+    return rowStore.hydrate({ ...payload, id: r.id, category: r.category || payload.category || '', name: r.name || payload.name || '', timestamp: r.snapshot_time || payload.timestamp || '' });
 }
 
 export async function addSnapshot(snapshot = {}) {
     const id = String(snapshot.id || `snap_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`);
     const now = Date.now();
     const full = { ...snapshot, id, timestamp: snapshot.timestamp || new Date().toISOString() };
+    // 明细行存进去重存储，快照里只留引用
+    const stored = await rowStore.dehydrate(full);
     await upsertRow('sla_snapshots', {
         id,
         category: String(snapshot.category || ''),
         name: String(snapshot.name || snapshot.label || id).slice(0, 250),
         snapshot_time: String(full.timestamp),
-        payload_json: JSON.stringify(full),
+        payload_json: JSON.stringify(stored),
         created_at: now,
     }, ['id'], ['category', 'name', 'snapshot_time', 'payload_json']);
 
@@ -338,6 +370,7 @@ export async function addSnapshot(snapshot = {}) {
             whereSql: `\`id\` IN (${dropIds.join(', ')})`,
             memFilter: (r) => dropSet.has(r.id),
         });
+        rowStore.scheduleGarbageCollection();
     }
     return full;
 }
@@ -349,12 +382,13 @@ export async function updateSnapshot(id, patch = {}) {
         memFilter: (r) => r.id === id,
     });
     if (!rows.length) return false;
-    const prev = parseJsonCol(rows[0].payload_json, {}) || {};
+    const prev = await rowStore.hydrate(parseJsonCol(rows[0].payload_json, {}) || {});
     const merged = { ...prev, ...patch, id };
+    const stored = await rowStore.dehydrate(merged);
     await updateRows('sla_snapshots', {
         name: String(merged.name || rows[0].name),
         category: String(merged.category || rows[0].category),
-        payload_json: JSON.stringify(merged),
+        payload_json: JSON.stringify(stored),
     }, {
         whereSql: `\`id\` = ${sqlVal(id)}`,
         memFilter: (r) => r.id === id,
@@ -367,6 +401,7 @@ export async function deleteSnapshot(id) {
         whereSql: `\`id\` = ${sqlVal(id)}`,
         memFilter: (r) => r.id === id,
     });
+    rowStore.scheduleGarbageCollection();
     return { deleted: n > 0, id };
 }
 
@@ -399,6 +434,7 @@ export async function cleanupRedundantSnapshots({ mode = 'daily-latest', dryRun 
             whereSql: `\`id\` IN (${toRemove.map(sqlVal).join(', ')})`,
             memFilter: (r) => set.has(r.id),
         });
+        rowStore.scheduleGarbageCollection();
     }
     return { removedIds: toRemove, removedCount: toRemove.length, keptCount: all.length - toRemove.length, dryRun };
 }
