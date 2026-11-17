@@ -70,3 +70,22 @@ html.dh-web .nav-ai-tab[onclick*="'image'"],
 html.dh-web label.nav-settings-check:has(#navAiShared) {
     display: none !important;
 }
+
+/* 数据抓取与首页插件：基座版禁止调用本地 UI.Vision 插件运行批脚本、浮窗脚本等主线桌面版专属功能（保留鼠标事件以弹出 OpenX 桌面版下载提示） */
+html.dh-web #btnDownloadUivExtension,
+html.dh-web .btn-batch-uiv-run,
+html.dh-web .btn-batch-speed,
+html.dh-web .btn-batch-filter,
+html.dh-web .btn-batch-site-console,
+html.dh-web [data-cap-group="float"] .home-cap-card,
+html.dh-web [data-cap-group="float"] .home-caps-go,
+html.dh-web .v2-hub-card[data-src="float"],
+html.dh-web .v2-hub-menu a[href*="siteScripts=1"],
+html.dh-web .is-dh-uiv-disabled {
+    opacity: 0.45 !important;
+    filter: grayscale(1) !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+    pointer-events: auto !important;
+}
+

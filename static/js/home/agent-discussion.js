@@ -70,8 +70,9 @@
     }catch{/* Disabled until its status can be verified. */}
     if(version===availabilityRevision&&account===who()){readiness[id]=status;render();}
    }));
+   const isAdmin=localStorage.getItem('tools_role')==='admin';
    const [desktop,channels]=await Promise.allSettled([
-    (async()=>{const data=await request('GET','/settings');return {data,sessions:data.owned&&data.settings?.enabled?await request('GET','/sessions'):{providers:[]}};})(),
+    isAdmin?(async()=>{const data=await request('GET','/settings');return {data,sessions:data.owned&&data.settings?.enabled?await request('GET','/sessions'):{providers:[]}};})():Promise.resolve({data:{owned:false},sessions:{providers:[]}}),
     (async()=>{const token=localStorage.getItem('tools_token')||sessionStorage.getItem('tools_token');const response=await fetch('/api/channels/available',{cache:'no-store',credentials:'same-origin',headers:{Authorization:'Bearer '+token}});if(!response.ok)throw Error('Channels unavailable');return response.json();})()
    ]);
    if(desktop.status==='fulfilled'){
@@ -186,6 +187,7 @@
 
   const button=root.querySelector('[data-tac-start]');
   if(!button) return;
+  button.hidden = localStorage.getItem('tools_role') !== 'admin';
   button.disabled = false;
   button.dataset.available = String(availability.available);
   button.setAttribute('aria-pressed', String(enabled));
@@ -274,7 +276,8 @@
  function positionPopover(){
    const popover=root?.querySelector('.dc-connector-popover');
    if(!popover||popover.hidden)return;
-   const button=root.querySelector('.dc-connector-btn').getBoundingClientRect();
+   const anchorEl=root.querySelector('.dc-connector-btn:not([hidden])')||document.getElementById('dcAttach')||root;
+   const button=anchorEl.getBoundingClientRect();
    const parent=popover.offsetParent;
    if(!parent)return;
    const origin=parent.getBoundingClientRect(),pad=12;
@@ -289,12 +292,13 @@
  }
 
  function togglePopover(force){
-   const popover = root.querySelector('.dc-connector-popover');
+   if(!root)init();
+   const popover = root?.querySelector('.dc-connector-popover');
    if(!popover) return;
    const btn = root.querySelector('.dc-connector-btn');
    const show = typeof force === 'boolean' ? force : popover.hidden;
    popover.hidden = !show;
-   btn.setAttribute('aria-expanded', String(show));
+   btn?.setAttribute('aria-expanded', String(show));
    if(show){
     window.HomeComposer?.close?.();window.DragonClawSkills?.closeSuggestions?.();
     document.querySelectorAll('#dcWorkspaceChip details[open]').forEach(node=>node.open=false);
@@ -479,7 +483,7 @@ ${DESKTOP_IDS.map(id=>`         <div class="dc-connector-item" data-key="${id}">
  }
 
  function init(){
-  if(localStorage.getItem('tools_role')!=='admin')return;
+  if(root)return;
   const bar=document.querySelector('#dcComposer .dc-composer-bar');if(!bar)return;
   identity=who();
   root=document.createElement('span');
@@ -530,6 +534,10 @@ ${DESKTOP_IDS.map(id=>`         <div class="dc-connector-item" data-key="${id}">
     refreshAvailability(true);
   });
   window.addEventListener('tools:languagechange',render);
+  window.addEventListener('tools:authchange',()=>{
+    render();
+    refreshAvailability(true);
+  });
   window.addEventListener('storage',()=>{
     if(identity!==who()){
       identity=who();

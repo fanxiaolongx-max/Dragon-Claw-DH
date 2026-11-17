@@ -10,6 +10,14 @@ const UIV_BATCH_SPEEDS = [1, 2, 4];
 let uivBatchScheduleTimer = null;
 let uivBatchScheduledRunActive = false;
 
+function isDhWebUivDisabled(anchorSelector) {
+    if (typeof document === 'undefined' || !document.documentElement?.classList?.contains('dh-web')) return false;
+    const anchor = anchorSelector ? document.querySelector(anchorSelector) : null;
+    if (typeof window.dhNotifyOpenxDesktop === 'function') window.dhNotifyOpenxDesktop(anchor);
+    else if (typeof showToast === 'function') showToast('该功能需调用本地 UI.Vision 插件，请前往 OpenX 下载桌面版使用：https://openx.huawei.com/Egypt_CNBG_CS_Tools_Platform/overview', 'warning');
+    return true;
+}
+
 function escapeUivHtml(value) {
     return String(value === undefined || value === null ? '' : value).replace(/[&<>"']/g, ch => ({
         '&': '&amp;',
@@ -173,6 +181,7 @@ function setBatchFilterChecks(checked) {
 }
 
 async function openUivBatchCategoryFilter() {
+    if (isDhWebUivDisabled('.btn-batch-filter')) return;
     try {
         const [scriptsData] = await Promise.all([
             API.get('/api/uiv/scripts'),
@@ -319,6 +328,7 @@ async function saveUivBatchCategoryFilter() {
 function startUivBatchSchedule() {
     if (uivBatchScheduleTimer) clearInterval(uivBatchScheduleTimer);
     uivBatchScheduleTimer = null;
+    if (typeof document !== 'undefined' && document.documentElement?.classList?.contains('dh-web')) return;
     const schedule = readUivBatchSchedule();
     if (!schedule.enabled) return;
     if (!schedule.lastRunAt) writeUivBatchSchedule({ ...schedule, lastRunAt: Date.now() });
@@ -355,9 +365,11 @@ function updateUivBatchSpeedButton() {
     const seconds = getUivCooldownMs(speed) / 1000;
     btn.textContent = speed + 'x';
     btn.title = UIVT('uiv.repo.batchSpeedTitle', { speed, seconds });
+    if (typeof window.dhApplyUivDisabledState === 'function') window.dhApplyUivDisabledState(btn);
 }
 
 function cycleUivBatchSpeed() {
+    if (isDhWebUivDisabled('.btn-batch-speed')) return;
     const current = getUivBatchSpeed();
     const next = UIV_BATCH_SPEEDS[(UIV_BATCH_SPEEDS.indexOf(current) + 1) % UIV_BATCH_SPEEDS.length];
     localStorage.setItem(UIV_BATCH_SPEED_KEY, String(next));
@@ -921,6 +933,7 @@ async function sendSiteScriptToDesktop(origin, run) {
 }
 
 async function runSiteScriptsInDesktop(origin) {
+    if (isDhWebUivDisabled('.btn-batch-site-console')) return;
     try {
         const built = await sendSiteScriptToDesktop(origin, true);
         closeSiteConsoleScriptPicker();
@@ -933,6 +946,7 @@ async function runSiteScriptsInDesktop(origin) {
 
 // 打开数据抓取页时，把Dragon 浏览器里已缓存的站点脚本刷新成最新版本（不打开窗口）
 async function refreshDesktopSiteScripts() {
+    if (typeof document !== 'undefined' && document.documentElement?.classList?.contains('dh-web')) return;
     if (!(await isUivDesktopBrowserAvailable())) return;
     try {
         const { items = [] } = await API.get(`${UIV_DESKTOP_API}/site-scripts`);
@@ -952,6 +966,7 @@ async function copySiteConsoleScripts(origin) {
 }
 
 async function openSiteConsoleScriptPicker() {
+    if (isDhWebUivDisabled('.btn-batch-site-console')) return;
     try {
         const { scripts = [] } = await API.get('/api/uiv/scripts');
         const scope = applyUivBatchCategoryFilter(scripts);
@@ -2644,6 +2659,7 @@ async function openLocalUivRunner(macro, options = {}) {
 }
 
 async function runAllUivScriptsDirect(options = {}) {
+    if (isDhWebUivDisabled('.btn-batch-uiv-run:not(.btn-batch-uiv-test)')) return false;
     try {
         const { scripts } = await API.get('/api/uiv/scripts');
         const scope = applyUivBatchCategoryFilter(scripts || []);
@@ -2677,6 +2693,7 @@ async function runAllUivScriptsDirect(options = {}) {
 }
 
 async function runTestUivScriptsDirect() {
+    if (isDhWebUivDisabled('.btn-batch-uiv-test')) return false;
     try {
         const { scripts } = await API.get('/api/uiv/scripts');
         const sampledScripts = sampleUivScriptsPerSite(scripts, 2);
@@ -4412,6 +4429,8 @@ document.addEventListener('DOMContentLoaded', () => {
     syncTheme();
     new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-platform-theme'] });
     updateUivBatchSpeedButton();
+    if (typeof window.dhApplyUivDisabledState === 'function') window.dhApplyUivDisabledState(document);
+    if (document.documentElement?.classList?.contains('dh-web')) return;
     syncUivBatchScopeFromServer().finally(() => {
         startUivBatchSchedule();
     });

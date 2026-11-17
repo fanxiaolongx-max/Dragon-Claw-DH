@@ -515,7 +515,172 @@
     window.dhIsPhase2Href = phase2Check;
     window.dhNotifyPhase2 = showPhase2Notice;
 
+    // ── 基座版禁用本地 UI.Vision 插件批脚本与浮窗脚本运行（无论是否超级管理员），悬停/点击提示下载 OpenX 桌面版 ──
+    const OPENX_DESKTOP_URL = 'https://openx.huawei.com/Egypt_CNBG_CS_Tools_Platform/overview';
+    const DH_UIV_DISABLED_SELECTOR = [
+        '#btnDownloadUivExtension',
+        '.btn-batch-uiv-run',
+        '.btn-batch-speed',
+        '.btn-batch-filter',
+        '.btn-batch-site-console',
+        '[data-cap-group="float"] .home-cap-card',
+        '[data-cap-group="float"] .home-caps-go',
+        '.v2-hub-card[data-src="float"]',
+        '.v2-hub-menu a[href*="siteScripts=1"]',
+        '[data-dh-uiv-disabled]',
+    ].join(', ');
+
+    function isEnLang() {
+        const lang = window.ToolsI18n?.getLanguage?.() || localStorage.getItem('tools_lang') || localStorage.getItem('tools_language') || '';
+        return /^en/i.test(lang);
+    }
+
+    function getOpenxPlainHint() {
+        return isEnLang()
+            ? `This feature invokes the local UI.Vision plugin and is only available in the mainline desktop edition. Please download the OpenX desktop edition: ${OPENX_DESKTOP_URL}`
+            : `该功能需调用本地 UI.Vision 插件运行脚本，仅在主线版提供（基座版已禁用）。请前往 OpenX 下载桌面版：${OPENX_DESKTOP_URL}`;
+    }
+
+    function getOpenxHtmlHint() {
+        return isEnLang()
+            ? `🔒 This feature invokes the local UI.Vision plugin and is only built for the mainline edition.<br>Please download the <a href="${OPENX_DESKTOP_URL}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;font-weight:700;text-decoration:underline;">OpenX</a> desktop edition.`
+            : `🔒 该功能需调用本地 UI.Vision 插件运行脚本，是在主线版做的，暂不支持基座版。<br>请前往下载 <a href="${OPENX_DESKTOP_URL}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;font-weight:700;text-decoration:underline;">OpenX</a> 桌面版使用。`;
+    }
+
+    let dhOpenxTip = null;
+    let dhOpenxHideTimer = null;
+    let dhOpenxAnchor = null;
+
+    function ensureOpenxTooltip() {
+        if (dhOpenxTip && document.body?.contains(dhOpenxTip)) return dhOpenxTip;
+        if (!document.body) return null;
+        const tip = document.createElement('div');
+        tip.id = 'dhOpenxDesktopTooltip';
+        tip.setAttribute('role', 'tooltip');
+        tip.hidden = true;
+        tip.style.cssText = [
+            'position:fixed',
+            'z-index:2147483645',
+            'max-width:340px',
+            'padding:10px 14px',
+            'border-radius:10px',
+            'background:rgba(15,23,42,0.96)',
+            'color:#f8fafc',
+            'border:1px solid rgba(56,189,248,0.45)',
+            'box-shadow:0 10px 28px rgba(0,0,0,0.45)',
+            'font:12.5px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif',
+            'pointer-events:auto',
+        ].join(';');
+        tip.addEventListener('mouseenter', () => clearTimeout(dhOpenxHideTimer));
+        tip.addEventListener('mouseleave', () => scheduleHideOpenxTooltip(180));
+        document.body.appendChild(tip);
+        dhOpenxTip = tip;
+        return tip;
+    }
+
+    function positionOpenxTooltip(anchor) {
+        const tip = ensureOpenxTooltip();
+        if (!tip || !anchor || typeof anchor.getBoundingClientRect !== 'function') return;
+        tip.innerHTML = getOpenxHtmlHint();
+        tip.hidden = false;
+        const rect = anchor.getBoundingClientRect();
+        const pad = 10;
+        const gap = 8;
+        const tw = tip.offsetWidth || 300;
+        const th = tip.offsetHeight || 64;
+        const left = Math.max(pad, Math.min(rect.left + (rect.width - tw) / 2, window.innerWidth - tw - pad));
+        const top = rect.top >= th + gap + pad
+            ? rect.top - th - gap
+            : Math.min(window.innerHeight - th - pad, rect.bottom + gap);
+        tip.style.left = `${Math.round(left)}px`;
+        tip.style.top = `${Math.round(Math.max(pad, top))}px`;
+    }
+
+    function showOpenxTooltip(anchor) {
+        clearTimeout(dhOpenxHideTimer);
+        dhOpenxAnchor = anchor || dhOpenxAnchor;
+        if (dhOpenxAnchor) positionOpenxTooltip(dhOpenxAnchor);
+    }
+
+    function scheduleHideOpenxTooltip(delayMs = 220) {
+        clearTimeout(dhOpenxHideTimer);
+        dhOpenxHideTimer = setTimeout(() => {
+            if (dhOpenxTip) dhOpenxTip.hidden = true;
+            dhOpenxAnchor = null;
+        }, delayMs);
+    }
+
+    function notifyOpenxDesktopRequired(anchor) {
+        if (anchor && typeof anchor.getBoundingClientRect === 'function') {
+            showOpenxTooltip(anchor);
+            clearTimeout(dhOpenxHideTimer);
+            dhOpenxHideTimer = setTimeout(() => {
+                if (dhOpenxTip) dhOpenxTip.hidden = true;
+                dhOpenxAnchor = null;
+            }, 4200);
+            return;
+        }
+        if (typeof window.showToast === 'function') {
+            window.showToast(getOpenxPlainHint(), 'warning');
+        }
+    }
+
+    function applyUivDisabledState(root = document) {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        const hint = getOpenxPlainHint();
+        const nodes = [];
+        if (root.nodeType === 1 && root.matches?.(DH_UIV_DISABLED_SELECTOR)) nodes.push(root);
+        root.querySelectorAll(DH_UIV_DISABLED_SELECTOR).forEach((el) => nodes.push(el));
+        for (const el of nodes) {
+            el.classList.add('is-dh-uiv-disabled');
+            el.setAttribute('aria-disabled', 'true');
+            el.setAttribute('title', hint);
+            if (el.hasAttribute('onclick')) {
+                el.dataset.dhBlockedOnclick = el.getAttribute('onclick') || '';
+                el.removeAttribute('onclick');
+            }
+        }
+    }
+
+    window.OPENX_DESKTOP_URL = OPENX_DESKTOP_URL;
+    window.dhNotifyOpenxDesktop = notifyOpenxDesktopRequired;
+    window.dhApplyUivDisabledState = applyUivDisabledState;
+
+    document.addEventListener('mouseover', (event) => {
+        const target = event.target?.closest?.(DH_UIV_DISABLED_SELECTOR);
+        if (!target) return;
+        applyUivDisabledState(target);
+        showOpenxTooltip(target);
+    }, true);
+
+    document.addEventListener('mouseout', (event) => {
+        const target = event.target?.closest?.(DH_UIV_DISABLED_SELECTOR);
+        if (!target) return;
+        const related = event.relatedTarget;
+        if (related && (target.contains(related) || dhOpenxTip?.contains(related))) return;
+        scheduleHideOpenxTooltip(220);
+    }, true);
+
+    document.addEventListener('focusin', (event) => {
+        const target = event.target?.closest?.(DH_UIV_DISABLED_SELECTOR);
+        if (target) showOpenxTooltip(target);
+    }, true);
+
+    document.addEventListener('focusout', (event) => {
+        const target = event.target?.closest?.(DH_UIV_DISABLED_SELECTOR);
+        if (target) scheduleHideOpenxTooltip(180);
+    }, true);
+
     document.addEventListener('click', (event) => {
+        const disabledUiv = event.target?.closest?.(DH_UIV_DISABLED_SELECTOR);
+        if (disabledUiv && !dhOpenxTip?.contains(event.target)) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+            applyUivDisabledState(disabledUiv);
+            notifyOpenxDesktopRequired(disabledUiv);
+            return;
+        }
         const anchor = event.target?.closest?.('a[href]');
         if (!anchor) return;
         const rawHref = anchor.getAttribute('href') || '';
@@ -594,6 +759,18 @@
         const builtinSlug = (dhStripBase(window.location.pathname || '').match(/^\/builtin-tools\/([a-z0-9_-]+)(?:\/|$)/i) || [])[1]?.toLowerCase() || '';
         const checkMe = () => window.fetch('/api/auth/me').then((r) => (r.ok ? r.json() : null)).then(async (me) => {
             window.DH_ME = me || null;
+            if (me && me.username) {
+                try {
+                    const prevRole = localStorage.getItem('tools_role');
+                    const prevSuper = localStorage.getItem('tools_super');
+                    localStorage.setItem('tools_user', me.username);
+                    if (me.role) localStorage.setItem('tools_role', me.role);
+                    if (typeof me.isSuper === 'boolean') localStorage.setItem('tools_super', me.isSuper ? '1' : '0');
+                    if (prevRole !== localStorage.getItem('tools_role') || prevSuper !== localStorage.getItem('tools_super')) {
+                        window.dispatchEvent(new CustomEvent('tools:authchange'));
+                    }
+                } catch (_) { /* ignore */ }
+            }
             if (me && me.authRequired && !me.identified && !me.memoryMode && !me.openAdmin) {
                 redirectTo401();
                 return;
@@ -634,20 +811,30 @@
         }
     }
 
+    window.addEventListener('tools:languagechange', () => applyUivDisabledState(document));
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
+            applyUivDisabledState(document.documentElement);
+            new MutationObserver((records) => {
+                for (const rec of records) {
+                    if (rec.type === 'childList') {
+                        rec.addedNodes.forEach((node) => {
+                            if (DH_BASE) fixAttributes(node);
+                            if (node && node.nodeType === 1) applyUivDisabledState(node);
+                        });
+                    } else if (DH_BASE) {
+                        fixAttributes(rec.target);
+                    }
+                }
+            }).observe(document.documentElement, { subtree: true, childList: true, ...(DH_BASE ? { attributes: true, attributeFilter: ['src', 'href'] } : {}) });
             if (DH_BASE) {
                 fixAttributes(document.documentElement);
-                new MutationObserver((records) => {
-                    for (const rec of records) {
-                        if (rec.type === 'childList') rec.addedNodes.forEach(fixAttributes);
-                        else fixAttributes(rec.target);
-                    }
-                }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'href'] });
             }
             mountDebugWidgetAssets();
         }, { once: true });
     } else {
+        applyUivDisabledState(document.documentElement);
         mountDebugWidgetAssets();
     }
 })();

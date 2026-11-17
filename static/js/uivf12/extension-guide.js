@@ -83,6 +83,12 @@
     }
 
     function open(autoDownload = false) {
+        if (typeof document !== 'undefined' && document.documentElement?.classList?.contains('dh-web')) {
+            if (typeof window.dhNotifyOpenxDesktop === 'function') {
+                window.dhNotifyOpenxDesktop(document.getElementById('btnDownloadUivExtension'));
+            }
+            return;
+        }
         const overlay = getOverlay();
         if (!overlay) return;
 

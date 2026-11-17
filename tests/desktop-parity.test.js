@@ -819,3 +819,54 @@ test('英文语言切换：所有首页静态工具卡片、内置工具与内�
         assert.ok(descEn && !/[\u4e00-\u9fa5]/.test(descEn), `${file} missing English description_en`);
     }
 });
+
+test('基座版输入框加号菜单、UI.Vision 本地批脚本/浮窗脚本禁用提示与日志 Token 统计脱敏修复', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { pushLog } = await import('../src/core/log-ring.js');
+    const rootDir = path.resolve(import.meta.dirname, '..');
+
+    // 1. 日志脱敏保留数值型 Token 计数（promptTokens / completionTokens / inputTokens / outputTokens），同时继续脱敏密钥
+    const entry = pushLog({
+        level: 'INFO',
+        category: 'AI',
+        message: 'completion test',
+        detail: {
+            promptTokens: 320,
+            completionTokens: 128,
+            inputTokens: 450,
+            outputTokens: 210,
+            apiKey: 'sk-secret-value',
+            token: 'bearer-secret-token',
+        },
+    });
+    assert.equal(entry.detail.promptTokens, 320);
+    assert.equal(entry.detail.completionTokens, 128);
+    assert.equal(entry.detail.inputTokens, 450);
+    assert.equal(entry.detail.outputTokens, 210);
+    assert.equal(entry.detail.apiKey, '[REDACTED]');
+    assert.equal(entry.detail.token, '[REDACTED]');
+
+    // 2. agent-discussion.js 与 composer-controls.js：首屏未同步 tools_role 时点击 #dcAttach 不抛错，且支持 tools:authchange 动态刷新
+    const agentDiscJs = fs.readFileSync(path.join(rootDir, 'static/js/home/agent-discussion.js'), 'utf8');
+    const composerControlsJs = fs.readFileSync(path.join(rootDir, 'static/js/home/composer-controls.js'), 'utf8');
+    assert.match(agentDiscJs, /const popover = root\?\.querySelector\('\.dc-connector-popover'\);/);
+    assert.match(agentDiscJs, /window\.addEventListener\('tools:authchange'/);
+    assert.match(composerControlsJs, /try \{ window\.HomeAgentDiscussion\?\.closePicker\?\.\(\); \} catch \{\}/);
+
+    // 3. 基座版（dh-web）全面禁用数据抓取页 UI.Vision 批脚本、浮窗脚本与插件下载，并悬停提示下载 OpenX 桌面版
+    const trimCss = fs.readFileSync(path.join(rootDir, 'static/css/dh-web-trim.css'), 'utf8');
+    const dhRuntimeJs = fs.readFileSync(path.join(rootDir, 'static/js/shared/dh-runtime.js'), 'utf8');
+    const uivCopyJs = fs.readFileSync(path.join(rootDir, 'static/js/uivf12/copy.js'), 'utf8');
+    const uivExtGuideJs = fs.readFileSync(path.join(rootDir, 'static/js/uivf12/extension-guide.js'), 'utf8');
+    const openxUrl = 'https://openx.huawei.com/Egypt_CNBG_CS_Tools_Platform/overview';
+
+    assert.ok(trimCss.includes('html.dh-web .btn-batch-uiv-run') && trimCss.includes('html.dh-web .btn-batch-site-console'));
+    assert.ok(dhRuntimeJs.includes(openxUrl), 'dh-runtime.js includes OpenX desktop download URL');
+    assert.ok(dhRuntimeJs.includes('dhOpenxDesktopTooltip') && dhRuntimeJs.includes('dhApplyUivDisabledState'));
+    assert.match(uivCopyJs, /function isDhWebUivDisabled\(/);
+    assert.match(uivCopyJs, /async function runAllUivScriptsDirect[\s\S]{0,160}isDhWebUivDisabled/);
+    assert.match(uivCopyJs, /async function runTestUivScriptsDirect[\s\S]{0,160}isDhWebUivDisabled/);
+    assert.match(uivCopyJs, /async function openSiteConsoleScriptPicker[\s\S]{0,160}isDhWebUivDisabled/);
+    assert.match(uivExtGuideJs, /document\.documentElement\?\.classList\?\.contains\('dh-web'\)/);
+});

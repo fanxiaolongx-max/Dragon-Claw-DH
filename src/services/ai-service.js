@@ -163,7 +163,18 @@ export async function saveProfile(input = {}, idOverride = '') {
         updated_at: now,
     }, ['id']);
     if (merged.isActive) {
-        await activateProfile(merged.id);
+        for (const p of existingList) {
+            if (p.id === merged.id || !p.isActive) continue;
+            await upsertRow('ai_settings_profiles', {
+                id: p.id,
+                name: p.name,
+                provider: p.provider,
+                is_active: 0,
+                config_json: JSON.stringify({ ...p, isActive: false, apiKey: encryptSecret(p.apiKey) }),
+                created_at: p.createdAt || now,
+                updated_at: now,
+            }, ['id']);
+        }
     }
     return { ...(await getPublicSettings()), createdProfileId: merged.id };
 }
@@ -172,6 +183,7 @@ export async function activateProfile(profileId) {
     const profiles = await listProfiles();
     for (const p of profiles) {
         const active = p.id === profileId;
+        if (Boolean(p.isActive) === active) continue;
         await upsertRow('ai_settings_profiles', {
             id: p.id,
             name: p.name,

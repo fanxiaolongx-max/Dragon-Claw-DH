@@ -1075,6 +1075,9 @@
         if (window.UIVCopy && typeof window.UIVCopy.updateUivBatchSpeedButton === 'function') {
             window.UIVCopy.updateUivBatchSpeedButton();
         }
+        if (typeof window.dhApplyUivDisabledState === 'function') {
+            window.dhApplyUivDisabledState(document);
+        }
         setText('.btn-io[onclick="UIVSidebar.exportBackup()"]', t('uiv.repo.export'));
         const importLabel = document.querySelector('label.btn-io');
         if (importLabel) {
