@@ -16,6 +16,7 @@ import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
 import { NETCARE_TOOLS } from './netcare-tools.js';
 import { FOLLOWUP_TOOLS } from './followup-tools.js';
+import { SLA_RULE_TOOLS } from './sla-rule-tools.js';
 
 // ── 应用库目录：模型能查的业务表（其余表——对话、密钥、配置、附件——一律不可查）──
 const TABLE_NOTES = {
@@ -743,6 +744,7 @@ export const TOOLS = [
     },
     ...NETCARE_TOOLS,
     ...FOLLOWUP_TOOLS,
+    ...SLA_RULE_TOOLS,
 ];
 
 export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));

@@ -2450,6 +2450,8 @@ function buildUivBatchMacro(scriptsToRun, groupName, options = {}) {
             { Command: 'echo', Target: `[Site ${groupProgress}] Login probe: ${'${' + loginDetailVar + '}'}`, Value: '', Description: '' },
             { Command: 'endWhile', Target: '', Value: '', Description: '' },
             { Command: 'gotoIf_v2', Target: '${' + siteControlVar + '} == "stop"', Value: 'UIVF12_BATCH_STOPPED', Description: '' },
+            // 登录跳转或站点自己刷新会丢掉打开时装的下载拦截，这里重装（已装则不重复）
+            { Command: 'executeScript', Target: buildUivDownloadRecorderScript({ autoImport }), Value: '', Description: 'Re-install UIVF12 download recorder after login.' },
             { Command: 'echo', Target: `[Site ${groupProgress}] Login detected for ${group.openUrl}`, Value: '', Description: '' }
         );
         pushPanelCommand('站点执行中', `${group.openUrl} 已登录，开始执行 ${group.scripts.length} 个任务`);
@@ -2467,6 +2469,8 @@ function buildUivBatchMacro(scriptsToRun, groupName, options = {}) {
                 { Command: 'executeScript', Target: buildUivBatchControlReadScript(), Value: taskControlVar, Description: 'Check UIVF12 batch control before task.' },
                 { Command: 'gotoIf_v2', Target: '${' + taskControlVar + '} == "stop"', Value: 'UIVF12_BATCH_STOPPED', Description: '' },
                 { Command: 'echo', Target: `[${progress}] Run ${script.name}`, Value: '', Description: '' },
+                // 页面在任务之间可能被站点刷新：没有拦截时脚本照常下载，但数据不会进入自动导入
+                { Command: 'executeScript', Target: buildUivDownloadRecorderScript({ autoImport }), Value: '', Description: `Ensure UIVF12 download recorder before: ${script.name}` },
                 { Command: 'executeScript', Target: buildUivCaptureCountScript(), Value: beforeCaptureVar, Description: `Record capture count before: ${script.name}` },
                 { Command: 'executeScript', Target: buildUivControlledTaskScript(script.code, taskId, script.name), Value: resultVar, Description: `Run controllable UIVF12 script: ${script.name}` },
                 { Command: 'gotoIf_v2', Target: '${' + resultVar + '} == "__UIVF12_STOPPED__"', Value: 'UIVF12_BATCH_STOPPED', Description: '' },
@@ -2623,7 +2627,9 @@ async function openLocalUivRunner(macro, options = {}) {
     // Electron popup windows cannot run UI.Vision's full Chrome extension API.
     // Use the existing sandboxed Dragon browser and its persistent site logins.
     if (await isUivDesktopBrowserAvailable()) {
-        const result = await API.post('/api/uiv/run-uivision-macro', { ...(await buildUivRunPayload(macro)), desktopNative: true });
+        // 带上自动导入会话：桌面端会把运行标签里真实下载完成的 CSV 补传给导入页（页面内拦截失败时兜底）
+        const autoImport = options.autoImport ? { sessionId: options.autoImport.sessionId, token: options.autoImport.token } : undefined;
+        const result = await API.post('/api/uiv/run-uivision-macro', { ...(await buildUivRunPayload(macro)), desktopNative: true, autoImport });
         if (!result.success) throw new Error(result.error || '桌面批处理启动失败');
         return 'desktop-native';
     }
@@ -2652,7 +2658,7 @@ async function runAllUivScriptsDirect(options = {}) {
         };
         registerUivAutoImportBridge(autoImport);
         const macro = buildUivBatchMacro(scope.scripts, scope.groupName, { speed, autoImportSessionId, autoImportToken });
-        const runnerUrl = await openLocalUivRunner(macro, options);
+        const runnerUrl = await openLocalUivRunner(macro, { ...options, autoImport });
         if (!runnerUrl) {
             if (options.scheduled) showToast('⚠️ 定时运行被浏览器拦截，请先手动点击一次“运行批脚本”并允许弹窗。', 'error');
             return false;
@@ -2686,7 +2692,7 @@ async function runTestUivScriptsDirect() {
         };
         registerUivAutoImportBridge(autoImport);
         const macro = buildUivBatchMacro(sampledScripts, '测试批脚本-每站点2个', { speed, autoImportSessionId, autoImportToken });
-        const runnerUrl = await openLocalUivRunner(macro);
+        const runnerUrl = await openLocalUivRunner(macro, { autoImport });
         if (!runnerUrl) return false;
         showToast(`✅ 已打开 UI.Vision 测试批脚本：${sampledScripts.length} 个任务`, 'success');
         showToast(UIVT('uiv.repo.batchTenantWarning'), 'warning');
@@ -3274,12 +3280,28 @@ function wrapMasterScriptWithFloatingLauncher(masterCode, options = {}) {
         return best;
     }
 
-    function metricCellMatches(value, pattern) {
-        const text = value === undefined || value === null ? '' : String(value).trim();
-        const expected = pattern === undefined || pattern === null ? '' : String(pattern);
+    // 与 shared/metric-extraction.js 相同：整串为 [a]|[b] 时任一别名命中即满足
+    function metricConditionAliases(expected) {
+        const parts = expected.trim().split('|').map(function (part) { return part.trim(); });
+        const bracketed = function (part) {
+            const inner = part.slice(1, -1);
+            return part.length >= 2 && part.charAt(0) === '[' && part.charAt(part.length - 1) === ']' && inner.indexOf('[') < 0 && inner.indexOf(']') < 0;
+        };
+        if (parts.length < 2 || !parts.every(bracketed)) return null;
+        return parts.map(function (part) { return part.slice(1, -1).trim(); }).filter(Boolean)
+            .map(function (alias) { return alias === '空' || alias === '非空' ? '[' + alias + ']' : alias; });
+    }
+    function metricSingleCellMatches(text, expected) {
         if (expected === '[空]') return text === '';
         if (expected === '[非空]') return text !== '';
         return text.includes(expected);
+    }
+    function metricCellMatches(value, pattern) {
+        const text = value === undefined || value === null ? '' : String(value).trim();
+        const expected = pattern === undefined || pattern === null ? '' : String(pattern);
+        const aliases = metricConditionAliases(expected);
+        if (aliases) return aliases.some(function (alias) { return metricSingleCellMatches(text, alias); });
+        return metricSingleCellMatches(text, expected);
     }
 
     function metricRowMatches(row, rule) {

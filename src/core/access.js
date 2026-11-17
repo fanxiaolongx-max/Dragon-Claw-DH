@@ -85,6 +85,9 @@ const USER_WRITES = [
     ['*', /^\/monthly-snapshots(?:\/[^/]+)?$/],
     ['*', /^\/ai-report(?:\/.*)?$/],
     ['POST', /^\/uiv\/run-uivision-macro$/],
+    // 运行批脚本时抓取页逐表上传到自动导入会话、导入完成后删除会话：由会话 token 保护，普通账号也要能用
+    ['POST', /^\/uiv-auto-import\/[A-Za-z0-9_-]{4,100}\/datasets$/],
+    ['DELETE', /^\/uiv-auto-import\/[A-Za-z0-9_-]{4,100}$/],
     ['POST', /^\/platform-metrics\/open$/],
     ['POST', /^\/recent-nav$/],
     ['PUT', /^\/sidebar-menu$/],

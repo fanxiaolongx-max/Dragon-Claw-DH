@@ -23,6 +23,7 @@ import {
     analyzeFetchWithAi,
     saveAutoImportDatasets,
     getAutoImportSession,
+    deleteAutoImportSession,
 } from '../services/uiv-service.js';
 
 export async function uivRoutes(fastify) {
@@ -110,9 +111,11 @@ export async function uivAiAdapterRoutes(fastify) {
 }
 
 export async function uivAutoImportRoutes(fastify) {
-    fastify.post('/:sessionId/datasets', async (req) => saveAutoImportDatasets(req.params.sessionId, req.body || {}));
+    const tokenOf = (req) => String(req.query?.token || req.body?.token || '');
+    fastify.post('/:sessionId/datasets', async (req) => saveAutoImportDatasets(req.params.sessionId, req.body || {}, { token: tokenOf(req) }));
+    fastify.delete('/:sessionId', async (req) => deleteAutoImportSession(req.params.sessionId, { token: tokenOf(req) }));
     fastify.get('/:sessionId', async (req, reply) => {
-        const session = await getAutoImportSession(req.params.sessionId);
+        const session = await getAutoImportSession(req.params.sessionId, { token: tokenOf(req) });
         if (!session) return reply.code(404).send({ error: '自动导入会话不存在或已过期' });
         reply.header('Cache-Control', 'no-store');
         return session;

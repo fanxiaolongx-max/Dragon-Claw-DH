@@ -1,12 +1,12 @@
 {
   "zh": [
-    "保险箱（Vault）新增通用 API Key 与 Secret 凭据安全托管，支持独立密文加密存储、界面操作与环境解析。",
-    "完善 iOS App Store 审核与移动端体验，脱敏并优雅格式化网络异常提示，补充合规隐私政策规范与 iPad 适配支持。",
-    "增强智能体技能生态，集成家庭记账账本技能并增加本地执行降级与命令超时保护机制。"
+    "修复 UIVF12 运行批脚本后自动导入收不到数据：抓取页逐表上传时会话改为逐表追加（之前每次上传都会覆盖成空），普通账号也能上传到自己的导入会话；站点打开后刷新或登录跳转时会重新装上下载拦截；导入完成后由服务端直接归档原始表格并清理临时会话。",
+    "数据量大时数据导入页不再卡顿：明细表先显示 200 行、滚动续加，也可一键显示全部；预警指标闪烁 3 次后停住，侧栏头像光环只在加载和悬停时转动，指标栏滚动减半帧率，回到顶部按钮不再随横向滚动反复重排。",
+    "指标规则支持条件值别名 [旧名]|[新名]，任一命中即可取数和高亮；对话新增 @指标规则条件维护，可找出零命中的条件并给出候选新值，批量修改前逐处预览命中行数，改动可按记录回退。"
   ],
   "en": [
-    "Introduce native API Key and Secret credential vault support with encrypted storage, management UI, and runtime injection.",
-    "Improve mobile network resilience and App Store compliance with elegant error masking, privacy policy documentation, and iPad layout support.",
-    "Enhance the agent skills ecosystem with family finance bookkeeper automation, local execution fallbacks, and command timeout protections."
+    "Fixed UIVF12 batch auto import receiving no data: per-table uploads now append to the session instead of overwriting it with an empty list, regular accounts can upload to their own import session, the download capture is re-installed after a site reloads or redirects for login, and the server archives the captured tables and clears the session after import.",
+    "The data import page stays responsive with large data: detail tables show 200 rows first and load more on scroll (or Show all); warnings pulse three times, the sidebar avatar aura spins only on load and hover, the metric ticker runs at half the frame rate, and the back-to-top button no longer re-lays out on horizontal scrolls.",
+    "Metric rules accept condition aliases [old]|[new]; the new @Metric rule conditions skill finds zero-match conditions with candidate values, previews match counts before batch edits and reverts by change ID."
   ]
 }

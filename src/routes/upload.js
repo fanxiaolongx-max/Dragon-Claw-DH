@@ -40,6 +40,7 @@ import {
     removeDraft,
     cleanupDrafts,
 } from '../services/upload-service.js';
+import { getAutoImportSession } from '../services/uiv-service.js';
 
 export async function uploadRoutes(fastify) {
     fastify.get('/history', async (req, reply) => {
@@ -70,6 +71,29 @@ export async function uploadRoutes(fastify) {
         const originalName = fields.originalName?.value || filePart.filename;
         const kind = fields.kind?.value === 'structured' ? 'structured' : 'original';
         return saveFile(req.params.id, { buffer, originalName, filename: filePart.filename }, kind);
+    });
+
+    // UIVF12 自动导入：服务端直接把临时会话里的数据集存成一批原始表格，
+    // 页面不必把全部行下载下来再以 CSV 和工作表各上传一遍。存下的内容与页面上传的一致。
+    fastify.post('/source-batches/from-auto-import', async (req, reply) => {
+        const { sessionId, token, targetMonth, source } = req.body || {};
+        const session = await getAutoImportSession(String(sessionId || ''), { token: String(token || '') });
+        if (!session) return reply.code(404).send({ error: '自动导入会话不存在或已过期', code: 'AUTO_IMPORT_SESSION_MISSING' });
+        if (!(await getImportSettings()).uploadOriginals) return { batchId: null, uploadOriginals: false, files: [] };
+        const batch = await createBatch({ source: source || 'uivf12', targetMonth });
+        const quote = (value) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+        const files = [];
+        for (const dataset of session.datasets || []) {
+            const rows = Array.isArray(dataset.rows) ? dataset.rows : [];
+            if (!rows.length) continue;
+            const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+            const csv = [headers, ...rows.map((row) => headers.map((header) => row[header]))].map((row) => row.map(quote).join(',')).join('\r\n');
+            const name = String(dataset.name || 'dataset.csv').replace(/\.[^.]+$/, '') + '.csv';
+            const item = await saveFile(batch.id, { buffer: Buffer.from(csv, 'utf8'), originalName: name }, 'structured');
+            await saveSheets(item.id, [{ name: 'Captured rows', headers, rows }]);
+            files.push({ id: item.id, name: item.name || name, rows: rows.length });
+        }
+        return { batchId: batch.id, uploadOriginals: true, files };
     });
 
     fastify.put('/source-files/:id/sheets', async (req) => {

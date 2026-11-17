@@ -20,6 +20,8 @@ const GROUPS = [
         tools: ['update_plan', 'ask_user', 'memory'] },
     { id: 'followup', label: '跟进任务', labelEn: 'Follow-ups', note: '只读写本人的跟进任务，提醒发到消息中心', kindLabel: '个人',
         tools: ['followup_create', 'followup_list', 'followup_update', 'followup_close'] },
+    { id: 'sla_rules', label: '数据导入指标规则', labelEn: 'Metric rule conditions', note: '仅管理员：查找条件值、批量修改或加别名、按记录回退；改动前都要确认', kindLabel: '需确认',
+        tools: ['sla_find_metric_rules', 'sla_update_metric_conditions', 'sla_list_metric_rule_changes', 'sla_revert_metric_rule_change'] },
 ];
 const groupOfTool = new Map(GROUPS.flatMap((g) => g.tools.map((name) => [name, g.id])));
 

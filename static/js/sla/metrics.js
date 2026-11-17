@@ -721,17 +721,33 @@ document.addEventListener('DOMContentLoaded', () => {
         else { bar.classList.remove('expanded'); btn.innerHTML = SLAT('sla.sticky.expand'); }
         syncStickyBarSubExpandedState();
     });
-    (function step() {
+    // 每帧读 scrollWidth/clientWidth 会强制重排：只在内容或尺寸变化时量一次。
+    // 没有可滚动的内容、页面不可见时停掉动画循环，有变化再启动。
+    // 每次滚动都会让整页重新合成一帧，所以按 30 帧/秒走（速度不变），每帧开销减半。
+    const TICK_MS = 33;
+    let maxScroll = 0, frame = 0;
+    const measure = () => { maxScroll = Math.max(0, content.scrollWidth - content.clientWidth); wake(); };
+    function wake() { if (!frame && maxScroll > 0 && !document.hidden) frame = requestAnimationFrame(step); }
+    function next() { frame = setTimeout(() => { frame = requestAnimationFrame(step); }, TICK_MS); }
+    function step() {
+        frame = 0;
+        if (document.hidden || maxScroll <= 0) return;
         const hasSubExpanded = (window.expandedSubMetrics && window.expandedSubMetrics.size > 0) ||
             (bar && bar.classList.contains('sub-expanded'));
-        if (!stickyHovered && !stickyExpanded && !hasSubExpanded && content.scrollWidth > content.clientWidth) {
-            currentScroll += scrollDirection * 0.4;
+        if (!stickyHovered && !stickyExpanded && !hasSubExpanded) {
+            currentScroll += scrollDirection * 0.8;
             if (currentScroll <= 0) { currentScroll = 0; scrollDirection = 1; }
-            else if (currentScroll >= content.scrollWidth - content.clientWidth) { currentScroll = content.scrollWidth - content.clientWidth; scrollDirection = -1; }
+            else if (currentScroll >= maxScroll) { currentScroll = maxScroll; scrollDirection = -1; }
             content.scrollLeft = currentScroll;
         } else { currentScroll = content.scrollLeft; }
-        requestAnimationFrame(step);
-    })();
+        next();
+    }
+    if (typeof ResizeObserver === 'function') new ResizeObserver(measure).observe(content);
+    new MutationObserver(measure).observe(content, { childList: true, subtree: true, characterData: true });
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('resize', measure, { passive: true });
+    document.fonts?.ready?.then(measure).catch(() => {});
+    measure();
 });
 
 window.toggleMetricSub = toggleMetricSub;
