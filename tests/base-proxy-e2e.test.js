@@ -5,6 +5,7 @@ import zlib from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import ExcelJS from 'exceljs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.dirname(__dirname);
@@ -266,16 +267,87 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
         const slaList = await (await fetch(`${appUrl}/api/sla/snapshots`)).json();
         assert.equal(slaList.length, 1);
 
-        const yxRes = await fetch(`${appUrl}/api/sla/export-yuxiang`, {
+        const postSla = (route, body) => fetch(`${appUrl}${subPrefix}/api/sla/${route}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                reportMonth: '2026-11',
-                rows: [{ category: 'Rect', name: 'MetricA', value: '98%', target: '95%', status: 'PASS', owner: 'Alice' }],
-            }),
+            body: JSON.stringify(body),
         });
-        const yxBuf = Buffer.from(await yxRes.arrayBuffer());
-        assert.equal(yxBuf.subarray(0, 2).toString(), 'PK'); // ZIP/XLSX magic
+        const yxPayload = {
+            targetMonth: 11,
+            metrics: [{
+                label: '整改',
+                target: '≥ 95',
+                TE: { achv: '98%', score: 2.346 },
+                ORG: { achv: '90%', score: 0, isFailing: true },
+                ET: { achv: '--', score: 0 },
+            }],
+            adjustments: [
+                { label: '人为事故 (含整改逾期、错认漏认)', type: '扣分', unit: 1, TE: { count: 1, score: -1 } },
+                { label: 'Jam宣传跨及产品逃生演练/半年', type: '加分', unit: 2, VDF: { count: 1, score: 2 } },
+            ],
+            totals: {
+                subTotal: { TE: 99.72 },
+                adjustTotal: { TE: -1, VDF: 2 },
+                weightInMonth: { TE: 100 },
+                finalResult: { TE: 98.72 },
+            },
+        };
+        const previewRes = await postSla('preview-yuxiang', yxPayload);
+        assert.equal(previewRes.status, 200);
+        const preview = await previewRes.json();
+        assert.equal(preview.maxCol, 18);
+        assert.equal(preview.rows.length, preview.maxRow);
+        assert.ok(preview.merges.includes('A60:E60'));
+        assert.equal(preview.rows[0][9].val, 'Target\n  (Nov.)');
+        assert.equal(preview.rows[11][9].val, '≥ 95%');
+        assert.equal(preview.rows[11][14].val, '2.35');
+        assert.equal(preview.rows[11][15].val, '0.00');
+        assert.equal(preview.rows[11][15].color, 'FFFF0000');
+        assert.equal(preview.rows[11][16].val, '/');
+        assert.equal(preview.rows[59][14].val, '98.72');
+
+        const yxRes = await postSla('export-yuxiang', {
+            ...yxPayload,
+            overrides: { '12_11': '99%', '12_15': '3.25', '12_16': '', '12_26': 'ignored' },
+        });
+        assert.equal(yxRes.status, 200);
+        assert.match(yxRes.headers.get('content-type'), /spreadsheetml\.sheet/);
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(Buffer.from(await yxRes.arrayBuffer()));
+        const worksheet = workbook.worksheets[0];
+        assert.equal(worksheet.getCell('K12').value, '99%');
+        assert.equal(worksheet.getCell('O12').value, 3.25);
+        assert.equal(worksheet.getCell('O12').numFmt, '0.00');
+        assert.equal(worksheet.getCell('P12').value, '');
+        assert.equal(worksheet.getCell('Z12').value, '[Map:整改]');
+        assert.equal(worksheet.getCell('O38').value, -1);
+        assert.equal(worksheet.getCell('R54').value, 2);
+        assert.equal(worksheet.getCell('O58').value, -1);
+        assert.equal(worksheet.getCell('O60').value, 98.72);
+
+        const mappingUrl = `${appUrl}${subPrefix}/api/sla/template-mapping`;
+        const mapping = await (await fetch(mappingUrl)).json();
+        assert.equal(mapping.find(row => row.r === 12).mapping, '整改');
+        const editedMapping = [
+            { r: 3, sourceR: 12, text: 'Custom rectification', mapping: '自定义整改' },
+            { r: 4, isNew: true, templateSourceR: 3, text: '', mapping: '' },
+            ...mapping.filter(row => ![12, 60].includes(row.r)).map((row, idx) => ({ ...row, r: idx + 5 })),
+        ];
+        const mappingSave = await postSla('template-mapping', editedMapping);
+        assert.equal(mappingSave.status, 200);
+        const savedMapping = await (await fetch(mappingUrl)).json();
+        assert.equal(savedMapping[0].text, 'Custom rectification');
+        assert.equal(savedMapping[0].mapping, '自定义整改');
+        assert.equal(savedMapping[1].text, '');
+        assert.equal(savedMapping.some(row => ['整改', 'SYS_FinalResult'].includes(row.mapping)), false);
+        const editedPreview = await (await postSla('preview-yuxiang', {
+            ...yxPayload,
+            metrics: [{ ...yxPayload.metrics[0], label: '自定义整改' }],
+        })).json();
+        assert.equal(editedPreview.rows[2][2].val, 'Custom rectification');
+        assert.equal(editedPreview.rows[2][14].val, '2.35');
+        assert.equal(editedPreview.rows[59][14].val, '100.00');
+        assert.ok(editedPreview.rows.every(row => row[14].val !== '98.72'));
 
         // 8. Report Dashboard Compressed Save + Owners + Backup + Expedite
         const repPayload = {

@@ -33,6 +33,7 @@ import {
     renameMetricKey,
     readYuxiangTemplateMapping,
     saveYuxiangTemplateMapping,
+    previewYuxiangWorkbook,
     exportYuxiangBuffer,
 } from '../services/sla-service.js';
 
@@ -168,10 +169,7 @@ export async function slaRoutes(fastify) {
         );
     });
 
-    fastify.post('/preview-yuxiang', async (req) => {
-        const buf = await exportYuxiangBuffer(req.body || {});
-        return { success: true, size: buf.length, base64: buf.toString('base64') };
-    });
+    fastify.post('/preview-yuxiang', async (req) => previewYuxiangWorkbook(req.body || {}));
     fastify.post('/export-yuxiang', async (req, reply) => {
         const buf = await exportYuxiangBuffer(req.body || {});
         const fname = encodeURIComponent(req.body?.filename || '每月赛马-分网络-导出.xlsx');

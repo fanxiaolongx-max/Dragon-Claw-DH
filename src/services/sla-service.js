@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { BusinessError } from '../core/errors.js';
 import { optionalDep } from '../core/optional.js';
 import { TEMPLATES_DIR, config } from '../config.js';
 import { isMemoryMode, kvGet, kvSet, selectTable, upsertRow, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
@@ -482,52 +483,257 @@ export async function renameMetricKey(oldKey, newKey, user) {
 }
 
 // ── Yuxiang Template & Export (ExcelJS) ──
-function findYuxiangTemplate() {
-    const candidate = path.join(TEMPLATES_DIR, '每月赛马-分网络.xlsx');
-    return fs.existsSync(candidate) ? candidate : null;
-}
+const YUXIANG_MAPPING_KEY = 'yuxiang_template_mapping';
+const YUXIANG_NETWORKS = ['TE', 'ORG', 'ET', 'VDF'];
+const YUXIANG_TOTALS = [
+    ['SYS_SubTotal', 'subTotal', 37],
+    ['SYS_AdjustTotal', 'adjustTotal', 54],
+    ['SYS_WeightInMonth', 'weightInMonth', 55],
+    ['SYS_FinalResult', 'finalResult', 56],
+];
+const YUXIANG_MAP_TAG = /\[Map:\s*(.+?)\]/;
 
-export async function readYuxiangTemplateMapping() {
-    const templatePath = findYuxiangTemplate();
-    if (!templatePath) return [];
+async function openYuxiangTemplate() {
+    const templatePath = path.join(TEMPLATES_DIR, '每月赛马-分网络.xlsx');
+    if (!fs.existsSync(templatePath)) throw new BusinessError('未找到内置赛马表模板', 500);
     const { default: ExcelJS } = await optionalDep('exceljs', '裕湘模板 Excel 导出');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(templatePath);
-    const sheet = workbook.worksheets[0];
-    if (!sheet) return [];
-    const customMapping = (await kvGet('yuxiang_template_mapping', null)) || {};
-    const items = [];
-    sheet.eachRow((row, rowNumber) => {
-        const first = String(row.getCell(1)?.text || '').trim();
-        const second = String(row.getCell(2)?.text || '').trim();
-        if (rowNumber >= 2 && (first || second)) {
-            items.push({ row: rowNumber, category: first, metric: second, mappedKey: customMapping[`${rowNumber}`] || '' });
-        }
-    });
-    return items;
+    return workbook;
 }
 
-export async function saveYuxiangTemplateMapping(updates = {}) {
-    await kvSet('yuxiang_template_mapping', updates || {});
+function stripYuxiangMapTag(text) {
+    return text.replace(/\s*\[Map:\s*.+?\]/g, '');
+}
+
+function getDefaultYuxiangRows(sheet) {
+    const rows = [];
+    sheet.eachRow((row, r) => {
+        if (r < 3) return;
+        const originalVal = row.getCell(3).text;
+        const text = stripYuxiangMapTag(originalVal).trim();
+        const mapping = (row.getCell(26).text.match(YUXIANG_MAP_TAG)?.[1]
+            ?? originalVal.match(YUXIANG_MAP_TAG)?.[1] ?? '').trim();
+        if (text || mapping) rows[r - 3] = { r, text, mapping, originalVal };
+    });
+    return Array.from(rows, (row, idx) => row || { r: idx + 3, text: '', mapping: '', originalVal: '' });
+}
+
+function normalizeYuxiangRows(updates, defaults) {
+    if (!Array.isArray(updates)) {
+        // 兼容旧基座保存的「行号 → 指标」对象。
+        return defaults.map(row => ({
+            ...row,
+            sourceR: row.r,
+            mapping: typeof updates?.[row.r] === 'string' ? updates[row.r].trim() : row.mapping,
+        }));
+    }
+    return updates.map((update, idx) => {
+        const r = idx + 3;
+        const source = Number(update?.isNew
+            ? update.templateSourceR ?? update.sourceR
+            : update?.sourceR ?? update?.templateSourceR ?? update?.r);
+        const sourceR = defaults[source - 3] ? source : Math.min(r, defaults.length + 2);
+        const text = stripYuxiangMapTag(String(update?.text ?? ''));
+        const mapping = String(update?.mapping ?? '').trim();
+        return { r, sourceR, text, mapping, originalVal: text };
+    });
+}
+
+export async function readYuxiangTemplateMapping() {
+    const [workbook, updates] = await Promise.all([openYuxiangTemplate(), kvGet(YUXIANG_MAPPING_KEY)]);
+    return normalizeYuxiangRows(updates, getDefaultYuxiangRows(workbook.worksheets[0]));
+}
+
+export async function saveYuxiangTemplateMapping(updates) {
+    if (!updates || typeof updates !== 'object') throw new BusinessError('赛马表映射格式无效');
+    await kvSet(YUXIANG_MAPPING_KEY, updates);
     return { success: true };
 }
 
-export async function exportYuxiangBuffer(body = {}) {
-    const templatePath = findYuxiangTemplate();
-    const { default: ExcelJS } = await optionalDep('exceljs', '裕湘模板 Excel 导出');
-    const workbook = new ExcelJS.Workbook();
-    if (templatePath) {
-        await workbook.xlsx.readFile(templatePath);
-    } else {
-        const ws = workbook.addWorksheet('每月赛马-分网络');
-        ws.addRow(['类别', '指标', '数值']);
+function applyYuxiangLayout(sheet, rows, templateLastRow) {
+    const merges = sheet.model.merges.map(range => range.split(':').map(address => sheet.getCell(address)));
+    const bodyMerges = merges.filter(([start]) => start.row >= 3);
+    const columnCount = sheet.columnCount;
+    const sourceRows = new Map();
+    for (let r = 3; r <= templateLastRow; r++) {
+        const row = sheet.getRow(r);
+        const cells = Array.from({ length: columnCount }, (_, idx) => {
+            const cell = row.getCell(idx + 1);
+            return { value: cell.value, style: cell.style };
+        });
+        sourceRows.set(r, { cells, height: row.height, hidden: row.hidden, outlineLevel: row.outlineLevel });
     }
-    const ws = workbook.worksheets[0];
-    const metrics = Array.isArray(body.metrics) ? body.metrics : [];
-    if (metrics.length && ws.rowCount <= 1) {
-        for (const m of metrics) {
-            ws.addRow([m.cat_name || '', m.metric_label || m.name || '', m.raw_val ?? m.num_val ?? '']);
+
+    // 从未修改的模板行取样，再按映射设置重排，避免移动或插入时覆盖后续行的样式。
+    for (const [start, end] of bodyMerges) sheet.unMergeCells(start.address, end.address);
+    for (let r = 3; r <= Math.max(templateLastRow, rows.length + 2); r++) {
+        const row = sheet.getRow(r);
+        const source = sourceRows.get(rows[r - 3]?.sourceR);
+        row.values = [];
+        row.height = source?.height;
+        row.hidden = source?.hidden ?? false;
+        row.outlineLevel = source?.outlineLevel ?? 0;
+        source?.cells.forEach(({ value, style }, idx) => {
+            const cell = row.getCell(idx + 1);
+            cell.value = value;
+            cell.style = style;
+        });
+    }
+    for (const [start, end] of bodyMerges) {
+        let first = null;
+        for (let idx = 0; idx <= rows.length; idx++) {
+            const sourceR = rows[idx]?.sourceR;
+            if (sourceR >= start.row && sourceR <= end.row) {
+                first ??= idx + 3;
+            } else if (first !== null) {
+                const last = idx + 2;
+                if (last > first || end.col > start.col) {
+                    sheet.mergeCellsWithoutStyle(first, start.col, last, end.col);
+                }
+                first = null;
+            }
         }
+    }
+}
+
+function setYuxiangCell(row, col, value, { score = false, missing = false, failing = false } = {}) {
+    const cell = row.getCell(col);
+    const isPercent = typeof value === 'string' && value.endsWith('%');
+    if (value == null || value === '' || value === '--' || (score && missing && Number(value) === 0)) value = '/';
+    if (score && !isPercent && Number.isFinite(Number(value))) {
+        const number = Number(value);
+        value = Math.sign(number) * Math.round((Math.abs(number) + Number.EPSILON) * 100) / 100;
+    }
+    cell.value = value;
+    cell.style = { ...cell.style };
+    if (!isPercent) cell.numFmt = score && typeof value === 'number' ? '0.00' : 'General';
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    if (failing) cell.font = { ...cell.font, color: { argb: 'FFFF0000' }, bold: true };
+}
+
+async function fillYuxiangWorkbook({ metrics, adjustments, totals, targetMonth } = {}) {
+    const [workbook, updates] = await Promise.all([openYuxiangTemplate(), kvGet(YUXIANG_MAPPING_KEY)]);
+    const sheet = workbook.worksheets[0];
+    const defaults = getDefaultYuxiangRows(sheet);
+    const rows = normalizeYuxiangRows(updates, defaults);
+    const hasCustomLayout = Array.isArray(updates);
+    if (hasCustomLayout) applyYuxiangLayout(sheet, rows, defaults.at(-1)?.r ?? 2);
+
+    const mappingToRow = new Map();
+    for (const { r, text, mapping } of rows) {
+        const row = sheet.getRow(r);
+        const label = row.getCell(3).master;
+        label.style = { ...label.style };
+        label.alignment = { horizontal: 'left', vertical: 'middle', wrapText: false };
+        if (hasCustomLayout || label.text.includes('[Map:')) label.value = text;
+        if (updates != null) row.getCell(26).value = mapping ? `[Map:${mapping}]` : null;
+        if (mapping) mappingToRow.set(mapping, r);
+    }
+    const mappedRow = (label, fallback) => mappingToRow.get(label)
+        ?? (hasCustomLayout || mappingToRow.size ? undefined : fallback);
+
+    const monthNumber = Number(targetMonth);
+    const month = ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May.', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'][monthNumber - 1];
+    if (month) {
+        sheet.getCell('J1').value = `Target\n  (${month})`;
+        sheet.getCell('K1').value = `Achivement\n (${month})`;
+        sheet.getCell('O1').value = `Score\n (${month})`;
+    }
+
+    if (Array.isArray(metrics)) metrics.forEach((metric, idx) => {
+        const r = mappedRow(metric?.label, idx + 3);
+        if (!metric || !r) return;
+        const row = sheet.getRow(r);
+        const isPercent = YUXIANG_NETWORKS.some(network => String(metric[network]?.achv).includes('%'));
+        const target = metric.target;
+        setYuxiangCell(row, 10, isPercent && target != null && target !== '' && target !== '--' && !String(target).includes('%')
+            ? `${target}%`
+            : target);
+        YUXIANG_NETWORKS.forEach((network, idx) => {
+            const { achv, score, isFailing } = metric[network] || {};
+            const missing = achv == null || achv === '' || achv === '--';
+            setYuxiangCell(row, 11 + idx, achv, { failing: isFailing });
+            setYuxiangCell(row, 15 + idx, score, { score: true, missing, failing: isFailing });
+        });
+    });
+
+    if (Array.isArray(adjustments)) adjustments.forEach((adjustment, idx) => {
+        const r = mappedRow(adjustment?.label, 38 + idx);
+        if (!adjustment || !r) return;
+        const row = sheet.getRow(r);
+        const label = row.getCell(3).text;
+        const type = ['加分', 'Add'].includes(adjustment.type) ? 'Add' : 'Deduct';
+        const unit = Number(adjustment.unit);
+        sheet.unMergeCells(r, 1, r, 9);
+        sheet.mergeCells(r, 6, r, 9);
+        setYuxiangCell(row, 1, type);
+        setYuxiangCell(row, 2, 'All');
+        setYuxiangCell(row, 3, label);
+        row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle', wrapText: false };
+        setYuxiangCell(row, 4, Number.isFinite(unit) ? `${unit} point/${type === 'Deduct' ? 'case' : 'time'}` : '');
+        setYuxiangCell(row, 5, 'Timely');
+        setYuxiangCell(row, 6, '/');
+        setYuxiangCell(row, 10, '/');
+        YUXIANG_NETWORKS.forEach((network, idx) => {
+            const { score, count } = adjustment[network] || {};
+            const hasScore = Number(score) !== 0 && score != null;
+            setYuxiangCell(row, 11 + idx, hasScore ? count : '/', { failing: score < 0 });
+            setYuxiangCell(row, 15 + idx, hasScore ? score : '/', { score: true, failing: score < 0 });
+        });
+    });
+
+    for (const [label, key, fallback] of YUXIANG_TOTALS) {
+        const r = mappedRow(label, fallback);
+        if (!r || !totals?.[key]) continue;
+        const row = sheet.getRow(r);
+        const text = row.getCell(3).text || row.getCell(1).text;
+        sheet.unMergeCells(r, 1, r, 5);
+        sheet.mergeCells(r, 1, r, 5);
+        setYuxiangCell(row, 1, text);
+        const cell = row.getCell(1);
+        cell.font = { ...cell.font, bold: true };
+        YUXIANG_NETWORKS.forEach((network, idx) => {
+            setYuxiangCell(row, 15 + idx, totals[key][network], { score: true });
+        });
+    }
+
+    sheet.getColumn(3).width = 70;
+    for (let c = 10; c <= 18; c++) sheet.getColumn(c).width = 12;
+    const maxRow = Math.min(sheet.rowCount, Math.max(65, rows.at(-1)?.r ?? 0));
+    return { workbook, sheet, maxRow };
+}
+
+export async function previewYuxiangWorkbook(body) {
+    const { sheet, maxRow } = await fillYuxiangWorkbook(body);
+    const maxCol = 18;
+    const rows = Array.from({ length: maxRow }, (_, r) => Array.from({ length: maxCol }, (_, c) => {
+        const cell = sheet.getCell(r + 1, c + 1);
+        const value = cell.text;
+        return {
+            val: c >= 14 && value.trim() && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : value,
+            isMerged: cell.isMerged,
+            masterAddress: cell.isMerged ? cell.master.address : null,
+            address: cell.address,
+            bg: cell.fill?.fgColor?.argb ?? null,
+            color: cell.font?.color?.argb ?? null,
+            bold: Boolean(cell.font?.bold),
+            align: cell.alignment?.horizontal || 'left',
+        };
+    }));
+    return { maxRow, maxCol, merges: sheet.model.merges, rows };
+}
+
+export async function exportYuxiangBuffer(body = {}) {
+    const { workbook, sheet, maxRow } = await fillYuxiangWorkbook(body);
+    for (const [key, value] of Object.entries(body.overrides || {})) {
+        if (!/^\d+_\d+$/.test(key)) continue;
+        const [r, c] = key.split('_').map(Number);
+        if (r < 1 || r > maxRow || c < 1 || c > 18 || !['string', 'number'].includes(typeof value)) continue;
+        const cell = sheet.getCell(r, c);
+        if (cell.master !== cell) continue;
+        const number = Number(value);
+        cell.value = String(value).trim() && Number.isFinite(number) ? number : value;
     }
     return Buffer.from(await workbook.xlsx.writeBuffer());
 }
