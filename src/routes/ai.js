@@ -21,7 +21,13 @@ import {
     saveConversationList,
 } from '../services/ai-service.js';
 import { runAgent } from '../agent/loop.js';
-import { handleChatUpload } from './agent-extras.js';
+import {
+    handleChatUpload,
+    handleChatUploadStart,
+    handleChatUploadChunk,
+    handleChatUploadComplete,
+    handleChatUploadCancel,
+} from './agent-extras.js';
 import { listSkills } from '../services/skill-service.js';
 import { filterSkillsForUser } from '../services/distribution-service.js';
 import { getAutoSwitch } from '../services/ai-service.js';
@@ -315,6 +321,10 @@ export async function aiRoutes(fastify) {
     });
 
     fastify.post('/uploads', handleChatUpload);
+    fastify.post('/uploads/start', handleChatUploadStart);
+    fastify.post('/uploads/:uploadId/chunk', handleChatUploadChunk);
+    fastify.post('/uploads/:uploadId/complete', handleChatUploadComplete);
+    fastify.delete('/uploads/:uploadId', handleChatUploadCancel);
 
 
     // 首页侧栏/联想的非一期接口：温和返回空列表，确保控制台零 404/500 噪音

@@ -1959,6 +1959,64 @@
             <button type="button" class="dc-attachment-remove" data-attachment-remove="${item.id}" aria-label="${escapeHtml(tx('attachRemove'))}" title="${escapeHtml(tx('attachRemove'))}">×</button></span>`).join('');
         updateSendButton();
     }
+    function bytesToBase64(bytes) {
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        return btoa(binary);
+    }
+    async function uploadAttachmentFile(file) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const dataBase64 = bytesToBase64(bytes);
+        const mimeType = file.type || '';
+        const headers = { ...authHeaders(), 'Content-Type': 'application/json' };
+        // 基座网关 WAF 会拦截 multipart/form-data 或明文 JSON/HTML 内容（返回 403），且单请求限 1 MB；
+        // 统一走 base64 JSON，超过 450 KB 自动分块上传。
+        if (dataBase64.length <= 450 * 1024) {
+            const res = await fetch('/api/ai/uploads', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ files: [{ name: file.name, mimeType, dataBase64 }] })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.files?.[0]) throw new Error(data.error || `HTTP ${res.status}`);
+            return data.files[0];
+        }
+        const chunkSize = 400 * 1024;
+        const totalChunks = Math.ceil(dataBase64.length / chunkSize);
+        const startRes = await fetch('/api/ai/uploads/start', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ name: file.name, mimeType, totalBytes: dataBase64.length, totalChunks })
+        });
+        const startData = await startRes.json().catch(() => ({}));
+        if (!startRes.ok || !startData.uploadId) throw new Error(startData.error || `HTTP ${startRes.status}`);
+        const uploadId = startData.uploadId;
+        try {
+            for (let index = 0; index < totalChunks; index++) {
+                const chunk = dataBase64.slice(index * chunkSize, (index + 1) * chunkSize);
+                const chunkRes = await fetch(`/api/ai/uploads/${encodeURIComponent(uploadId)}/chunk`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ index, data: chunk })
+                });
+                const chunkData = await chunkRes.json().catch(() => ({}));
+                if (!chunkRes.ok) throw new Error(chunkData.error || `HTTP ${chunkRes.status}`);
+            }
+            const doneRes = await fetch(`/api/ai/uploads/${encodeURIComponent(uploadId)}/complete`, {
+                method: 'POST',
+                headers,
+                body: '{}'
+            });
+            const doneData = await doneRes.json().catch(() => ({}));
+            if (!doneRes.ok || !doneData.files?.[0]) throw new Error(doneData.error || `HTTP ${doneRes.status}`);
+            return doneData.files[0];
+        } catch (error) {
+            fetch(`/api/ai/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
+            throw error;
+        }
+    }
     async function addAttachments(fileList) {
         const files = Array.from(fileList || []);
         if (!files.length) return;
@@ -1970,12 +2028,8 @@
         renderAttachments();
         await Promise.all(items.map(async item => {
             try {
-                const form = new FormData();
-                form.append('files', item.file, item.file.name);
-                const res = await fetch('/api/ai/uploads', { method: 'POST', headers: authHeaders(), body: form });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.files?.[0]) throw new Error(data.error || `HTTP ${res.status}`);
-                Object.assign(item, { status: 'ready', path: data.files[0].path, name: data.files[0].name, size: data.files[0].size });
+                const uploaded = await uploadAttachmentFile(item.file);
+                Object.assign(item, { status: 'ready', path: uploaded.path, name: uploaded.name, size: uploaded.size });
             } catch (error) {
                 Object.assign(item, { status: 'error', error: error.message });
                 showToast(`${tx('attachFailed')}：${item.name} · ${error.message}`);

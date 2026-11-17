@@ -96,6 +96,7 @@ const USER_WRITES = [
     ['POST', /^\/desktop-pet\/language$/],
     ['POST', /^\/home\/bootstrap$/],
     ['POST', /^\/ai\/(?:proactive-alert-message|enhance-prompt|chat|uploads|compact|translate)$/],
+    ['*', /^\/ai\/uploads(?:\/.*)?$/],
     ['PUT', /^\/ai\/conversation-list$/],
     ['*', /^\/ai\/sessions(?:\/.*)?$/], // 路由内校验会话归属
     ['POST', /^\/report-msg\/export$/],

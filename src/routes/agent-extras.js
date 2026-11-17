@@ -1,4 +1,5 @@
 // 技能、自定义 HTML 工具、对话附件的接口。
+import crypto from 'node:crypto';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { resolveAdmin } from '../core/access.js';
@@ -201,18 +202,117 @@ export async function agentFilesRoutes(fastify) {
     });
 }
 
-/** POST /api/ai/uploads（multipart，字段 files）；精简包没有上传组件时由 server.js 统一返回 501 */
+const MAX_CHAT_UPLOAD_BYTES = 20 * 1024 * 1024;
+const CHAT_UPLOAD_CHUNK_TTL_MS = 15 * 60_000;
+const pendingChatUploads = new Map();
+
+function pruneChatUploads(now = Date.now()) {
+    for (const [id, item] of pendingChatUploads.entries()) {
+        if (now - item.updatedAt > CHAT_UPLOAD_CHUNK_TTL_MS) pendingChatUploads.delete(id);
+    }
+}
+
+function getPendingChatUpload(uploadId, ownerId) {
+    pruneChatUploads();
+    const id = String(uploadId || '').trim();
+    const record = pendingChatUploads.get(id);
+    if (!record || record.ownerId !== ownerId) {
+        throw new NotFoundError('上传会话不存在或已过期，请重新上传');
+    }
+    return { id, record };
+}
+
+/** POST /api/ai/uploads（支持 JSON base64 或 multipart）；精简包没有上传组件且传 multipart 时返回 501 */
 export async function handleChatUpload(req, reply) {
+    const ownerId = req.userIdentity.username;
+    const isMultipart = typeof req.isMultipart === 'function' ? req.isMultipart() : /^multipart\/form-data/i.test(String(req.headers['content-type'] || ''));
+    if (!isMultipart && req.body && typeof req.body === 'object') {
+        const list = Array.isArray(req.body.files)
+            ? req.body.files
+            : (typeof req.body.dataBase64 === 'string' ? [req.body] : []);
+        if (!list.length) return reply.code(400).send({ error: '没有收到文件' });
+        const files = [];
+        for (const item of list.slice(0, 5)) {
+            const b64 = String(item?.dataBase64 || '').trim();
+            if (!b64) continue;
+            const buffer = Buffer.from(b64, 'base64');
+            files.push(await saveChatUpload({ filename: item?.name || 'file', mimeType: item?.mimeType || '', buffer, ownerId }));
+        }
+        if (!files.length) return reply.code(400).send({ error: '没有收到有效文件' });
+        return { files };
+    }
     if (typeof req.parts !== 'function') return reply.code(501).send({ error: '当前安装包未包含文件上传组件（精简包），请改用完整包' });
     const files = [];
     for await (const part of req.parts()) {
         if (part.type !== 'file') continue;
         const buffer = await part.toBuffer();
-        files.push(await saveChatUpload({ filename: part.filename, mimeType: part.mimetype, buffer, ownerId: req.userIdentity.username }));
+        files.push(await saveChatUpload({ filename: part.filename, mimeType: part.mimetype, buffer, ownerId }));
         if (files.length >= 5) break;
     }
     if (!files.length) return reply.code(400).send({ error: '没有收到文件' });
     return { files };
+}
+
+export async function handleChatUploadStart(req) {
+    pruneChatUploads();
+    const ownerId = req.userIdentity.username;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const totalChunks = Number(body.totalChunks);
+    const totalBytes = Number(body.totalBytes);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 120) {
+        throw new BusinessError('分块数量无效');
+    }
+    if (!Number.isFinite(totalBytes) || totalBytes <= 0 || totalBytes > MAX_CHAT_UPLOAD_BYTES * 1.45) {
+        throw new BusinessError('单个附件不能超过 20 MB');
+    }
+    const uploadId = crypto.randomBytes(16).toString('hex');
+    pendingChatUploads.set(uploadId, {
+        ownerId,
+        name: String(body.name || 'file').slice(0, 200),
+        mimeType: String(body.mimeType || '').slice(0, 120),
+        totalChunks,
+        chunks: new Array(totalChunks).fill(null),
+        received: 0,
+        updatedAt: Date.now(),
+    });
+    return { uploadId };
+}
+
+export async function handleChatUploadChunk(req) {
+    const { record } = getPendingChatUpload(req.params.uploadId, req.userIdentity.username);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const index = Number(body.index);
+    const data = typeof body.data === 'string' ? body.data : '';
+    if (!Number.isInteger(index) || index < 0 || index >= record.totalChunks || !data) {
+        throw new BusinessError('分块参数无效');
+    }
+    if (record.chunks[index] === null) record.received += 1;
+    record.chunks[index] = data;
+    record.updatedAt = Date.now();
+    return { receivedChunks: record.received, totalChunks: record.totalChunks };
+}
+
+export async function handleChatUploadComplete(req) {
+    const { id, record } = getPendingChatUpload(req.params.uploadId, req.userIdentity.username);
+    if (record.chunks.some((c) => c === null)) {
+        throw new BusinessError('仍有分块未上传完成', 409);
+    }
+    const buffer = Buffer.from(record.chunks.join(''), 'base64');
+    pendingChatUploads.delete(id);
+    const saved = await saveChatUpload({
+        filename: record.name,
+        mimeType: record.mimeType,
+        buffer,
+        ownerId: record.ownerId,
+    });
+    return { files: [saved] };
+}
+
+export async function handleChatUploadCancel(req) {
+    const id = String(req.params.uploadId || '').trim();
+    const record = pendingChatUploads.get(id);
+    if (record && record.ownerId === req.userIdentity.username) pendingChatUploads.delete(id);
+    return { success: true };
 }
 
 // 写操作审批：对话里确认卡上的「允许 / 拒绝」

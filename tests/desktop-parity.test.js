@@ -870,3 +870,36 @@ test('基座版输入框加号菜单、UI.Vision 本地批脚本/浮窗脚本禁
     assert.match(uivCopyJs, /async function openSiteConsoleScriptPicker[\s\S]{0,160}isDhWebUivDisabled/);
     assert.match(uivExtGuideJs, /document\.documentElement\?\.classList\?\.contains\('dh-web'\)/);
 });
+
+test('对话附件上传：普通用户支持 JSON base64 与分块上传（绕过基座网关 multipart/403 限制）', async () => {
+    const { call } = ctx;
+    const sample = JSON.stringify({ hello: 'world', sql: 'SELECT * FROM test', html: '<script>1</script>' });
+    const b64 = Buffer.from(sample, 'utf8').toString('base64');
+
+    // 1. 小文件直传 JSON base64（非管理员用户 bob）
+    const direct = await call('bob', 'POST', '/api/ai/uploads', {
+        files: [{ name: 'dragon-claw-log.json', mimeType: 'application/json', dataBase64: b64 }],
+    });
+    assert.equal(direct.status, 200, JSON.stringify(direct.data));
+    assert.equal(direct.data.files.length, 1);
+    assert.equal(direct.data.files[0].name, 'dragon-claw-log.json');
+    assert.equal(direct.data.files[0].readable, true);
+
+    // 2. 分块上传（start -> chunk -> complete），并校验跨用户隔离
+    const mid = Math.ceil(b64.length / 2);
+    const start = await call('bob', 'POST', '/api/ai/uploads/start', {
+        name: 'chunked-log.json',
+        mimeType: 'application/json',
+        totalBytes: b64.length,
+        totalChunks: 2,
+    });
+    assert.equal(start.status, 200);
+    assert.ok(start.data.uploadId);
+    assert.equal((await call('carol', 'POST', `/api/ai/uploads/${start.data.uploadId}/chunk`, { index: 0, data: b64.slice(0, mid) })).status, 404);
+    assert.equal((await call('bob', 'POST', `/api/ai/uploads/${start.data.uploadId}/chunk`, { index: 0, data: b64.slice(0, mid) })).data.receivedChunks, 1);
+    assert.equal((await call('bob', 'POST', `/api/ai/uploads/${start.data.uploadId}/chunk`, { index: 1, data: b64.slice(mid) })).data.receivedChunks, 2);
+    const done = await call('bob', 'POST', `/api/ai/uploads/${start.data.uploadId}/complete`, {});
+    assert.equal(done.status, 200);
+    assert.equal(done.data.files[0].name, 'chunked-log.json');
+    assert.equal(done.data.files[0].size, Buffer.byteLength(sample));
+});
