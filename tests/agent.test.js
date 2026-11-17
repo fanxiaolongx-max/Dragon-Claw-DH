@@ -322,6 +322,8 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const ev6 = await chat('alice', { messages: [{ role: 'user', content: '保存这个脚本' }] });
         assert.deepEqual(ev6.filter((e) => e.type === 'tool_result').map((e) => e.ok), [true, true]);
         assert.match(streamReqs()[2].messages.filter((m) => m.role === 'tool').at(-1).content, /"name":"工单列表"/);
+        // 数据抓取页面默认全员开放，开放时脚本对全员可见（与主线版一致）；这里先收回页面，单看插件分发
+        assert.equal((await fetch(`${url}/api/distribution`, { method: 'PATCH', headers: json(as('alice')), body: JSON.stringify({ kind: 'page', id: 'uivf12', sharedAccess: false }) })).status, 200);
         // 插件/抓取脚本未开放前：bob 在对话与接口里均看不到；开放 cap:float:https://example.invalid 后才可见
         const listScriptsTool = TOOLS.find((t) => t.name === 'list_uiv_scripts');
         const readScriptTool = TOOLS.find((t) => t.name === 'read_uiv_script');
@@ -453,6 +455,14 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const first = await chat('carol', { messages: [{ role: 'user', content: '第 1 问' }] });
         const sid = first.find((e) => e.type === 'done').sessionId;
         assert.equal(first.find((e) => e.type === 'title')?.title, 'OK');
+        // 开场只是打招呼：先不起标题；第一句正经问题再起，且只换一次（与主线版一致）
+        const hello = await chat('dave', { messages: [{ role: 'user', content: '你好' }] });
+        const helloSid = hello.find((e) => e.type === 'done').sessionId;
+        assert.equal(hello.find((e) => e.type === 'title'), undefined);
+        const realAsk = await chat('dave', { sessionId: helloSid, messages: [{ role: 'user', content: '查一下本月指标' }] });
+        assert.equal(realAsk.find((e) => e.type === 'title')?.title, 'OK');
+        const laterAsk = await chat('dave', { sessionId: helloSid, messages: [{ role: 'user', content: '再查上月' }] });
+        assert.equal(laterAsk.find((e) => e.type === 'title'), undefined, '标题只换一次');
         mock.aiRequests.length = 0;
         await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 2 问' }] });
         await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 3 问' }] });

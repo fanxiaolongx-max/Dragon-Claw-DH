@@ -69,7 +69,7 @@ test('render 代码只是把 view 交给模板库，能原样解析回来', () =
 
 test('数据不对时给出能直接改 compute 的提示', () => {
     assert.throws(() => T.render({ template: 'bar-target' }, { a: 1 }, kit), /bar-target.*数据要是数组/);
-    assert.throws(() => T.render({ template: 'bar-target' }, [{ label: 'TE', value: '95%x' }], kit), /value 都不是数字/);
+    assert.throws(() => T.render({ template: 'bar-target' }, [{ label: 'TE', value: '95%x' }], kit), /value 都为空或无法转成数字/);
     assert.throws(() => T.render({ rows: [[{ id: 'a', template: 'line-trend', data: 'trend' }]] }, { rank: [] }, kit), /「trend」.*不存在.*实际只有：rank/);
     assert.throws(() => T.render({ template: 'line-trend' }, { categories: ['7月', '8月'], series: [{ name: 'x', values: [1] }] }, kit), /要和 categories 一样是 2 个/);
     assert.match(T.render({ template: 'bar-basic' }, { missing: true, message: '本月没有导入' }, kit), /本月没有导入/);

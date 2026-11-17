@@ -3,6 +3,11 @@
 (function () {
     'use strict';
     const root = document.documentElement;
+    // 焦点框只给键盘导航：鼠标/触摸点开后按 Esc 关闭弹层时，浏览器会把 Esc 当成键盘操作，
+    // 给仍聚焦的按钮（或弹层关闭后还原焦点的入口按钮）画出焦点框。按 Tab / 方向键时再恢复显示。
+    const NAV_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+    document.addEventListener('pointerdown', () => { root.dataset.pointerFocus = '1'; }, true);
+    document.addEventListener('keydown', event => { if (NAV_KEYS.has(event.key)) delete root.dataset.pointerFocus; }, true);
 
     const ICONS = {
         wide: '<path d="M3.5 5v14M20.5 5v14"/><path d="M7 12h10M9.5 9 6.5 12l3 3m5-6 3 3-3 3"/>',
@@ -374,7 +379,8 @@
                     return sp.replace(/^\/pages\//, '/').replace(/\.html$/i, '').replace(/\/+$/, '') || '/';
                 }
             };
-            const workflow = window.NavWorkflow?.links() || [];
+            const isSuper = typeof window.isNavSuperAdmin === 'function' ? window.isNavSuperAdmin() : (localStorage.getItem('tools_super') === '1');
+            const workflow = (window.NavWorkflow?.links() || []).filter(item => item && (isSuper || typeof window.isPlatformPageShared !== 'function' || window.isPlatformPageShared(item.id)));
             const workflowIds = new Set([...(window.NavWorkflow?.ids || []), 'home']);
             const seenPaths = new Set(workflow.map(item => normalizeNavPath(item.href)));
             const toolLink = (href, label) => `<a class="v2-pop-item" role="menuitem" href="${esc(href)}"><span class="v2-ico v2-app-glyph" data-icon="${appGlyph(href)}"></span><span>${esc(label)}</span></a>`;
@@ -626,42 +632,63 @@
     const dInput = discover.pop.querySelector('input');
     const apps = () => {
         const customTools = Array.isArray(window.__homeCustomTools) ? window.__homeCustomTools : [];
+        const isAdmin = localStorage.getItem('tools_role') === 'admin';
+        const isSuper = typeof window.isNavSuperAdmin === 'function' ? window.isNavSuperAdmin() : (localStorage.getItem('tools_super') === '1');
         const workspaceTools = (window.HomeWorkspace?.getTools?.() || [])
             .filter(item => item && item.href && item.title)
             .map(tool => {
                 let sharedAccess = tool.sharedAccess === true;
                 let shared = tool.shared === true;
                 let builtIn = tool.builtIn === true;
+                let matchedCustom = false;
+                const slug = String(tool.id || '').startsWith('custom:') ? String(tool.id).slice(7) : null;
                 if (customTools.length) {
-                    const slug = String(tool.id || '').startsWith('custom:') ? String(tool.id).slice(7) : null;
                     const match = (slug ? customTools.find(t => t.slug === slug) : null) || customTools.find(t => tool.href && t.href === tool.href);
                     if (match) {
+                        matchedCustom = true;
                         builtIn = match.builtIn === true;
                         if (match.sharedAccess !== undefined) sharedAccess = match.sharedAccess === true;
                         if (match.shared !== undefined) shared = match.shared === true;
                     }
                 }
-                const isShared = Boolean(shared || sharedAccess || (!String(tool.id || '').startsWith('custom:') && builtIn));
-                return { ...tool, builtIn, sharedAccess, shared: isShared };
-            });
+                let pageId = '';
+                if (!slug && !matchedCustom) {
+                    pageId = window.normalizePlatformPageId?.(tool.id || tool.href) || '';
+                    const pageAccess = pageId ? window.getPlatformPageAccess?.(pageId) : null;
+                    if (pageAccess) {
+                        builtIn = true;
+                        sharedAccess = pageAccess.sharedAccess === true;
+                    }
+                }
+                const isShared = Boolean(shared || sharedAccess);
+                return { ...tool, builtIn, pageId, sharedAccess, shared: isShared };
+            })
+            .filter(app => isSuper || !app.pageId || app.sharedAccess);
         const seenHrefs = new Set(workspaceTools.map(t => t.href).filter(Boolean));
-        const isAdmin = localStorage.getItem('tools_role') === 'admin';
-        const isSuper = typeof window.isNavSuperAdmin === 'function' ? window.isNavSuperAdmin() : (localStorage.getItem('tools_super') === '1');
-        const superOnly = isSuper ? [] : ['storage', 'db-explorer', 'netcare-explorer'];
         const extraBuiltins = (typeof NAV_BUILTIN_LINKS !== 'undefined' ? NAV_BUILTIN_LINKS : [])
-            .filter(item => item.href !== '/' && !seenHrefs.has(item.href) && (!item.adminOnly || isAdmin) && !superOnly.includes(item.id))
-            .map(item => ({
-                id: item.id,
-                title: typeof getNavLabel === 'function' ? getNavLabel(item) : (item.label || item.id),
-                description: item.description || (typeof navLocaleText === 'function' ? navLocaleText('平台内置工具与系统功能', 'Platform built-in tool') : '平台内置工具与系统功能'),
-                href: item.href,
-                icon: item.icon || '🧩',
-                tags: item.tags || [],
-                builtIn: true,
-                sharedAccess: true,
-                shared: true,
-                group: (typeof getNavCategoryByItem === 'function' ? getNavCategoryByItem(item.id) : null)?.name || item.defaultCategory || 'business'
-            }));
+            .filter(item => {
+                if (item.href === '/' || seenHrefs.has(item.href) || (item.adminOnly && !isAdmin)) return false;
+                if (isSuper) return true;
+                return typeof window.isPlatformPageShared === 'function'
+                    ? window.isPlatformPageShared(item.id)
+                    : !['storage', 'db-explorer', 'netcare-explorer'].includes(item.id);
+            })
+            .map(item => {
+                const pageAccess = window.getPlatformPageAccess?.(item.id);
+                const isShared = pageAccess ? pageAccess.sharedAccess === true : !['storage', 'db-explorer', 'netcare-explorer'].includes(item.id);
+                return {
+                    id: item.id,
+                    title: typeof getNavLabel === 'function' ? getNavLabel(item) : (item.label || item.id),
+                    description: item.description || (typeof navLocaleText === 'function' ? navLocaleText('平台内置工具与系统功能', 'Platform built-in tool') : '平台内置工具与系统功能'),
+                    href: item.href,
+                    icon: item.icon || '🧩',
+                    tags: item.tags || [],
+                    builtIn: true,
+                    sharedAccess: isShared,
+                    shared: isShared,
+                    group: (typeof getNavCategoryByItem === 'function' ? getNavCategoryByItem(item.id) : null)?.name || item.defaultCategory || 'business'
+                };
+            });
         return [...workspaceTools, ...extraBuiltins];
     };
     function recentApps(all) {
@@ -672,7 +699,7 @@
     }
     const appRow = app => {
         const isSuper = typeof window.isNavSuperAdmin === 'function' ? window.isNavSuperAdmin() : (localStorage.getItem('tools_super') === '1');
-        const isShared = Boolean(app.shared || app.sharedAccess || app.builtIn);
+        const isShared = Boolean(app.shared || app.sharedAccess);
         const badge = (isSuper || isShared)
             ? `<span class="v2-badge-shared-pill ${isShared ? 'is-shared' : 'is-unshared'}">${isShared ? (lang() === 'en-US' ? 'Shared' : '全员开放') : (lang() === 'en-US' ? 'Not shared' : '未全员开放')}</span>`
             : '';
@@ -707,11 +734,11 @@
             html = section(t('recent'), recent) + section(t('popular'), pinned);
         } else if (discover.cat === 'all') html = groups.map(g => section(g, all.filter(app => app.group === g))).join('');
         else if (discover.cat === 'sharedWithAll') {
-            const list = all.filter(app => Boolean(app.shared || app.sharedAccess || app.builtIn));
+            const list = all.filter(app => Boolean(app.shared || app.sharedAccess));
             count = list.length;
             html = section(t('sharedWithAll'), list);
         } else if (discover.cat === 'unsharedOnly') {
-            const list = all.filter(app => !Boolean(app.shared || app.sharedAccess || app.builtIn));
+            const list = all.filter(app => !Boolean(app.shared || app.sharedAccess));
             count = list.length;
             html = section(t('unsharedOnly'), list);
         } else {

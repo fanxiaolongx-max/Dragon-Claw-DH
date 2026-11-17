@@ -1078,6 +1078,43 @@ window.HomeTools = { marketOpened: false };
                 if (!data) return;
                 setTextForCard(card, data, lang);
             });
+            syncPlatformPageCards();
+        }
+
+        function isHomeSuperAdminUser() {
+            if (typeof window.isNavSuperAdmin === 'function') return window.isNavSuperAdmin();
+            return localStorage.getItem('tools_role') === 'admin' && localStorage.getItem('tools_super') !== '0'
+                && (localStorage.getItem('tools_tenant_id') || 'default') === 'default';
+        }
+
+        function syncPlatformPageCards() {
+            const grid = document.getElementById('toolsGrid');
+            if (!grid) return;
+            const isEnglish = window.ToolsI18n?.getLanguage?.() === 'en-US';
+            const superAdmin = isHomeSuperAdminUser();
+            grid.querySelectorAll(':scope > a.tool-card:not([data-custom-tool-card="1"]):not([data-skill-card="1"]):not(.is-shortcut)').forEach(card => {
+                const href = card.getAttribute('href') || '';
+                const access = typeof window.getPlatformPageAccess === 'function' ? window.getPlatformPageAccess(href) : null;
+                if (!access) return;
+                const shared = access.sharedAccess === true;
+                const locked = access.locked === true;
+                if (shared) card.dataset.sharedAccess = '1';
+                else delete card.dataset.sharedAccess;
+                card.classList.toggle('is-shared-access', superAdmin && shared);
+                const title = card.querySelector('.card-title');
+                if (!title) return;
+                title.querySelectorAll('.tool-kind-badge[data-page-badge="1"]').forEach(node => node.remove());
+                if (!superAdmin) return;
+                const badge = document.createElement('span');
+                badge.dataset.pageBadge = '1';
+                badge.className = `tool-kind-badge ${shared ? 'tool-kind-badge--shared' : 'tool-kind-badge--unshared'}`;
+                badge.textContent = locked
+                    ? (isEnglish ? 'Super Admin' : '仅超管')
+                    : shared
+                        ? (isEnglish ? 'Shared' : '全员开放')
+                        : (isEnglish ? 'Not shared' : '未全员开放');
+                title.appendChild(badge);
+            });
             window.HomeWorkspace?.refresh?.();
         }
 
@@ -1160,6 +1197,7 @@ window.HomeTools = { marketOpened: false };
                 renderCustomToolCards(tools);
             } catch (e) {
             }
+            syncPlatformPageCards();
         }
 
         function setupCustomToolUpload() {
@@ -2467,6 +2505,7 @@ window.HomeTools = { marketOpened: false };
         }
 
         window.reloadHomeCustomTools = loadCustomTools;
+        window.syncPlatformPageCards = syncPlatformPageCards;
         window.downloadCustomTool = downloadCustomTool;
         window.renameCustomTool = renameCustomTool;
         window.deleteCustomTool = deleteCustomTool;
@@ -2478,6 +2517,7 @@ window.HomeTools = { marketOpened: false };
         window.addEventListener('tools:authchange', () => {
             loadCustomTools();
         });
+        window.addEventListener('tools:catalog-change', syncPlatformPageCards);
 
         document.addEventListener('DOMContentLoaded', () => {
             applyHomeI18n();

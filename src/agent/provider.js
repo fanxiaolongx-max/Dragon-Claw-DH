@@ -4,6 +4,7 @@
 //   { role: 'assistant', content, toolCalls: [{ id, name, args }] }
 //   { role: 'tool', toolCallId, name, content }
 import { Agent, fetch as undiciFetch } from 'undici';
+import { reasoningDelta, stripReasoningText, createThinkSplitter, settleReasoningOnly, reasoningKey, reasoningHungry, TRUNCATED_FINISH_RE, REASONING_RETRY_TOKENS } from './reasoning.js';
 import { config } from '../config.js';
 import { BusinessError } from '../core/errors.js';
 import { buildCompletionRequest } from '../services/ai-service.js';
@@ -323,9 +324,28 @@ function finalizeRoundMetrics({ settings, system, messages, usage, text, thinkin
     };
 }
 
-export async function streamModel({
- settings, system, messages, tools = [], signal, onDelta = () => {}, onThinking = () => {} }) {
-    const spec = buildCompletionRequest(settings, [], { stream: true, maxTokens: Number(settings.maxOutputTokens) || 4096 });
+/**
+ * 流式调用模型。只输出了思考就被输出上限截断时（推理模型把上限全花在思考上），
+ * 放宽上限重试一次，并记住这个模型，之后的请求直接用放宽后的上限。
+ */
+export async function streamModel(args) {
+    const { settings, signal } = args;
+    const key = reasoningKey(settings);
+    const configured = Number(settings.maxOutputTokens) || 4096;
+    let maxTokens = reasoningHungry.has(key) && configured < REASONING_RETRY_TOKENS ? REASONING_RETRY_TOKENS : configured;
+    let result = await streamModelOnce(args, maxTokens);
+    if (result.reasoningOnly && TRUNCATED_FINISH_RE.test(String(result.stopReason || '')) && maxTokens < REASONING_RETRY_TOKENS && !signal?.aborted) {
+        reasoningHungry.add(key);
+        maxTokens = REASONING_RETRY_TOKENS;
+        result = await streamModelOnce(args, maxTokens);
+    }
+    return result;
+}
+
+async function streamModelOnce({
+ settings, system, messages, tools = [], signal, onDelta = () => {}, onThinking = () => {} }, maxTokens) {
+    const spec = buildCompletionRequest(settings, [], { stream: true, maxTokens });
+    const key = reasoningKey(settings);
     const usage = { inputTokens: 0, outputTokens: 0 };
     let text = '';
     let thinkingText = '';
@@ -368,8 +388,11 @@ export async function streamModel({
         }
         const toolCallsRaw = [...blocks.values()].map((b) => `${b.name}:${b.raw}`).join('\n');
         const toolCalls = [...blocks.values()].map((b) => ({ id: b.id, name: b.name, args: parseArgs(b.raw) }));
+        const settled = settleReasoningOnly(key, { text: stripReasoningText(text), reasoning: thinkingText, toolCalls, finishReason: stopReason });
+        if (settled.text && !stripReasoningText(text)) await onDelta(settled.text);
+        text = settled.text;
         const metrics = finalizeRoundMetrics({ settings, system, messages, usage, text, thinkingText, toolCallsRaw, startedAt, firstTokenAt, chunks, cachedInputTokens, reasoningOutputTokens });
-        return { text, toolCalls, usage, stopReason, toolsSupported: true, metrics };
+        return { text, toolCalls, usage, stopReason, toolsSupported: true, metrics, ...(settled.reasoningOnly ? { reasoningOnly: true } : {}) };
     }
 
     // OpenAI 兼容
@@ -399,6 +422,9 @@ export async function streamModel({
 
     const calls = new Map();
     const tagFilter = createToolTagFilter(onDelta);
+    // 正文里直接写的 think 标签：思考部分归到思考，其余照常经过工具标签过滤器输出
+    const onReasoningText = async (chunk) => { thinkingText += chunk; await onThinking(chunk); };
+    const splitter = createThinkSplitter((chunk) => tagFilter.feed(chunk), onReasoningText);
     for await (const ev of sseEvents(resp.body)) {
         if (ev.error) throw new BusinessError(`模型服务返回错误：${ev.error.message || JSON.stringify(ev.error).slice(0, 200)}`, 502);
         if (ev.usage) {
@@ -412,16 +438,15 @@ export async function streamModel({
         const choice = ev.choices?.[0];
         if (!choice) continue;
         const d = choice.delta || {};
-        const thinking = d.reasoning_content || d.reasoning;
-        if (typeof thinking === 'string' && thinking) {
+        const thinking = reasoningDelta(d);
+        if (thinking) {
             markToken();
-            thinkingText += thinking;
-            await onThinking(thinking);
+            await onReasoningText(thinking);
         }
         if (typeof d.content === 'string' && d.content) {
             markToken();
             text += d.content;
-            await tagFilter.feed(d.content);
+            await splitter.push(d.content);
         }
         const deltaCalls = Array.isArray(d.tool_calls) ? d.tool_calls : [];
         const deltaSig = extractThoughtSignature(d) || extractThoughtSignature(choice);
@@ -471,6 +496,8 @@ export async function streamModel({
         ...(c.providerSpecificFields ? { providerSpecificFields: c.providerSpecificFields } : {}),
     })).filter((c) => c.name);
 
+    await splitter.flush();
+    text = stripReasoningText(text);
     // 容错兜底：GLM 等国产大模型长文本多轮后可能退化为直接在文本中吐出 <tool_call> XML
     let hasFallback = false;
     if (!toolCalls.length && (text.includes('<tool_call>') || text.includes('<|tool_call|>') || text.includes('<tool_call'))) {
@@ -481,8 +508,12 @@ export async function streamModel({
             hasFallback = true;
         }
     }
+    const settled = settleReasoningOnly(key, { text, reasoning: thinkingText, toolCalls, finishReason: stopReason });
+    // 网关把整段回答归进了思考字段：当正文补发给前端
+    if (settled.text && !text) await tagFilter.feed(settled.text);
+    text = settled.text;
     await tagFilter.flush(hasFallback);
 
     const metrics = finalizeRoundMetrics({ settings, system, messages, usage, text, thinkingText, toolCallsRaw, startedAt, firstTokenAt, chunks, cachedInputTokens, reasoningOutputTokens });
-    return { text, toolCalls, usage, stopReason, toolsSupported: used.tools, metrics };
+    return { text, toolCalls, usage, stopReason, toolsSupported: used.tools, metrics, ...(settled.reasoningOnly ? { reasoningOnly: true } : {}) };
 }

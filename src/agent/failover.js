@@ -21,7 +21,7 @@ export function isSwitchable(error) {
 }
 
 export function orderCandidates(primary, profiles, autoSwitch) {
-    const others = autoSwitch ? profiles.filter((p) => p.id !== primary.id && p.apiKey) : [];
+    const others = autoSwitch ? profiles.filter((p) => p.id !== primary.id && (p.apiKey || p.authMode === 'none')) : [];
     const all = [primary, ...others];
     const healthy = all.filter((p) => !isOpen(p.id));
     return healthy.length ? healthy : all;

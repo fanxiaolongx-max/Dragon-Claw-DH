@@ -30,8 +30,9 @@ import {
 } from './agent-extras.js';
 import { listSkills } from '../services/skill-service.js';
 import { filterSkillsForUser } from '../services/distribution-service.js';
-import { getAutoSwitch } from '../services/ai-service.js';
-import { prepareContext, compactSession, generateTitle } from '../services/conversation-service.js';
+import { getAutoSwitch, hasUsableCredentials } from '../services/ai-service.js';
+import { formatTestFailure } from '../services/ai-test-diagnostics.js';
+import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
 import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
@@ -49,7 +50,7 @@ export async function aiRoutes(fastify) {
                 label: p.name || p.model,
                 provider: p.provider,
                 active: Boolean(p.isActive),
-                hasApiKey: Boolean(p.apiKey),
+                hasApiKey: hasUsableCredentials(p),
             })),
         };
     });
@@ -125,22 +126,30 @@ export async function aiRoutes(fastify) {
         const lastUserMsg = [...messages].reverse().find((m) => m?.role === 'user');
         const userText = String(lastUserMsg?.content || body.message || '').trim();
         let sessionId = body.sessionId ? String(body.sessionId) : '';
+        let existingSession = null;
         if (sessionId) {
-            const existing = await getSession(sessionId);
-            if (existing && existing.owner !== ownerId) return reply.code(404).send({ error: '会话不存在' });
+            existingSession = await getSession(sessionId);
+            if (existingSession && existingSession.owner !== ownerId) return reply.code(404).send({ error: '会话不存在' });
         }
+        // 标题只取用户的话，不带附件清单
+        const questionText = userText.split('📎 附件：')[0];
+        const plainTitle = questionText.replace(/\s+/g, ' ').trim().slice(0, 40);
+        const probeOnly = isTrivialProbe(questionText);
 
         let createdNow = false;
         if (persist && !sessionId) {
             createdNow = true;
             const created = await saveSession({
                 ownerId,
-                // 标题只取用户的话，不带附件清单
-                title: userText.split('📎 附件：')[0].replace(/\s+/g, ' ').trim().slice(0, 40) || '新对话',
-                metadata: { pagePath: body.pagePath || '/' },
+                title: plainTitle || '新对话',
+                // 开场只是打招呼：先用原话当标题，记下来，等第一句正经问题再换
+                metadata: { pagePath: body.pagePath || '/', ...(probeOnly ? { probeTitle: plainTitle || '新对话' } : {}) },
             });
             sessionId = created.id;
         }
+        // 之前的标题来自开场试探、用户也没改过名：这一句是正经问题就重新起标题
+        const retitle = Boolean(persist && existingSession && !probeOnly && questionText.trim()
+            && existingSession.metadata?.probeTitle && existingSession.metadata.probeTitle === existingSession.title);
         if (persist && sessionId && userText) {
             await appendMessage(sessionId, 'user', userText);
         }
@@ -164,7 +173,7 @@ export async function aiRoutes(fastify) {
 
         const profiles = await listProfiles();
         const selected = profiles.find((p) => p.id === body.modelId) || profiles.find((p) => p.isActive) || profiles[0];
-        if (!selected?.apiKey) {
+        if (!selected || !hasUsableCredentials(selected)) {
             const fallbackReply = [
                 '还没有配置可用的大模型，所以暂时不能对话。',
                 '',
@@ -204,7 +213,7 @@ export async function aiRoutes(fastify) {
 
         try {
             // 新对话：和回答并行地让模型起一个短标题
-            const titlePromise = createdNow && userText ? generateTitle({ settings: selected, text: userText.split('📎 附件：')[0] }) : null;
+            const titlePromise = ((createdNow && userText && !probeOnly) || retitle) ? generateTitle({ settings: selected, text: questionText }) : null;
             const context = persist && sessionId
                 ? await prepareContext({ sessionId, history, settings: selected, emit: write })
                 : { history, summary: '' };
@@ -236,11 +245,12 @@ export async function aiRoutes(fastify) {
                     ...(res.events.length ? { events: res.events } : {}),
                 });
             }
-            addUsage(res.usage, usedModel);
+            await addUsage(res.usage, usedModel);
             if (titlePromise) {
-                const title = await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))]);
+                const title = (await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))])) || (retitle ? plainTitle : '');
                 if (title) {
-                    await saveSession({ id: sessionId, title });
+                    // saveSession 会按传入值覆盖置顶 / 归档，已有会话要带上原状态
+                    await saveSession({ id: sessionId, title, ...(retitle ? { archived: existingSession.archived, pinned: existingSession.pinned, metadata: { probeTitle: '' } } : {}) });
                     write({ type: 'title', title, sessionId });
                 }
             }
@@ -275,7 +285,7 @@ export async function aiRoutes(fastify) {
         if (!session || session.owner !== ownerOf(req)) return reply.code(404).send({ error: '会话不存在' });
         const profiles = await listProfiles();
         const settings = profiles.find((p) => p.id === req.body?.modelId) || profiles.find((p) => p.isActive) || profiles[0];
-        if (!settings?.apiKey) return reply.code(400).send({ error: '还没有配置模型，无法压缩对话' });
+        if (!settings || !hasUsableCredentials(settings)) return reply.code(400).send({ error: '还没有配置模型，无法压缩对话' });
         return compactSession({ sessionId, settings });
     });
 
@@ -354,7 +364,7 @@ export async function aiSettingsRoutes(fastify) {
         error: '已取消模型名称映射，对话直接显示真实模型名称',
     }));
 
-    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models'];
+    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models', 'authMode', 'customAuthHeader'];
     const handleProfileTest = async (req, reply) => {
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const paramId = String(req.params?.profileId || body.profileId || '').trim();
@@ -380,7 +390,13 @@ export async function aiSettingsRoutes(fastify) {
             messages: [{ role: 'user', content: 'Hi, please reply OK.' }],
             maxTokens: 16,
         });
-        if (!res.ok) return reply.code(400).send({ success: false, error: res.error, model: res.model });
+        if (!res.ok) {
+            // 失败详情：请求地址、HTTP 状态、上游原文与排查建议（全部脱敏）
+            const profilesNow = await listProfiles();
+            const target = profilesNow.find((p) => p.id === targetProfileId) || profilesNow.find((p) => p.isActive) || {};
+            const secrets = [...profilesNow.map((p) => p.apiKey), config.secretKey].filter(Boolean);
+            return reply.code(400).send(formatTestFailure(res, target, { secrets, request: { model: res.model, maxTokens: 16, stream: false, authMode: target.authMode || 'bearer' } }));
+        }
         return { success: true, model: res.model, latencyMs: res.latencyMs, reply: res.text };
     };
 

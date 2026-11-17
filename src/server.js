@@ -31,7 +31,7 @@ import { vaultRoutes } from './routes/vault.js';
 import { aiBiRoutes } from './routes/ai-bi.js';
 import { recordAuditOnce, clientIp } from './services/audit-service.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
-import { isSuperUser, isShared, isAnyShared } from './services/distribution-service.js';
+import { isSuperUser, isShared, isAnyShared, normalizePageId, canAccessPage, canAccessApi, pageSharedByDefault } from './services/distribution-service.js';
 import { builtinTool } from './services/custom-tool-service.js';
 
 const gzipAsync = promisify(zlib.gzip);
@@ -285,6 +285,21 @@ export async function createServer() {
                     );
                 }
             }
+            // 平台原生页面（数据导入、报表等）：未向全员开放时只有超级管理员能打开
+            if (identity.identified && normalizePageId(pathname)) {
+                if (await resolveAdmin(identity)) {
+                    identity.isAdmin = true;
+                    identity.isSuper = true;
+                    identity.role = 'admin';
+                }
+                // 读不到开放名单（如应用库暂不可用）时按页面默认值放行：页面里的数据接口照样要过存储，不会因此泄露
+                const pageAllowed = isSuperUser(identity) || await canAccessPage(pathname, identity).catch(() => pageSharedByDefault(pathname));
+                if (!pageAllowed) {
+                    return reply.code(403).type('text/html; charset=utf-8').send(
+                        phase2PlaceholderHtml('页面未开放').replace(/Web 版暂未开放[^<]*/g, '该页面尚未向全员开放，仅超级管理员可用'),
+                    );
+                }
+            }
             return;
         }
         if (/^\/(?:healthz|health|ping)$/.test(apiPath)) return;
@@ -308,6 +323,10 @@ export async function createServer() {
         if (!isSuperUser(identity) && !(await builtinApiAllowed(apiPath, req.method))) {
             pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 被拒绝：内置工具尚未向全员开放`, requestId: req.requestId, userId: identity.username });
             return reply.code(403).send({ error: '该内置工具尚未向全员开放，仅超级管理员可用', code: 'TOOL_NOT_SHARED', requestId: req.requestId });
+        }
+        if (!isSuperUser(identity) && !(await canAccessApi(apiPath, req.method, identity))) {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `${req.method} ${req.url} 被拒绝：页面尚未向全员开放`, requestId: req.requestId, userId: identity.username });
+            return reply.code(403).send({ error: '该页面尚未向全员开放，仅超级管理员可用', code: 'PAGE_NOT_SHARED', requestId: req.requestId });
         }
     });
 

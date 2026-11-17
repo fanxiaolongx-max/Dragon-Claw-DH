@@ -76,6 +76,10 @@ export async function compactSession({ sessionId, settings }) {
     return { performed: true, summarized: pending.length, summary, beforeTokens, afterTokens: estimateTokens(summary) };
 }
 
+// 「你好」「1+1」「测试」这类开场试探不拿来当标题，等第一句正经问题再起（与主线版 ai-chat-repository 一致）
+const TRIVIAL_PROBE_RE = /^(?:1\s*\+\s*1(?:\s*=\s*\??)?|你好|您好|hi|hello|hey|在吗|在不在|测试|test|ping|喂|哈喽)[!！?？。.\s]*$/i;
+export const isTrivialProbe = (text) => TRIVIAL_PROBE_RE.test(String(text || '').trim());
+
 /** 用模型给新对话起一个短标题；失败返回空串 */
 export async function generateTitle({ settings, text }) {
     const res = await callAiCompletion({

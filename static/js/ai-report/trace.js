@@ -23,6 +23,22 @@
         const list=traces.get(cellId)||[],entry={id:'t'+(++seq),at:new Date().toISOString(),...safe(item)};list.push(entry);
         if(list.length>LIMIT)list.splice(0,list.length-LIMIT);traces.set(cellId,list);changed(cellId);return entry;
     }
+    // Shrink large /run-data dictionaries inside trace logs only; live Worker input remains untouched.
+    function compactTraceResponse(path,value){
+        if(path!=='/api/ai-report/run-data'||!value||typeof value!=='object'||!value.input||typeof value.input!=='object')return value;
+        const pickKeys=(dict,keep)=>{if(!dict||typeof dict!=='object')return dict;const keys=Object.keys(dict);if(keys.length<=60)return dict;const out={};for(const k of keys)if(keep.has(k))out[k]=dict[k];const omitted=keys.length-Object.keys(out).length;if(omitted>0)out.__omittedOtherMetrics=omitted;return out;};
+        const input=Object.fromEntries(Object.entries(value.input).map(([id,src])=>{
+            if(!src||typeof src!=='object')return [id,src];
+            const keep=new Set((src.metrics||[]).flatMap(m=>[m?.label,m?.key]).filter(Boolean));
+            const next={...src};
+            if(Array.isArray(next.rows)&&next.rows.length>30)next.rows=[...next.rows.slice(0,30),{__truncatedRows:next.rows.length-30}];
+            if(next.values)next.values=pickKeys(next.values,keep);
+            if(next.targets)next.targets=pickKeys(next.targets,keep);
+            if(next.rules)next.rules=pickKeys(next.rules,keep);
+            return [id,next];
+        }));
+        return {...value,input};
+    }
     async function post(cellId,label,path,body,{signal}={}){
         const record=enabled,started=Date.now(),run={stage:'connecting',name:'',started};
         active.set(cellId,run);progressChanged(cellId);
@@ -37,10 +53,11 @@
         try{
             const reply=await API.post(path,{...body,_stream:true,...(record?{_debug:true}:{})},{onEvent,signal});
             const steps=reply?._trace,request=reply?._request;
+            const rounds=Array.isArray(reply?._rounds)&&reply._rounds.length?safe(reply._rounds):undefined;
             // 每轮模型调用的耗时与速度：攒到这个格子上，由 app.js 的 aiStep 挂到本次 AI 回复（回复下方显示 最低/平均/最高 tok/s）
-            if(Array.isArray(reply?._rounds)&&reply._rounds.length)pendingRounds.set(cellId,[...(pendingRounds.get(cellId)||[]),...reply._rounds]);
+            if(rounds)pendingRounds.set(cellId,[...(pendingRounds.get(cellId)||[]),...reply._rounds]);
             if(reply&&typeof reply==='object'){delete reply._trace;delete reply._request;delete reply._rounds;}
-            if(entry)Object.assign(entry,{status:'success',ms:Date.now()-started,steps:Array.isArray(steps)?steps:entry.steps,request:request??entry.request,response:safe(reply)});
+            if(entry)Object.assign(entry,{status:'success',ms:Date.now()-started,steps:Array.isArray(steps)?steps:entry.steps,request:request??entry.request,response:safe(compactTraceResponse(path,reply)),...(rounds?{rounds}:{})});
             return reply;
         }catch(error){
             if(entry)Object.assign(entry,{status:'error',ms:Date.now()-started,steps:Array.isArray(error.body?._trace)?error.body._trace:entry.steps,request:error.body?._request??entry.request,response:safe(error.body??null),httpStatus:error.status,error:safe(error.message||String(error))});
@@ -85,13 +102,20 @@
         const round1=value=>Math.round(value*10)/10;
         return {rounds:valid.length,minTps:speeds.length?round1(Math.min(...speeds)):0,avgTps:speeds.length?round1(gen>0?out/(gen/1000):speeds.reduce((a,b)=>a+b,0)/speeds.length):0,maxTps:speeds.length?round1(Math.max(...speeds)):0,inputTokens:valid.reduce((sum,round)=>sum+(Number(round.inputTokens)||0),0),outputTokens:out,totalMs:valid.reduce((sum,round)=>sum+(Number(round.ms)||0),0)};
     }
-    // 导出开头的统计表：每条带速度的 AI 回复一行；若直接重跑/编译没有 chat 气泡，也从 trace 的 AI 步骤兜底统计
+    // 导出开头的统计表：每条带速度的 AI 回复一行；没有对话气泡时用每条记录的模型轮次，再不行从 trace 的 AI 步骤兜底统计
     function modelStats(chat=[],entries=[],fallbackQuestion=''){
         const rows=[];let question=String(fallbackQuestion||'').slice(0,200);
         for(const item of chat||[]){
             if(item?.role==='user'){question=String(item.text||'').slice(0,200);continue;}
             const summary=speedSummary(item?.rounds);
             if(summary)rows.push({question,...summary,calls:item.rounds.map(round=>({index:round.index,at:round.at,model:round.model,provider:round.provider,finishReason:round.finishReason,inputTokens:round.inputTokens,outputTokens:round.outputTokens,estimated:Boolean(round.estimated),ttftMs:round.ttftMs,ms:round.ms,tps:round.tps}))});
+        }
+        // 没有对话气泡：先用每条记录保存的模型轮次，仍没有再从 AI 步骤统计
+        if(!rows.length){
+            for(const entry of entries||[]){
+                const summary=speedSummary(entry?.rounds);
+                if(summary)rows.push({question:String(entry.label||question||'').slice(0,200),...summary,calls:entry.rounds.map((round,idx)=>({index:round.index??idx+1,at:round.at,model:round.model,provider:round.provider,finishReason:round.finishReason,inputTokens:round.inputTokens,outputTokens:round.outputTokens,estimated:Boolean(round.estimated),ttftMs:round.ttftMs,ms:round.ms,tps:round.tps}))});
+            }
         }
         if(!rows.length){
             let idx=0;

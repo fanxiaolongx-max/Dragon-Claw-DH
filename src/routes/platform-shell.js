@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config, STATIC_DIR } from '../config.js';
-import { filterCapabilitiesForUser, setShared } from '../services/distribution-service.js';
+import { filterCapabilitiesForUser, setShared, setPageAccess, listPages } from '../services/distribution-service.js';
 import { listSkills } from '../services/skill-service.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { pushLog, listLogs } from '../core/log-ring.js';
@@ -600,11 +600,18 @@ export async function platformShellRoutes(fastify) {
         const identity = resolveRequestIdentity(req);
         if (!identity.isSuper) return reply.code(403).send({ error: '只有超级管理员可以设置全员开放' });
         const { kind, id, sharedAccess } = req.body || {};
+        // 平台原生页面（与主线版 kind:'page' 一致）
+        if (kind === 'page' && typeof id === 'string' && typeof sharedAccess === 'boolean') {
+            const page = await setPageAccess(id, sharedAccess);
+            return { sharedAccess: page.sharedAccess, page };
+        }
         if (!['skill', 'cap'].includes(kind) || typeof id !== 'string' || typeof sharedAccess !== 'boolean') return reply.code(400).send({ error: '开放设置无效' });
         if (kind === 'skill' && !(await listSkills()).some((item) => item.id === id)) return reply.code(404).send({ error: '技能不存在' });
         return { sharedAccess: await setShared(kind, id, sharedAccess) };
     });
     fastify.get('/api/distribution/personal', async () => ({ entries: {} }));
+    // 平台原生页面的开放状态：前端据此显示「全员开放 / 仅超管」标记、隐藏未开放的页面
+    fastify.get('/api/distribution/pages', async (req) => ({ pages: await listPages(resolveRequestIdentity(req)) }));
     fastify.get('/api/hosted-apps/preview', async () => ({ apps: [] }));
     fastify.get('/api/desktop-pet/language', async () => ({ lang: 'zh-CN' }));
     fastify.post('/api/desktop-pet/language', async (req) => ({ success: true, lang: req.body?.language || req.body?.lang || 'zh-CN' }));

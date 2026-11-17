@@ -10,7 +10,7 @@ import { saveCustomTool, listCustomTools } from '../services/custom-tool-service
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
 import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory, uivScriptOrigin } from '../services/uiv-service.js';
-import { filterSkillsForUser, filterUivScriptsForUser } from '../services/distribution-service.js';
+import { filterSkillsForUser, filterUivScriptsForUser, canAccessAnyPage } from '../services/distribution-service.js';
 import { sendExpediteNotification } from '../services/report-service.js';
 import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
@@ -313,7 +313,11 @@ export const TOOLS = [
         name: 'get_report_overview',
         description: '取最新一期（或指定 snapshot_id）报表看板入库数据的概览：总分、各分类得分、全部指标及未达标情况。回答“本月指标怎么样”“哪些没达标”这类问题时先调用它。',
         parameters: { type: 'object', properties: { snapshot_id: { type: 'string', description: '可选，默认最新一期' } } },
-        async run(args) {
+        async run(args, ctx) {
+            // 与页面权限一致：报表、数据导入、月报、大屏都没向全员开放时，普通账号不能通过对话读报表
+            if (!(await canAccessAnyPage(['report', 'sla', 'monthly', 'bigscreen'], ctx?.identity))) {
+                return { ok: false, summary: '报表未开放', content: '报表相关页面尚未向全员开放，只有超级管理员可以查询报表数据。' };
+            }
             const where = args.snapshot_id ? `\`snapshot_id\` = ${sqlVal(String(args.snapshot_id))}` : '';
             const snaps = await selectTable('report_snapshots', {
                 columns: ['id', 'snapshot_id', 'month', 'created_at', 'standard_total_score'],

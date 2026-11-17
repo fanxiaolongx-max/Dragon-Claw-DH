@@ -331,6 +331,8 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal(prefMiss.data, null);
 
         // ── 14. 插件与脚本全员开放真控：预置 43 个抓取脚本未开放前普通用户一个都看不到；开放指定站点后只返回该站点脚本 ──
+        // 数据抓取页面默认全员开放，开放时脚本全员可见（与主线版一致）；先收回页面，单看插件分发
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'page', id: 'uivf12', sharedAccess: false })).status, 200);
         assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.scripts.length, 0);
         assert.equal((await call('bob', 'GET', '/api/home/capabilities')).data.groups.length, 0);
         await call('alice', 'POST', '/api/uiv/scripts', [{ id: 's-cap-check', name: '示例抓取', url: 'https://cap.example.invalid/api/list', method: 'GET', code: 'fetch("https://cap.example.invalid/api/list")' }]);

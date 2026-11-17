@@ -145,7 +145,8 @@ test('Skill Hub shared badges & category filter chips for Plugins and Tools in d
         const unsharedTool = tools.find(t => t.id === 'custom:tool-unshared');
 
         assert.ok(sharedTool.badges.includes('全员开放'), 'shared custom tool should have 全员开放 badge');
-        assert.ok(sharedTool.extraCats.includes('sharedWithAll'), 'shared custom tool should have sharedWithAll in extraCats');
+        // 「工具」标签底部的「工具来源」已有「全员开放」筛选，顶部分类栏不再重复（与主线版一致）
+        assert.ok(!sharedTool.extraCats.includes('sharedWithAll'), 'shared tools are filtered by the source filter, not a duplicate top chip');
         assert.equal(sharedTool.sharedAccess, true);
 
         assert.ok(unsharedTool.badges.includes('未全员开放'), 'unshared custom tool should have 未全员开放 badge for superadmin');

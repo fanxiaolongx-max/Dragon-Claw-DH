@@ -1,8 +1,8 @@
 {
   "zh": [
-    "历史快照明细去重存储：快照不再每份都内嵌全部源表行，相同内容的表按内容压缩只存一份（放在已有的键值表里，升级不需要执行数据库脚本）；经基座写入的数据量随之大幅减少。旧快照在后台逐条转换，每条先校验能完整还原再写回。月报资料库读取单张表时只读那一份快照，不再把全部快照连同明细一起读出。"
+    "与桌面版双向对齐：模型思考内容不再混进回答（识别各家思考字段和 think 标签，只出思考被截断时自动放宽上限重试）；模型方案可选认证方式（bearer / x-api-key / api-key 等），测试连接失败时给出地址、状态、上游原文和排查建议，密钥不回显；数据导入、报表、月报等平台页面可由超级管理员收回「全员开放」，收回后页面和背后接口一并拦截；开场打招呼不再当对话标题；技能中心可直接上传技能包；修复「Anthropic API Key」认证选项未生效。"
   ],
   "en": [
-    "Deduplicated snapshot detail storage: snapshots no longer embed every source row; identical tables are compressed and stored once (in the existing key-value table, so upgrading needs no database script), which greatly reduces data written through the base. Older snapshots are converted in the background after verifying they restore exactly. The monthly report library now reads only the snapshot it needs instead of every snapshot with its rows."
+    "Two-way alignment with the desktop edition: model reasoning no longer leaks into answers (all common reasoning fields and think tags are recognised, with one retry at a higher limit when only reasoning was produced); model profiles can choose the auth header (bearer / x-api-key / api-key, etc.), and failed connection tests show the endpoint, status, upstream body and a hint with keys redacted; super admins can withdraw platform pages such as data import, reports and monthly reports from everyone, blocking both the page and its APIs; greeting-only first messages no longer become chat titles; skills can be uploaded from the Skill Hub; fixed the Anthropic API Key auth option not taking effect."
   ]
 }

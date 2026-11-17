@@ -33,7 +33,78 @@ const NAV_BUILTIN_LINKS = [
     { id: 'db-explorer', href: '/db-explorer', icon: '🗄️', label: '数据探索', labelKey: 'nav.dbExplorer', defaultCategory: 'system', match: p => p.startsWith('/db-explorer') },
     // 数字人基座的 NetCare 业务库探查：接口第一期只开放给管理员，普通账号不显示入口
     { id: 'netcare-explorer', href: '/netcare-explorer', icon: '🧭', label: 'NetCare 数据探查', labelEn: 'NetCare Explorer', labelKey: 'nav.netcareExplorer', defaultCategory: 'system', adminOnly: true, match: p => p.startsWith('/netcare-explorer') }
-].filter(item => !window.dhIsPhase2Href?.(item.href)); // 基座 Web 版：二期才开放的页面不进导航和工具列表
+].filter(item => !window.dhIsPhase2Href?.(item.href)); // 基座 Web 版：二期才开放的页面不进导航和工具
+// 平台原生页面的「全员开放」状态（与主线版一致，来自 /api/distribution/pages）
+const PLATFORM_LOCKED_PAGE_IDS = new Set(['storage', 'db-explorer', 'netcare-explorer']);
+const PLATFORM_PAGE_ALIAS = { 'ai-report': 'monthly', 'duty-roster.html': 'duty-roster', 'topical-analysis': 'topic-analysis' };
+function normalizePlatformPageId(idOrHref) {
+    let clean = String(idOrHref || '').trim().split(/[?#]/)[0];
+    // Web 版地址带 /digital-human/dh/<应用> 前缀：先去掉再判断是哪个页面
+    if (clean.startsWith('/') && typeof window !== 'undefined' && typeof window.dhStripBase === 'function') clean = window.dhStripBase(clean);
+    if (!clean || clean === '/' || clean === '/index.html' || clean === 'home') return '';
+    if (clean.startsWith('custom:') || clean.startsWith('skill:')) return '';
+    if (clean.startsWith('/pages/')) clean = clean.slice('/pages/'.length);
+    clean = clean.replace(/^\/+|\/+$/g, '').replace(/\.html$/i, '');
+    if (!clean || clean === 'index' || clean === 'home') return '';
+    return PLATFORM_PAGE_ALIAS[clean] || clean;
+}
+function defaultPlatformPageAccess(id) {
+    const locked = PLATFORM_LOCKED_PAGE_IDS.has(id);
+    return {
+        id,
+        sharedAccess: !locked,
+        locked,
+        visible: isNavSuperAdmin() || !locked
+    };
+}
+function setPlatformPageAccessList(pages) {
+    const next = {};
+    for (const page of pages || []) {
+        if (!page || !page.id) continue;
+        next[page.id] = {
+            id: page.id,
+            href: page.href || `/${page.id}`,
+            sharedAccess: page.sharedAccess === true,
+            locked: page.locked === true,
+            visible: page.visible === true
+        };
+    }
+    navState.pageAccess = next;
+}
+function getPlatformPageAccess(idOrHref) {
+    const id = normalizePlatformPageId(idOrHref);
+    if (!id) return null;
+    if (navState.pageAccess && Object.prototype.hasOwnProperty.call(navState.pageAccess, id)) {
+        return navState.pageAccess[id];
+    }
+    return defaultPlatformPageAccess(id);
+}
+function isPlatformPageShared(idOrHref) {
+    const id = normalizePlatformPageId(idOrHref);
+    if (!id) return true;
+    const entry = getPlatformPageAccess(id);
+    return entry ? entry.sharedAccess === true : true;
+}
+if (typeof window !== 'undefined') {
+    window.normalizePlatformPageId = normalizePlatformPageId;
+    window.getPlatformPageAccess = getPlatformPageAccess;
+    window.isPlatformPageShared = isPlatformPageShared;
+    window.updatePlatformPageAccessEntry = function (page) {
+        if (!page || !page.id) return;
+        navState.pageAccess = {
+            ...(navState.pageAccess || {}),
+            [page.id]: {
+                id: page.id,
+                href: page.href || `/${page.id}`,
+                sharedAccess: page.sharedAccess === true,
+                locked: page.locked === true,
+                visible: isNavSuperAdmin() || page.sharedAccess === true
+            }
+        };
+        writeNavigationBootstrapCache();
+        publishPlatformCatalog();
+    };
+}列表
 const NAV_WORKFLOW_IDS = ['uivf12', 'sla', 'report', 'expedite', 'monthly', 'ai-bi', 'bigscreen'];
 const NAV_WORKFLOW_CATEGORY = '__workflow';
 window.NavWorkflow = {
@@ -105,6 +176,7 @@ function isRecentlyChangedTool(tool, now = Date.now()) {
 let navState = {
     settings: JSON.parse(JSON.stringify(NAV_DEFAULT_SETTINGS)),
     customTools: [],
+    pageAccess: {},
     currentPrimaryItems: [],
     settingsTab: 'primary',
     saveTimer: null,
@@ -182,6 +254,7 @@ function writeNavigationBootstrapCache() {
         localStorage.setItem(tenantNavCacheKey(), JSON.stringify({
             settings: navState.settings,
             customTools: navState.customTools,
+            pageAccess: navState.pageAccess || {},
             savedAt: Date.now()
         }));
     } catch (_) {
@@ -194,6 +267,7 @@ function hydrateNavigationFromCache() {
     if (!cached) return false;
     navState.settings = normalizeNavSettings(cached.settings);
     navState.customTools = cached.customTools;
+    if (cached.pageAccess && typeof cached.pageAccess === 'object') navState.pageAccess = { ...cached.pageAccess };
     return true;
 }
 
@@ -566,6 +640,14 @@ function registerPlatformI18n() {
             'nav.ai.btnTest': '测试模型',
             'nav.ai.testing': '正在测试模型...',
             'nav.ai.testOk': '测试通过',
+            'nav.ai.authModeLabel': '认证方式',
+            'nav.ai.customAuthHeaderLabel': '自定义认证头名称',
+            'nav.ai.customAuthHeaderPlaceholder': 'X-API-Key',
+            'nav.ai.verifySslLabel': '校验 HTTPS 证书',
+            'nav.ai.verifySslHelp': '默认开启；仅在接入受信任的企业内网自签证书网关时关闭',
+            'nav.ai.authNoneReady': '免认证就绪 (none)',
+            'nav.ai.authNoneBadge': '● 免认证',
+            'nav.ai.plhTokenNone': '当前认证方式为 none（无需填写 Token）',
             'nav.ai.testFail': '测试失败：',
             'nav.ai.testHintLabel': '排查建议：',
             'nav.ai.testDetailsExpand': '查看失败详情',
@@ -1128,6 +1210,14 @@ function registerPlatformI18n() {
             'nav.ai.btnTest': 'Test Model',
             'nav.ai.testing': 'Testing model...',
             'nav.ai.testOk': 'Test passed',
+            'nav.ai.authModeLabel': 'Auth Mode',
+            'nav.ai.customAuthHeaderLabel': 'Custom Auth Header',
+            'nav.ai.customAuthHeaderPlaceholder': 'X-API-Key',
+            'nav.ai.verifySslLabel': 'Verify HTTPS certificate',
+            'nav.ai.verifySslHelp': 'Enabled by default; disable only for trusted internal gateways with self-signed certificates',
+            'nav.ai.authNoneReady': 'No auth required (none)',
+            'nav.ai.authNoneBadge': '● No Auth',
+            'nav.ai.plhTokenNone': 'Auth mode is none (API token not required)',
             'nav.ai.testFail': 'Test failed: ',
             'nav.ai.testHintLabel': 'Troubleshooting: ',
             'nav.ai.testDetailsExpand': 'Show failure details',
@@ -1609,7 +1699,9 @@ function getAllNavItems() {
     const isAdmin = localStorage.getItem('tools_role') === 'admin';
     // 迁移状态、数据探索、NetCare 浏览只给超级管理员（后端同样拦截），团队账号的导航里不出现
     const superOnly = isNavSuperAdmin() ? [] : ['storage', 'db-explorer', 'netcare-explorer'];
-    return [...NAV_BUILTIN_LINKS.filter(item => (!item.adminOnly || isAdmin) && !superOnly.includes(item.id)), ...customItems];
+    // 未向全员开放的平台页面只有超级管理员看得到（后端同样拦截）
+    return [...NAV_BUILTIN_LINKS.filter(item => (!item.adminOnly || isAdmin) && !superOnly.includes(item.id)
+        && (isNavSuperAdmin() || item.id === 'home' || isPlatformPageShared(item.id))), ...customItems];
 }
 
 // 需求管理页以导航中的实际页面/工具作为分类来源，避免维护另一份容易过期的页面清单。
@@ -1821,15 +1913,17 @@ window.NavLayout = { reorder: reorderNavItem, itemOrder: () => (navState.setting
 
 async function loadNavigationData() {
     try {
-        const [settings, tools] = await Promise.all([
+        const [settings, tools, pagesData] = await Promise.all([
             fetch('/api/nav-settings', { headers: getAuthHeaderForNav() }).then(res => res.ok ? res.json() : null),
             typeof API !== 'undefined'
                 ? API.get('/api/custom-tools').catch(() => null)
-                : fetch('/api/custom-tools', { headers: getAuthHeaderForNav() }).then(res => res.ok ? res.json() : null)
+                : fetch('/api/custom-tools', { headers: getAuthHeaderForNav() }).then(res => res.ok ? res.json() : null),
+            fetch('/api/distribution/pages', { headers: getAuthHeaderForNav() }).then(res => res.ok ? res.json() : null).catch(() => null)
         ]);
         if (settings) navState.settings = normalizeNavSettings(settings);
         if (tools) navState.customTools = tools;
-        if (settings || tools) writeNavigationBootstrapCache();
+        if (Array.isArray(pagesData?.pages)) setPlatformPageAccessList(pagesData.pages);
+        if (settings || tools || Array.isArray(pagesData?.pages)) writeNavigationBootstrapCache();
     } catch (e) {
         console.warn('[Platform] load navigation data failed:', e);
     }

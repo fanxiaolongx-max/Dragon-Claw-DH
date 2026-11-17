@@ -8,7 +8,7 @@ import { resolveAdmin } from '../core/access.js';
 import { selectTable, insertRow, updateRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import * as parser from '../agent/schedule/parser.js';
 import { runAgent } from '../agent/loop.js';
-import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch, addUsage } from './ai-service.js';
+import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch, addUsage, hasUsableCredentials } from './ai-service.js';
 import { pushAlert } from './alert-service.js';
 
 const MAX_ACTIVE_PER_USER = 20;
@@ -143,8 +143,8 @@ async function execute(row, firedAt) {
     const timer = setTimeout(() => abort.abort(), RUN_TIMEOUT_MS);
     try {
         const profiles = await listProfiles();
-        const settings = profiles.find((p) => p.id === row.model_id && p.apiKey) || profiles.find((p) => p.isActive) || profiles[0];
-        if (!settings?.apiKey) throw new Error('还没有配置模型，定时任务无法执行');
+        const settings = profiles.find((p) => p.id === row.model_id && hasUsableCredentials(p)) || profiles.find((p) => p.isActive) || profiles[0];
+        if (!settings || !hasUsableCredentials(settings)) throw new Error('还没有配置模型，定时任务无法执行');
         const identity = { username: row.owner_id, displayName: row.owner_id, identified: true, isAdmin: false, isSuper: false, source: 'schedule' };
         identity.isAdmin = await resolveAdmin(identity).catch(() => false);
         identity.isSuper = identity.isAdmin;

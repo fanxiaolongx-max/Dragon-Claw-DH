@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { stripReasoningText, reasoningDelta } from '../agent/reasoning.js';
 import { config } from '../config.js';
 import { BusinessError } from '../core/errors.js';
 import { Agent, fetch as undiciFetch } from 'undici';
@@ -34,6 +35,34 @@ const DEFAULT_MODEL_SETTINGS = {
     isActive: true,
 };
 
+// 认证方式（与主线版一致）：内网网关常用 api-key、X-API-Key 等请求头，或不需要认证
+export const VALID_AUTH_MODES = ['bearer', 'x-api-key', 'api-key', 'x-goog-api-key', 'none', 'custom'];
+const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+/** 方案的认证方式：显式选择优先；旧的 Anthropic「API Key」选项按 x-api-key；其余默认 Bearer */
+export function resolveAuthMode(settings = {}) {
+    const raw = String(settings.authMode || '').trim().toLowerCase();
+    if (VALID_AUTH_MODES.includes(raw)) return raw;
+    const provider = String(settings.provider || '').toLowerCase();
+    if (provider === 'anthropic' && ['ANTHROPIC_API_KEY', 'x-api-key'].includes(String(settings.anthropicAuthType || ''))) return 'x-api-key';
+    return 'bearer';
+}
+
+/** 按认证方式生成请求头；none 不带密钥，custom 用方案里填的请求头名 */
+export function authHeaders(settings = {}) {
+    const key = settings.apiKey || '';
+    const mode = resolveAuthMode(settings);
+    if (mode === 'none' || !key) return {};
+    if (mode === 'x-api-key') return { 'x-api-key': key };
+    if (mode === 'api-key') return { 'api-key': key };
+    if (mode === 'x-goog-api-key') return { 'x-goog-api-key': key };
+    if (mode === 'custom' && HEADER_NAME_RE.test(String(settings.customAuthHeader || '').trim())) return { [String(settings.customAuthHeader).trim()]: key };
+    return { Authorization: `Bearer ${key}` };
+}
+
+/** 能否发请求：选了「不需要认证」时不要求密钥 */
+export const hasUsableCredentials = (settings = {}) => Boolean(settings.apiKey) || resolveAuthMode(settings) === 'none';
+
 function maskSecret(val) {
     const s = String(val || '').trim();
     if (!s) return '';
@@ -56,6 +85,10 @@ function normalizeProfile(raw = {}) {
         headers: raw.headers && typeof raw.headers === 'object' ? raw.headers : {},
         extraBody: raw.extraBody && typeof raw.extraBody === 'object' ? raw.extraBody : {},
         isActive: Boolean(raw.isActive ?? raw.activate),
+        authMode: resolveAuthMode(raw),
+        customAuthHeader: HEADER_NAME_RE.test(String(raw.customAuthHeader || '').trim()) ? String(raw.customAuthHeader).trim() : '',
+        // 基座 Web 版始终校验 HTTPS 证书（是否开放关闭校验待定），不保存该开关
+        verifySsl: undefined,
     };
 }
 
@@ -224,8 +257,7 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
             'anthropic-version': '2023-06-01',
             ...settings.headers,
         };
-        if (settings.anthropicAuthType === 'x-api-key') headers['x-api-key'] = settings.apiKey;
-        else headers.Authorization = `Bearer ${settings.apiKey}`;
+        Object.assign(headers, authHeaders(settings), settings.headers || {});
         return {
             provider,
             url,
@@ -248,7 +280,7 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
         url,
         headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.apiKey}`,
+            ...authHeaders(settings),
             ...settings.headers,
         },
         body: {
@@ -268,7 +300,7 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
     const modelOverride = String(model || '').trim();
     const settings = modelOverride ? { ...baseSettings, model: modelOverride } : baseSettings;
     const provider = settings.provider || 'openai';
-    if (!settings.apiKey) {
+    if (!hasUsableCredentials(settings)) {
         return {
             ok: false,
             text: '',
@@ -301,21 +333,24 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
                 model: settings.model,
                 provider: reqSpec.provider,
                 latencyMs: Date.now() - started,
+                // 测试连接用的诊断信息（返回前由路由脱敏）
+                diagnostics: { endpoint: reqSpec.url, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: String(data?.error?.message || data?.message || ''), providerCode: String(data?.error?.code || data?.code || '') },
             };
         }
         const rawContent = reqSpec.provider === 'anthropic'
             ? data?.content
             : data?.choices?.[0]?.message?.content;
-        const text = Array.isArray(rawContent)
-            ? rawContent.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('')
-            : String(rawContent ?? '');
+        // 正文里的 think 标签（含只剩收尾标签的情况）不算回答
+        const text = stripReasoningText(Array.isArray(rawContent)
+            ? rawContent.filter((c) => c?.type !== 'thinking').map((c) => (typeof c === 'string' ? c : c?.text || '')).join('')
+            : String(rawContent ?? ''));
         const finishReason = String(
             reqSpec.provider === 'anthropic'
                 ? (data?.stop_reason || '')
                 : (data?.choices?.[0]?.finish_reason || ''),
         );
         const reasoningTokensOnly = !text.trim()
-            && Boolean(data?.choices?.[0]?.message?.reasoning_content || (Array.isArray(data?.content) && data.content.some((c) => c?.type === 'thinking')));
+            && Boolean(reasoningDelta(data?.choices?.[0]?.message) || (Array.isArray(data?.content) && data.content.some((c) => c?.type === 'thinking')));
 
         const usage = data?.usage || {};
         const latencyMs = Date.now() - started;
@@ -343,6 +378,7 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
             model: settings.model,
             provider: reqSpec.provider,
             latencyMs: Date.now() - started,
+            diagnostics: { endpoint: reqSpec.url, causeCode: String(error.cause?.code || error.code || ''), causeMessage: String(error.cause?.message || ''), isTimeout: error.name === 'TimeoutError' || error.name === 'AbortError' },
         };
     }
 }
@@ -350,7 +386,7 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
 export async function streamAiChat({ messages, profileId = '', onDelta }) {
     const profiles = await listProfiles();
     const settings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
-    if (!settings.apiKey) {
+    if (!hasUsableCredentials(settings)) {
         throw new BusinessError('未配置可用的 AI 模型 API Key：请先点击左下角头像 →「全局设置」→「AI 助手」配置模型网关与 Token，或在无模型配置时体验系统内置诊断回复。');
     }
 
