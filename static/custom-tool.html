@@ -83,9 +83,19 @@
                         plain.src = `${base}/${body.entry}${window.location.hash || ''}`;
                         return;
                     }
-                    frame.src = apiUrl('/raw');
+                    // 基座不传 Cookie 时，iframe[src] 无法经过 dh-runtime 注入 x-dh-user 头；改由 fetch 拉取 HTML 后写入 sandbox srcdoc
+                    return fetch(apiUrl('/raw'), { credentials: 'same-origin' })
+                        .then((r) => r.text().then((html) => {
+                            if (!r.ok) {
+                                let msg = '';
+                                try { msg = JSON.parse(html)?.error || ''; } catch {}
+                                throw new Error(msg || `HTTP ${r.status}`);
+                            }
+                            frame.removeAttribute('src');
+                            frame.srcdoc = html;
+                        }));
                 })
-                .catch(() => showError('加载自定义工具元数据失败。'));
+                .catch((err) => showError(err?.message || '加载自定义工具失败。'));
 
             window.addEventListener('message', (event) => {
                 if (event.source !== frame.contentWindow) return;

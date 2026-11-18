@@ -1147,3 +1147,51 @@ test('提示词增强：支持前端 { text, modelId, uiLanguage } 入参并返�
     assert.ok(typeof okRes.data.prompt === 'string' && okRes.data.prompt.trim().length > 0);
     assert.equal(okRes.data.enhanced, okRes.data.prompt);
 });
+
+test('自定义 HTML 工具在真实基座下通过 fetch(x-dh-user) + srcdoc 加载，避免 iframe 直连触发 AUTH_REQUIRED', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const customToolHtml = fs.readFileSync(path.join(rootDir, 'static/custom-tool.html'), 'utf8');
+
+    assert.doesNotMatch(customToolHtml, /frame\.src\s*=\s*apiUrl\(['"]\/raw['"]\)/);
+    assert.match(customToolHtml, /fetch\(apiUrl\(['"]\/raw['"]\)/);
+    assert.match(customToolHtml, /frame\.srcdoc\s*=\s*html/);
+
+    // 无 Cookie 仅靠 x-dh-user 头（模拟真实基座 dh-runtime fetch 注入）发布并拉取 meta 与 raw
+    const publishRes = await fetch(`${ctx.url}/api/custom-tools`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dh-user': 'dWX1545337' },
+        body: JSON.stringify({
+            name: '基座发布测试工具',
+            description: '验证 x-dh-user 无 Cookie 打开',
+            icon: '🧩',
+            htmlContent: '<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Hello Base</h1></body></html>',
+        }),
+    });
+    assert.equal(publishRes.status, 201, await publishRes.clone().text());
+    const created = await publishRes.json();
+    const slug = created.slug;
+    assert.ok(slug, JSON.stringify(created));
+
+    // 模拟未经过 fetch 注入头的裸请求（原先 iframe.src 的请求形态）：服务端返回 401 AUTH_REQUIRED
+    const unauthRaw = await fetch(`${ctx.url}/api/custom-tools/${encodeURIComponent(slug)}/raw`);
+    assert.equal(unauthRaw.status, 401);
+    const unauthJson = await unauthRaw.json();
+    assert.equal(unauthJson.code, 'AUTH_REQUIRED');
+
+    // 通过 fetch 携带 x-dh-user 拉取 /meta 与 /raw（写入 srcdoc）：正常返回带数据桥的 HTML
+    const metaRes = await fetch(`${ctx.url}/api/custom-tools/${encodeURIComponent(slug)}/meta`, {
+        headers: { 'x-dh-user': 'dWX1545337' },
+    });
+    assert.equal(metaRes.status, 200);
+
+    const rawRes = await fetch(`${ctx.url}/api/custom-tools/${encodeURIComponent(slug)}/raw`, {
+        headers: { 'x-dh-user': 'dWX1545337' },
+    });
+    assert.equal(rawRes.status, 200);
+    const rawHtml = await rawRes.text();
+    assert.match(rawHtml, /window\.DH=/);
+    assert.match(rawHtml, /Hello Base/);
+});
