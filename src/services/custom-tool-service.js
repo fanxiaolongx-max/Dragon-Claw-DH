@@ -6,7 +6,7 @@ import path from 'node:path';
 import { STATIC_DIR } from '../config.js';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { isSameUserId } from '../core/access.js';
-import { selectTable, upsertRow, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
+import { selectTable, upsertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import { optionalDep } from '../core/optional.js';
 import { isSuperUser, isShared, sharedKeys } from './distribution-service.js';
 
@@ -204,6 +204,24 @@ export async function saveCustomTool(input = {}, identity) {
         updated_at: now,
     }, ['slug'], ['visibility', 'name', 'name_en', 'description', 'description_en', 'icon', 'tags_json', 'html', 'updated_at']);
     return toItem(await getRow(slug, LIST_COLS));
+}
+
+/** 改工具名（与主线版 PATCH /api/custom-tools/:slug/name 一致）：带 nameEn 时只改英文名；只能改自己发布的，管理员都能改 */
+export async function renameCustomTool(slug, { name, nameEn } = {}, identity) {
+    if (BUILTIN.has(String(slug || ''))) throw new BusinessError('内置工具随安装包发布，不能重命名', 400);
+    const row = await getRow(slug, LIST_COLS);
+    if (!row || !canSee(row, identity)) throw new NotFoundError('工具不存在');
+    if (!identity?.isAdmin && row.owner_id !== identity?.username) throw new BusinessError('只能修改自己发布的工具', 403);
+    const cleanName = String(name ?? '').trim();
+    if (!cleanName) throw new BusinessError('工具名称不能为空', 400);
+    if (cleanName.length > 80) throw new BusinessError('工具名称不能超过 80 个字符', 400);
+    const english = typeof nameEn === 'string' ? nameEn.trim() : null;
+    if (english !== null && english.length > 120) throw new BusinessError('英文工具名称不能超过 120 个字符', 400);
+    await updateRows('custom_tools', { name: cleanName, ...(english !== null ? { name_en: english } : {}), updated_at: Date.now() }, {
+        whereSql: `\`slug\` = ${sqlVal(row.slug)}`,
+        memFilter: (r) => r.slug === row.slug,
+    });
+    return { success: true, tool: toItem(await getRow(row.slug, LIST_COLS)) };
 }
 
 export async function deleteCustomTool(slug, identity) {

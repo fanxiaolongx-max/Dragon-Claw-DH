@@ -455,6 +455,14 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const first = await chat('carol', { messages: [{ role: 'user', content: '第 1 问' }] });
         const sid = first.find((e) => e.type === 'done').sessionId;
         assert.equal(first.find((e) => e.type === 'title')?.title, 'OK');
+        // 新手引导的示例提问：只给只读查询工具、提示词里说明是演示（与主线版 tourReportExample 一致）
+        mock.aiRequests.length = 0;
+        await chat('erin', { tourReportExample: true, messages: [{ role: 'user', content: '列出临期催办' }] });
+        const demoReq = streamReqs().at(-1);
+        const demoTools = demoReq.tools.map((t) => t.function.name);
+        assert.ok(demoTools.includes('get_expiring_followups') && demoTools.includes('get_report_overview'));
+        assert.equal(demoTools.some((n) => /send_notification|insert_database_row|update_database_rows|delete_database_rows|followup_create|save_skill|publish_html_tool/.test(n)), false, '演示不带写操作工具');
+        assert.match(demoReq.messages[0].content, /新手引导的只读演示/);
         // 开场只是打招呼：先不起标题；第一句正经问题再起，且只换一次（与主线版一致）
         const hello = await chat('dave', { messages: [{ role: 'user', content: '你好' }] });
         const helloSid = hello.find((e) => e.type === 'done').sessionId;

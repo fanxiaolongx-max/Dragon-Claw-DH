@@ -81,7 +81,9 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}\n…[已
  */
 const allowedFollowups = (tools) => tools.some((t) => t.name === 'followup_create');
 
-export async function runAgent({ settings, identity, history, skillIds = [], language = 'zh', emit = () => {}, signal, summary = '', profiles = [], autoSwitch = false, secrets = [], unattended = false, sessionId = '' }) {
+const DEMO_TOOLS = new Set(['get_report_overview', 'get_expiring_followups', 'list_databases', 'database_schema', 'query_database', 'read_database_table', 'query_data', 'calculate']);
+
+export async function runAgent({ settings, identity, history, skillIds = [], language = 'zh', emit = () => {}, signal, summary = '', profiles = [], autoSwitch = false, secrets = [], unattended = false, sessionId = '', readOnlyDemo = false }) {
     const started = Date.now();
     const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content || '';
     const allSkills = await listSkills().catch(() => []);
@@ -100,7 +102,8 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     const memories = identity.identified ? await listMemories(identity.username).catch(() => []) : [];
     // 跟进任务只给能识别身份的真人用户（定时任务也以创建者身份运行，同样可用）
     const followups = identity.identified && allowedFollowups(await enabledTools().catch(() => [])) ? await followupPrompt(identity.username).catch(() => '') : '';
-    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, followups, extra: String(settings.systemPrompt || '').trim() });
+    const demoNote = readOnlyDemo ? '本轮是新手引导的只读演示。基于已入库的报表和催办快照给出简明结果，只准备催办草稿，不创建或发送消息。' : '';
+    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, followups, extra: [String(settings.systemPrompt || '').trim(), demoNote].filter(Boolean).join('\n\n') });
     const messages = history.map((m, i) => ({
         role: m.role === 'assistant' ? 'assistant' : 'user',
         content: i === history.length - 1 ? String(m.content || '') : clip(String(m.content || ''), MAX_HISTORY_MSG),
@@ -118,7 +121,8 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     }
 
     // 管理员在「工具清单」里停用的工具不发给模型，模型点名调用时也会被拒绝
-    const tools = await enabledTools().catch(() => [...toolByName.values()]);
+    // 新手引导的演示提问只给只读查询工具（与主线版 tourReportExample 一致：不写库、不发消息、不建跟进任务）
+    const tools = (await enabledTools().catch(() => [...toolByName.values()])).filter((t) => !readOnlyDemo || DEMO_TOOLS.has(t.name));
     const allowedNames = new Set(tools.map((t) => t.name));
     const callLog = [];
     let asked = null;

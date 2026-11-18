@@ -135,6 +135,8 @@ export async function aiRoutes(fastify) {
         const questionText = userText.split('📎 附件：')[0];
         const plainTitle = questionText.replace(/\s+/g, ' ').trim().slice(0, 40);
         const probeOnly = isTrivialProbe(questionText);
+        // 新手引导里自动发出的示例提问：只在新对话里生效，按只读演示跑
+        const readOnlyDemo = body.tourReportExample === true && !sessionId;
 
         let createdNow = false;
         if (persist && !sessionId) {
@@ -230,6 +232,7 @@ export async function aiRoutes(fastify) {
                 profiles,
                 autoSwitch: await getAutoSwitch(),
                 secrets: [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean),
+                readOnlyDemo,
             });
             const usedModel = res.model || selected;
             const roundMetrics = Array.isArray(res.roundMetrics) ? res.roundMetrics : [];

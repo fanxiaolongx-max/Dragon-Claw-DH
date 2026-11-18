@@ -105,6 +105,7 @@ const USER_WRITES = [
     ['POST', /^\/agent-workspace\/approvals\/[^/]+$/], // 只能批自己发起的（路由内校验）
     ['*', /^\/ai\/schedules(?:\/[^/]+)?$/], // 定时任务只属于创建者（服务内校验）
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
+    ['PATCH', /^\/custom-tools\/[^/]+\/name$/], // 改名：路由内校验归属
     ['*', /^\/alert-center\/events(?:\/.*)?$/], // 消息只属于本人
     ['POST', /^\/alert-center\/ai\/backfill$/], // 只补本人消息的 AI 摘要
     ['POST', /^\/duty-roster$/], // 已识别用户可维护各月份值班表（与桌面版一致）

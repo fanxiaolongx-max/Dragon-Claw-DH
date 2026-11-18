@@ -7,7 +7,7 @@
 
     const L = (zh, en) => (/^en/.test(window.ToolsI18n?.getLanguage?.() || localStorage.getItem('tools_lang') || '') ? en : zh);
     const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const state = { href: '', title: '', returnTo: null };
+    const state = { href: '', title: '', returnTo: null, syncUrl: true };
     const datacom = '/tools/datacom-protocol-expert';
     const desktop = window.DragonEmbeddedTool;
     const staticNav = window.ToolsStaticNavigation;
@@ -280,7 +280,7 @@
                 const stripped = typeof window.dhStripBase === 'function' ? window.dhStripBase(loadedPath) : loadedPath;
                 if (stripped === '/' || stripped === '/index.html') { close(); return; }
             } catch { /* ignore */ }
-            writeUrl(href, true);
+            if (state.syncUrl) writeUrl(href, true);
         });
     }
 
@@ -298,7 +298,8 @@
         history[replace ? 'replaceState' : 'pushState']({ ...(history.state || {}), app: href || null, toolReturn: href ? state.returnTo : null }, '', next);
     }
 
-    function open(href, { push = true, skipConfirm = false } = {}) {
+    // syncUrl: false 时不改地址栏（新手引导里临时打开工具用）
+    function open(href, { push = true, skipConfirm = false, syncUrl = true } = {}) {
         let url;
         try {
             const raw = new URL(href, location.href);
@@ -332,7 +333,7 @@
                 confirmLeaveTool().then(ok => {
                     if (!ok) return;
                     leaveBypass = true;
-                    try { open(href, { push, skipConfirm: true }); }
+                    try { open(href, { push, skipConfirm: true, syncUrl }); }
                     finally { leaveBypass = false; }
                 });
                 return false;
@@ -361,6 +362,7 @@
             assistantObserver?.disconnect();
             document.body.classList.remove('v2-tool-has-assistant');
             state.href = path;
+            state.syncUrl = syncUrl;
             titleEl.textContent = info.title || (useSurface ? L('数通协议专家', 'Datacom Protocol Expert') : decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || ''));
             iconEl.innerHTML = iconHtml(info.icon);
             frame.title = titleEl.textContent;
@@ -376,7 +378,7 @@
                 else frame.contentWindow.location.replace(path);
             }
             window.dispatchEvent(new CustomEvent('home:tool-frame', { detail: { open: true, href: path, browserAllowed: !useSurface } }));
-            if (push) writeUrl(path, false);
+            if (push && syncUrl) writeUrl(path, false);
         } catch (err) {
             frameGuard = false;
             throw err;

@@ -7,7 +7,8 @@ import {
     listSkills, getSkill, saveSkill, previewSkill, renameSkill, removeSkill, exportSkillZip, skillPackageFromArchive, publicFiles,
     listSkillBackups, getSkillBackup, rollbackSkill,
 } from '../services/skill-service.js';
-import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool } from '../services/custom-tool-service.js';
+import { listCustomTools, getCustomTool, saveCustomTool, deleteCustomTool, renameCustomTool } from '../services/custom-tool-service.js';
+import { listBookmarks, updateBookmark } from '../services/browser-bookmark-service.js';
 import { saveChatUpload, readChatUpload } from '../services/chat-upload-service.js';
 import { decideApproval } from '../agent/approvals.js';
 import { runSelect, toolByName } from '../agent/tools.js';
@@ -161,6 +162,7 @@ export async function customToolsRoutes(fastify) {
         return { sharedAccess: await setToolShared(tool.slug, req.body.sharedAccess, { builtIn: Boolean(tool.builtIn) }) };
     });
     fastify.post('/', async (req, reply) => reply.code(201).send(await saveCustomTool(req.body || {}, req.userIdentity)));
+    fastify.patch('/:slug/name', async (req) => renameCustomTool(req.params.slug, { name: req.body?.name, nameEn: req.body?.nameEn }, req.userIdentity));
     fastify.delete('/:slug', async (req) => deleteCustomTool(req.params.slug, req.userIdentity));
     fastify.get('/:slug/meta', async (req, reply) => {
         const tool = await getCustomTool(req.params.slug, await identityOf(req));
@@ -317,6 +319,15 @@ export async function handleChatUploadCancel(req) {
 
 // 写操作审批：对话里确认卡上的「允许 / 拒绝」
 export async function agentWorkspaceRoutes(fastify) {
+    // 内置浏览器收藏（与主线版同接口）：每人一份；基座版内置浏览器和终端只给超级管理员，所以只有超级管理员能改
+    fastify.get('/browser/bookmarks', async (req, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        return { items: await listBookmarks(req.userIdentity.username) };
+    });
+    fastify.post('/browser/bookmarks', async (req, reply) => {
+        if (!isSuperUser(req.userIdentity)) return reply.code(403).send({ code: 'ADMIN_REQUIRED', error: '仅超级管理员可维护浏览器收藏' });
+        return { items: await updateBookmark(req.userIdentity.username, req.body || {}) };
+    });
     fastify.post('/approvals/:id', async (req, reply) => {
         const ok = decideApproval(req.params.id, req.userIdentity.username, req.body?.decision);
         if (!ok) return reply.code(404).send({ error: '这个确认已经失效（超时、已处理，或不是你发起的）' });

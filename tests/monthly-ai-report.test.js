@@ -590,7 +590,11 @@ test('leave-page guards use AppDialog without native beforeunload and homepage p
     assert.match(tourJs, /window\.HomeProductTour\s*=/);
     assert.match(tourJs, /dh_home_tour_v1:/);
     assert.match(tourJs, /navigator\.webdriver/);
-    assert.match(tourJs, /restoreSnapshot/);
+    // 新版引导（与主线版同一套）结束时关掉临时打开的工具、恢复对话和侧栏
+    assert.match(tourJs, /restoreTourChat/);
+    assert.match(tourJs, /closeTourTool/);
+    assert.match(tourJs, /wasSidebarCollapsed/);
+    assert.doesNotMatch(tourJs, /opsDrafts/, '基座没有运维待办，引导里不能有这一步');
     assert.match(indexHtml, /js\/home\/product-tour\.js/);
     assert.match(homeShellJs, /HomeProductTour\?\.replay/);
 });

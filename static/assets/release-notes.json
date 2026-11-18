@@ -1,8 +1,8 @@
 {
   "zh": [
-    "与桌面版对齐：AI 月报可以把一份报告设为「默认显示」，打开页面先显示它并排在列表最前；智能体新增临期 / 超期催办明细查询（和一键催办同一份数据，只读）；工具设置页改为固定列宽的表格；修复 AI BI 和月报的报告菜单在名称较长时溢出、侧栏禁用项提示不消失、项目分组折叠状态被搜索打乱。"
+    "新手引导升级到与桌面版同一套：依次介绍工作台入口，并在导航里可见的数据抓取、数据导入、报表、催办、月报、大屏页面上逐个演示，最后自动发出一个报表示例问题（只读演示，不写数据、不发消息）。自定义工具可以改名了，英文界面下改的是英文名。新增内置浏览器收藏接口（仅超级管理员可改）。"
   ],
   "en": [
-    "Aligned with the desktop edition: an AI monthly report can be starred as the default, opening first and listed on top; the agent can look up upcoming and overdue follow-ups (read-only, same data as one-click reminders); the tool settings page uses a fixed-width table; fixed long names overflowing the AI BI and monthly report menus, disabled sidebar hints not dismissing, and project folding being reset by search."
+    "The welcome tour now matches the desktop edition: it walks through the workspace, demonstrates each visible system page (data capture, import, reports, follow-ups, monthly report, big screen), and finishes by sending a sample report question as a read-only demo that never writes data or sends messages. Custom tools can be renamed, and renaming in the English UI changes the English name. Added the built-in browser bookmarks API (super admins only)."
   ]
 }
