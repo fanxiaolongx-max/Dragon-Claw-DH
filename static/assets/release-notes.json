@@ -1,13 +1,9 @@
 {
   "zh": [
-    "新手引导升级为与桌面版同一套：第一步在真实输入框里逐字输入问题，点「发送」后在真实对话区流式显示回答，不发真实请求，结束后原来的对话和草稿原样恢复。",
-    "数据抓取、数据导入、报表看板、一键催办、月报和大屏六步改为真实页面的静态快照（示例数据），按画面比例铺满并缩放到 80%；顶部流程线标出当前在第几步，每页用编号标出 1–2 个重点按钮并配一句话说明。",
     "引导里的工具页面会先停 3 秒，再自动慢速向下滚动，到底后回到开头，高亮框和重点按钮标注跟着移动；滚动鼠标滚轮可以改为手动查看。",
     "引导第一步可以用鼠标滚轮翻看输入框里的完整问题，发送后滚轮滚动对话区。"
   ],
   "en": [
-    "The product tour now matches the desktop edition: the first step types a question into the real composer, and after you select Send the reply streams into the real conversation view without sending a real request. Your conversation and draft are restored afterwards.",
-    "Data Capture, Data Import, Reports, One-Click Follow-Up, Monthly Report and Big Screen now show static snapshots of the real pages with sample data, filling the view at 80% zoom. A workflow line at the top shows the current step, and each page marks 1–2 key buttons with short explanations.",
     "Tool pages in the tour pause for 3 seconds, then slowly scroll down and return to the top, with the highlight and key-button markers following along. Use the mouse wheel to scroll them yourself.",
     "In the first tour step you can use the mouse wheel to read the whole question in the composer, and the conversation after it is sent."
   ]
