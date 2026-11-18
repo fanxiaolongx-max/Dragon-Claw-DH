@@ -168,7 +168,10 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
             }),
         })).json();
         assert.equal(expNotifySingle.success, true);
-        assert.equal(expNotifySingle.payload.receivers[0], 'l00123');
+        assert.equal(expNotifySingle.payload.module_type, 'digitalHumanOperations');
+        assert.equal(expNotifySingle.payload.sub_module_type, 'writeReport');
+        assert.equal(expNotifySingle.payload.msg_type, '1');
+        assert.equal(expNotifySingle.payload.email_params.email_to, 'l00123');
         assert.equal(mock.notifications.length, 2);
 
         // Expedite Notify: batch items based on advanced distribution strategy

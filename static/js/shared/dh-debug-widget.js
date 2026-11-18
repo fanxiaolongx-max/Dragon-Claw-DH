@@ -277,22 +277,41 @@
     const notifySec = el('div', 'dh-dbg-section');
     notifySec.appendChild(el('h4', '', '📨 自定义消息通知自检 (/api/debug/notify-test)'));
     const notifyTextarea = el('textarea', 'dh-dbg-textarea');
-    notifyTextarea.rows = 5;
-    notifyTextarea.value = JSON.stringify({
-        module_type: '业务应用测试',
-        sub_module_type: '调试面板探测',
+    notifyTextarea.rows = 6;
+    const emailNotifyTemplate = () => ({
+        module_type: 'digitalHumanOperations',
+        sub_module_type: 'writeReport',
         msg_type: '1',
         email_params: {
-            title: 'Dragon Claw Digital Human 调试通知',
-            content: '调试面板发送测试消息',
+            title: 'Dragon Claw Digital Human 调试邮件',
+            content: '调试面板发送测试邮件通知',
             email_to: '',
+            email_cc: '',
         },
-    }, null, 2);
+    });
+    const appMsgNotifyTemplate = () => ({
+        module_type: 'digitalHumanOperations',
+        sub_module_type: 'writeReport',
+        msg_type: '2',
+        app_msg_params: {
+            title: 'Dragon Claw Digital Human 应用号消息',
+            content: '调试面板发送测试应用号消息',
+            to_user_account: '',
+            type: '1',
+        },
+    });
+    notifyTextarea.value = JSON.stringify(emailNotifyTemplate(), null, 2);
     const notifyActions = el('div', 'dh-dbg-btn-grid');
     notifyActions.style.marginTop = '8px';
+    const notifyPresetEmailBtn = el('button', 'dh-dbg-btn', '📧 邮件模板 (msg_type=1)');
+    notifyPresetEmailBtn.type = 'button';
+    notifyPresetEmailBtn.onclick = () => { notifyTextarea.value = JSON.stringify(emailNotifyTemplate(), null, 2); };
+    const notifyPresetAppBtn = el('button', 'dh-dbg-btn', '💬 应用号模板 (msg_type=2)');
+    notifyPresetAppBtn.type = 'button';
+    notifyPresetAppBtn.onclick = () => { notifyTextarea.value = JSON.stringify(appMsgNotifyTemplate(), null, 2); };
     const notifySendBtn = el('button', 'dh-dbg-btn primary', '发送测试通知');
     notifySendBtn.type = 'button';
-    notifyActions.appendChild(notifySendBtn);
+    notifyActions.append(notifySendBtn, notifyPresetEmailBtn, notifyPresetAppBtn);
     const notifyPre = el('pre', 'dh-dbg-pre', '点击「发送测试通知」查看基座响应...');
     notifySec.append(notifyTextarea, notifyActions, notifyPre);
     probePanel.appendChild(notifySec);
@@ -303,7 +322,11 @@
             const payload = JSON.parse(notifyTextarea.value || '{}');
             // 默认不带收件人：避免一点按钮就把测试通知发给不相干的人
             if (payload.email_params && !String(payload.email_params.email_to || '').trim()) {
-                notifyPre.textContent = '请先在 email_to 里填上你自己的收件地址（例如 email:你的邮箱），再发送。';
+                notifyPre.textContent = '请先在 email_params.email_to 里填上你自己的工号（多个可用英文逗号分隔）或邮箱，再发送。';
+                return;
+            }
+            if (payload.app_msg_params && !String(payload.app_msg_params.to_user_account || '').trim()) {
+                notifyPre.textContent = '请先在 app_msg_params.to_user_account 里填上你自己的接收人账号（工号），再发送。';
                 return;
             }
             const res = await fetch(apiUrl('/api/debug/notify-test'), {
@@ -483,7 +506,8 @@
 
         const passCount = state.probeResults.filter((x) => x.ok).length;
         const failCount = state.probeResults.length - passCount;
-        exportStatusText.textContent = `全量自检完成：共 ${state.probeResults.length} 项（✓ ${passCount} 通过 / ${failCount} 异常或提示），可点右侧收集/导出详细日志`;
+        await buildDiagnosticBundle();
+        exportStatusText.textContent = `全量自检完成：共 ${state.probeResults.length} 项（✓ ${passCount} 通过 / ${failCount} 异常或提示），可直接一键下载或复制检查结果`;
         exportBar.hidden = false;
 
         runAllBtn.disabled = false;
@@ -516,74 +540,83 @@
         return false;
     }
 
+    async function buildDiagnosticBundle() {
+        const [summaryRes, healthRes, logsRes] = await Promise.all([
+            fetch(apiUrl('/api/debug/summary')).then((r) => r.json()).catch((e) => ({ error: e.message })),
+            fetch(apiUrl('/api/healthz')).then((r) => r.json()).catch((e) => ({ error: e.message })),
+            fetch(apiUrl('/api/debug/logs?limit=300')).then((r) => r.json()).catch((e) => ({ items: [], error: e.message })),
+        ]);
+        if (summaryRes && !summaryRes.error) state.summary = summaryRes;
+
+        const fetchedLogs = Array.isArray(logsRes?.items) ? logsRes.items : [];
+        const mergedLogMap = new Map();
+        for (const entry of [...fetchedLogs, ...state.logs]) {
+            const key = entry?.id ? `id:${entry.id}` : `raw:${entry?.ts || ''}:${entry?.message || ''}`;
+            mergedLogMap.set(key, entry);
+        }
+        const serverLogs = [...mergedLogMap.values()];
+
+        const passCount = state.probeResults.filter((x) => x.ok).length;
+        const failCount = state.probeResults.length - passCount;
+        const bundle = {
+            generatedAt: new Date().toISOString(),
+            client: {
+                pageUrl: window.location.href,
+                dhBase: window.DH_BASE || '',
+                userAgent: navigator.userAgent,
+                language: navigator.language,
+                theme: document.documentElement.getAttribute('data-theme') || 'light',
+            },
+            healthz: healthRes,
+            summary: summaryRes,
+            probeSummary: {
+                total: state.probeResults.length,
+                passed: passCount,
+                failedOrWarn: failCount,
+                failedActions: state.probeResults.filter((x) => !x.ok).map((x) => ({
+                    action: x.action,
+                    statusLabel: x.statusLabel,
+                    detail: x.body?.error || x.body?.result?.message || x.body?.result?.upgradeAdvice || '',
+                })),
+            },
+            probeResults: state.probeResults,
+            schemaCheck: state.lastSchemaResult,
+            networkChecks: state.lastNetResults,
+            notifyTest: state.lastNotifyResult,
+            serverLogsCount: serverLogs.length,
+            serverLogs,
+            clientErrors: state.clientErrors,
+        };
+        state.lastDiagnosticBundle = bundle;
+        return bundle;
+    }
+
     copyBundleBtn.onclick = async () => {
-        if (!state.lastDiagnosticBundle) return;
-        const copied = await copyDiagnosticBundle(state.lastDiagnosticBundle);
+        const bundle = state.lastDiagnosticBundle || await buildDiagnosticBundle();
+        const copied = await copyDiagnosticBundle(bundle);
         copyBundleBtn.textContent = copied ? '✓ 已复制 JSON' : '⚠️ 剪贴板受限，请点下载';
         setTimeout(() => { copyBundleBtn.textContent = '📋 复制完整日志'; }, 2400);
     };
 
-    downloadBundleBtn.onclick = () => {
-        if (!state.lastDiagnosticBundle) return;
-        downloadBundleFile(state.lastDiagnosticBundle);
+    downloadBundleBtn.onclick = async () => {
+        downloadBundleBtn.disabled = true;
+        try {
+            const bundle = state.lastDiagnosticBundle || await buildDiagnosticBundle();
+            downloadBundleFile(bundle);
+        } finally {
+            downloadBundleBtn.disabled = false;
+        }
     };
 
     collectLogsBtn.onclick = async () => {
         collectLogsBtn.disabled = true;
         collectLogsBtn.textContent = '⏳ 正在收集...';
         try {
-            const [summaryRes, healthRes, logsRes] = await Promise.all([
-                fetch(apiUrl('/api/debug/summary')).then((r) => r.json()).catch((e) => ({ error: e.message })),
-                fetch(apiUrl('/api/healthz')).then((r) => r.json()).catch((e) => ({ error: e.message })),
-                fetch(apiUrl('/api/debug/logs?limit=300')).then((r) => r.json()).catch((e) => ({ items: [], error: e.message })),
-            ]);
-            if (summaryRes && !summaryRes.error) state.summary = summaryRes;
-
-            const fetchedLogs = Array.isArray(logsRes?.items) ? logsRes.items : [];
-            const mergedLogMap = new Map();
-            for (const entry of [...fetchedLogs, ...state.logs]) {
-                const key = entry?.id ? `id:${entry.id}` : `raw:${entry?.ts || ''}:${entry?.message || ''}`;
-                mergedLogMap.set(key, entry);
-            }
-            const serverLogs = [...mergedLogMap.values()];
-
-            const passCount = state.probeResults.filter((x) => x.ok).length;
-            const failCount = state.probeResults.length - passCount;
-            const bundle = {
-                generatedAt: new Date().toISOString(),
-                client: {
-                    pageUrl: window.location.href,
-                    dhBase: window.DH_BASE || '',
-                    userAgent: navigator.userAgent,
-                    language: navigator.language,
-                    theme: document.documentElement.getAttribute('data-theme') || 'light',
-                },
-                healthz: healthRes,
-                summary: summaryRes,
-                probeSummary: {
-                    total: state.probeResults.length,
-                    passed: passCount,
-                    failedOrWarn: failCount,
-                    failedActions: state.probeResults.filter((x) => !x.ok).map((x) => ({
-                        action: x.action,
-                        statusLabel: x.statusLabel,
-                        detail: x.body?.error || x.body?.result?.message || x.body?.result?.upgradeAdvice || '',
-                    })),
-                },
-                probeResults: state.probeResults,
-                schemaCheck: state.lastSchemaResult,
-                networkChecks: state.lastNetResults,
-                notifyTest: state.lastNotifyResult,
-                serverLogsCount: serverLogs.length,
-                serverLogs,
-                clientErrors: state.clientErrors,
-            };
-            state.lastDiagnosticBundle = bundle;
-
+            const bundle = await buildDiagnosticBundle();
             const copied = await copyDiagnosticBundle(bundle);
             downloadBundleFile(bundle);
             const tip = state.probeResults.length === 0 ? '（提示：可先点左侧“一键全量自检”再收集以包含完整探针结果）' : '';
-            exportStatusText.textContent = `已收集 ${state.probeResults.length} 项自检、${serverLogs.length} 条后端日志、${state.clientErrors.length} 条前端异常，已自动下载诊断 JSON${copied ? ' 并复制到剪贴板' : ''}${tip}`;
+            exportStatusText.textContent = `已收集 ${state.probeResults.length} 项自检、${bundle.serverLogsCount} 条后端日志、${state.clientErrors.length} 条前端异常，已自动下载诊断 JSON${copied ? ' 并复制到剪贴板' : ''}${tip}`;
             exportBar.hidden = false;
         } catch (err) {
             exportStatusText.textContent = `收集详细日志失败: ${err.message}`;

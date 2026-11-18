@@ -1272,6 +1272,30 @@
                     </div>
                 </div>
 
+                <!-- 发送通道与抄送 -->
+                <div style="margin-bottom: 14px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                    <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #334155;">
+                        <span style="font-weight: 600; color: #1e293b;">📨 发送通道：</span>
+                        <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="base-notify-channel" value="both" checked>
+                            <span>邮件 + 应用号双发 (同时写站内横幅)</span>
+                        </label>
+                        <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="base-notify-channel" value="email">
+                            <span>仅邮件 (msg_type=1)</span>
+                        </label>
+                        <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="base-notify-channel" value="app">
+                            <span>仅应用号消息 (msg_type=2)</span>
+                        </label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+                        <label for="base-notify-cc-input" style="font-size: 12px; color: #475569; white-space: nowrap;">邮件抄送 (可选)：</label>
+                        <input type="text" id="base-notify-cc-input" placeholder="抄送工号或邮箱，多个用逗号分隔 (email_cc)"
+                            style="flex: 1; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; background: #fff;">
+                    </div>
+                </div>
+
                 <!-- 通知标题 -->
                 <div style="margin-bottom: 16px;">
                     <label for="base-notify-title" style="font-weight: 600; font-size: 13px; color: #1e293b; display: block; margin-bottom: 6px;" data-i18n="notify_title_lbl">
@@ -3313,6 +3337,8 @@
 
             const title = (document.getElementById('base-notify-title')?.value || '【AIOps 一键催办】未达标指标跟进提醒').trim();
             const mode = document.querySelector('input[name="base-notify-mode"]:checked')?.value || 'personalized';
+            const channel = document.querySelector('input[name="base-notify-channel"]:checked')?.value || 'both';
+            const cc = (document.getElementById('base-notify-cc-input')?.value || '').trim();
             const dynamicCats = getDistributionCategories();
 
             const submitBtn = document.getElementById('btn-submit-base-notify');
@@ -3343,11 +3369,13 @@
                         return {
                             recipients: [emp.id],
                             recipientNames,
+                            channel,
+                            cc,
                             title: title,
                             content: text,
                         };
                     });
-                    res = await API.post('/api/expedite/notify', { items });
+                    res = await API.post('/api/expedite/notify', { items, channel, cc });
                 } else {
                     const fullText = document.getElementById('brief-textarea')?.value || '';
                     const recipientNames = {};
@@ -3357,6 +3385,8 @@
                     res = await API.post('/api/expedite/notify', {
                         recipients: selected.map(r => r.id),
                         recipientNames,
+                        channel,
+                        cc,
                         title: title,
                         content: fullText,
                     });

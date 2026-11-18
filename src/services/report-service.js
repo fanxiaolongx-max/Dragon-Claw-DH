@@ -997,14 +997,80 @@ async function recordExpediteHistory(entries = []) {
     } catch { /* ignore history write failures */ }
 }
 
-export async function sendExpediteNotification({ recipients = [], title = '', content = '', channel = 'email', payload = null, items = null, recipientNames = null, _knownEmployees = null, _skipHistoryRecord = false, _actor = '', _skipInboxAlert = false } = {}) {
+function parseNotifyAddressList(val) {
+    return (Array.isArray(val) ? val : String(val || '').split(/[,，;；\s]+/))
+        .map((r) => String(r || '').trim().replace(/^email:/i, ''))
+        .filter(Boolean);
+}
+
+function buildEmailNotifyPayload({ moduleType, subModuleType, title, content, toList, ccList }) {
+    return {
+        module_type: moduleType || 'digitalHumanOperations',
+        sub_module_type: subModuleType || 'writeReport',
+        msg_type: '1',
+        email_params: {
+            title: title || '【AIOps 一键催办】未达标指标跟进提醒',
+            content: content || '存在未达标运营指标，请及时核查整改。',
+            email_to: toList.join(','),
+            email_cc: ccList.join(','),
+        },
+    };
+}
+
+function buildAppMsgNotifyPayload({ moduleType, subModuleType, title, content, account, msgKind = '1', jumpUrl = '' }) {
+    const cleanJumpUrl = String(jumpUrl || '').trim();
+    return {
+        module_type: moduleType || 'digitalHumanOperations',
+        sub_module_type: subModuleType || 'writeReport',
+        msg_type: '2',
+        app_msg_params: {
+            title: title || '【AIOps 一键催办】未达标指标跟进提醒',
+            content: content || '存在未达标运营指标，请及时核查整改。',
+            to_user_account: String(account || '').trim(),
+            type: String(msgKind || '1'),
+            ...(cleanJumpUrl ? { jump_url: cleanJumpUrl } : {}),
+        },
+    };
+}
+
+export async function sendExpediteNotification({
+    recipients = [],
+    cc = [],
+    title = '',
+    content = '',
+    channel = 'email',
+    msgType = '',
+    type = '1',
+    jumpUrl = '',
+    moduleType = 'digitalHumanOperations',
+    subModuleType = 'writeReport',
+    payload = null,
+    items = null,
+    recipientNames = null,
+    _knownEmployees = null,
+    _skipHistoryRecord = false,
+    _actor = '',
+    _skipInboxAlert = false,
+} = {}) {
     if (Array.isArray(items) && items.length > 0) {
         const knownEmployees = await collectKnownEmployees();
         const results = [];
         const historyEntries = [];
         for (const item of items) {
             try {
-                const res = await sendExpediteNotification({ ...item, _knownEmployees: knownEmployees, _skipHistoryRecord: true, _actor, _skipInboxAlert });
+                const res = await sendExpediteNotification({
+                    channel,
+                    cc,
+                    jumpUrl,
+                    type,
+                    moduleType,
+                    subModuleType,
+                    ...item,
+                    _knownEmployees: knownEmployees,
+                    _skipHistoryRecord: true,
+                    _actor,
+                    _skipInboxAlert,
+                });
                 results.push({ success: true, recipients: item.recipients, resolvedRecipients: res.resolvedRecipients, title: item.title, res });
                 if (Array.isArray(res.historyEntries)) historyEntries.push(...res.historyEntries);
             } catch (err) {
@@ -1022,7 +1088,8 @@ export async function sendExpediteNotification({ recipients = [], title = '', co
             results,
         };
     }
-    const rawTo = Array.isArray(recipients) ? recipients.map((r) => String(r || '').trim()).filter(Boolean) : [];
+    const rawTo = parseNotifyAddressList(recipients);
+    const rawCc = parseNotifyAddressList(cc);
     // 没有收件人就不发：不能把通知默默发到一个占位地址
     if (!payload && !rawTo.length) fail('请先选择催办对象（收件人为空）', 400);
 
@@ -1036,62 +1103,137 @@ export async function sendExpediteNotification({ recipients = [], title = '', co
         return res;
     }).filter(Boolean);
 
+    const ccResolutions = rawCc.map((r) => resolveRecipientTarget(r, knownEmployees)).filter(Boolean);
+    const exactCc = [...new Set(ccResolutions.map((r) => r.resolved))];
+
     const expandedReceivers = [...new Set(resolutions.flatMap((r) => r.candidates))];
     const exactReceivers = [...new Set(resolutions.map((r) => r.resolved))];
     const hasExpansion = expandedReceivers.length > exactReceivers.length;
 
-    const buildBody = (toList) => payload || {
-        module_type: 'AIOps一键催办',
-        sub_module_type: channel === 'welink' ? 'WeLink催办通知' : '未达标指标催办',
-        msg_type: '1',
-        receivers: toList,
-        user_ids: toList,
-        email_params: {
-            title: title || '【AIOps 一键催办】未达标指标跟进提醒',
-            content: content || '存在未达标运营指标，请及时核查整改。',
-            email_to: toList.join(','),
-            receivers: toList.join(','),
-            user_ids: toList.join(','),
-        },
-    };
+    const normalizedChannel = (() => {
+        const ch = String(channel || '').trim().toLowerCase();
+        if (msgType === '2' || ch === 'app' || ch === 'welink' || ch === 'app_msg') return 'app';
+        if (ch === 'both' || ch === 'all') return 'both';
+        return 'email';
+    })();
 
-    const body = buildBody(expandedReceivers);
+    const safeTitle = String(title || payload?.email_params?.title || payload?.app_msg_params?.title || '【AIOps 一键催办】未达标指标跟进提醒').trim();
+    const safeContent = String(content || payload?.email_params?.content || payload?.app_msg_params?.content || '存在未达标运营指标，请及时核查整改。').trim();
+
+    let outPayload;
     let res;
-    try {
-        res = await sendBaseNotify(body);
-    } catch (err) {
-        if (hasExpansion && !payload) {
-            res = await sendBaseNotify(buildBody(exactReceivers));
-        } else {
-            throw err;
+    if (payload) {
+        outPayload = payload;
+        res = await sendBaseNotify(payload);
+    } else if (normalizedChannel === 'email') {
+        outPayload = buildEmailNotifyPayload({ moduleType, subModuleType, title: safeTitle, content: safeContent, toList: expandedReceivers, ccList: exactCc });
+        try {
+            res = await sendBaseNotify(outPayload);
+        } catch (err) {
+            if (hasExpansion) {
+                outPayload = buildEmailNotifyPayload({ moduleType, subModuleType, title: safeTitle, content: safeContent, toList: exactReceivers, ccList: exactCc });
+                res = await sendBaseNotify(outPayload);
+            } else {
+                throw err;
+            }
         }
+    } else if (normalizedChannel === 'app') {
+        const accounts = hasExpansion ? [expandedReceivers.join(',')] : exactReceivers;
+        const bodies = accounts.map((account) => buildAppMsgNotifyPayload({
+            moduleType, subModuleType, title: safeTitle, content: safeContent, account, msgKind: type, jumpUrl,
+        }));
+        outPayload = bodies.length === 1 ? bodies[0] : bodies;
+        if (bodies.length === 1) {
+            try {
+                res = await sendBaseNotify(bodies[0]);
+            } catch (err) {
+                if (hasExpansion) {
+                    const fallbackBody = buildAppMsgNotifyPayload({
+                        moduleType, subModuleType, title: safeTitle, content: safeContent, account: exactReceivers.join(','), msgKind: type, jumpUrl,
+                    });
+                    outPayload = fallbackBody;
+                    res = await sendBaseNotify(fallbackBody);
+                } else {
+                    throw err;
+                }
+            }
+        } else {
+            const perAccountResults = [];
+            for (const bodyItem of bodies) {
+                perAccountResults.push(await sendBaseNotify(bodyItem));
+            }
+            const allOk = perAccountResults.every((r) => r?.code === 0 || r?.data?.success);
+            res = {
+                code: allOk ? 0 : 500,
+                message: allOk ? 'ok' : 'partial failure',
+                data: { success: allOk, items: perAccountResults },
+            };
+        }
+    } else {
+        // both: 应用号通知 (msg_type="2") + 邮件通知 (msg_type="1")
+        const emailBody = buildEmailNotifyPayload({ moduleType, subModuleType, title: safeTitle, content: safeContent, toList: expandedReceivers, ccList: exactCc });
+        const appBodies = exactReceivers.map((account) => buildAppMsgNotifyPayload({
+            moduleType, subModuleType, title: safeTitle, content: safeContent, account, msgKind: type, jumpUrl,
+        }));
+        outPayload = { email: emailBody, appMsg: appBodies.length === 1 ? appBodies[0] : appBodies };
+        let emailRes = null;
+        try {
+            emailRes = await sendBaseNotify(emailBody);
+        } catch (err) {
+            if (hasExpansion) {
+                const fallbackEmail = buildEmailNotifyPayload({ moduleType, subModuleType, title: safeTitle, content: safeContent, toList: exactReceivers, ccList: exactCc });
+                outPayload.email = fallbackEmail;
+                emailRes = await sendBaseNotify(fallbackEmail);
+            } else {
+                emailRes = { code: 500, message: err.message, data: { success: false } };
+            }
+        }
+        const appResults = [];
+        for (const appBody of appBodies) {
+            try {
+                appResults.push(await sendBaseNotify(appBody));
+            } catch (err) {
+                appResults.push({ code: 500, message: err.message, data: { success: false } });
+            }
+        }
+        const emailOk = emailRes?.code === 0 || emailRes?.data?.success;
+        const appOk = appResults.some((r) => r?.code === 0 || r?.data?.success);
+        if (!emailOk && !appOk) {
+            fail(emailRes?.message || appResults[0]?.message || '基座双通道通知均下发失败', 502);
+        }
+        res = {
+            code: 0,
+            message: 'ok',
+            data: { success: true, email: emailRes, appMsg: appResults.length === 1 ? appResults[0] : appResults },
+        };
     }
+
     const historyEntries = resolutions.map((r) => ({ id: r.resolved, name: r.name }));
     if (!_skipHistoryRecord && historyEntries.length) {
         await recordExpediteHistory(historyEntries);
     }
     let inAppAlertSent = 0;
     if (!_skipInboxAlert && exactReceivers.length) {
-        const notifyTitle = String(title || body?.email_params?.title || '【AIOps 一键催办】未达标指标跟进提醒').trim();
-        const notifyContent = String(content || body?.email_params?.content || '存在未达标运营指标，请及时核查整改。').trim();
         inAppAlertSent = await pushAlert(exactReceivers, {
             type: 'user_action',
             severity: 'warn',
-            title: notifyTitle,
-            message: notifyContent,
+            title: safeTitle,
+            message: safeContent,
             actor: _actor || 'system',
             source: 'expedite',
             objectType: 'expedite_notify',
-            objectId: channel || 'base',
+            objectId: normalizedChannel,
             detail: {
-                channel: channel || 'base',
+                channel: normalizedChannel,
                 targets: exactReceivers,
+                ...(exactCc.length ? { cc: exactCc } : {}),
             },
         }, { allowDuplicate: true }).catch(() => 0);
     }
     return {
         success: true,
-        payload: body,
+        channel: normalizedChannel,
+        payload: outPayload,
         baseResult: res,
         resolvedRecipients: exactReceivers,
         inAppAlertSent,

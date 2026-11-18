@@ -10,7 +10,7 @@ import { saveCustomTool, listCustomTools } from '../services/custom-tool-service
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
 import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory, uivScriptOrigin } from '../services/uiv-service.js';
-import { filterSkillsForUser, filterUivScriptsForUser, canAccessAnyPage, canAccessApi } from '../services/distribution-service.js';
+import { filterSkillsForUser, filterUivScriptsForUser, canAccessAnyPage, canAccessApi, canAccessSkill } from '../services/distribution-service.js';
 import { sendExpediteNotification, getLatestSnapshotFollowups } from '../services/report-service.js';
 import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
@@ -221,8 +221,7 @@ const shortValue = (v) => { const s = typeof v === 'string' ? v : JSON.stringify
 function normalizeRecipients(list) {
     return [...new Set((Array.isArray(list) ? list : String(list || '').split(/[,，;；\s]+/))
         .map((x) => String(x || '').trim().replace(/^email:/i, ''))
-        .filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x))
-        .map((x) => `email:${x}`))];
+        .filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) || /^[a-z0-9][a-z0-9._-]{2,63}$/i.test(x)))];
 }
 
 // 平台页面与内置工具的使用说明（来自主线版，只保留本版有的）
@@ -705,26 +704,63 @@ export const TOOLS = [
     },
     {
         name: 'send_notification',
-        description: '通过基座通知接口发送邮件提醒（例如未达标指标催办）。仅管理员可用，执行前会请用户确认收件人和内容。收件人写邮箱地址；只有用户明确要求发送时才调用。',
+        description: '通过基座通知接口发送邮件提醒（msg_type=1）、应用号/WeLink消息通知（msg_type=2）或双通道同步下发（同时写站内首页横幅提醒）。收件人支持员工工号（如 wwx1528315、dWX1545337、00548379）或邮箱地址；执行前会弹出确认卡请用户核对。只有用户明确要求发送通知时才调用。',
         parameters: {
             type: 'object',
-            properties: { to: { type: 'array', items: { type: 'string' }, description: '收件人邮箱，最多 50 个' }, title: { type: 'string' }, content: { type: 'string', description: '正文（纯文本）' } },
+            properties: {
+                to: { type: 'array', items: { type: 'string' }, description: '接收人工号或邮箱列表，最多 50 个' },
+                title: { type: 'string', description: '通知标题' },
+                content: { type: 'string', description: '通知正文（纯文本）' },
+                channel: { type: 'string', enum: ['email', 'app', 'both'], description: '发送通道：email=仅邮件(msg_type=1)，app=仅应用号消息(msg_type=2)，both=双发并同步写站内横幅（默认 both）' },
+                cc: { type: 'array', items: { type: 'string' }, description: '可选：邮件抄送工号或邮箱（email_cc）' },
+                jumpUrl: { type: 'string', description: '可选：应用号通知跳转链接（app_msg_params.jump_url，有值才传）' },
+            },
             required: ['to', 'title', 'content'],
         },
         kind: 'external',
         async approval(args, ctx) {
-            if (!ctx.identity.isAdmin) return { error: '发送通知需要管理员权限' };
+            if (!ctx.identity.isAdmin && !(await canAccessSkill('smart-notify', ctx.identity))) {
+                return { error: '发送通知当前仅管理员可用（超级管理员将「智能研判与通知下发」技能全员开放后成员也可使用）' };
+            }
             const to = normalizeRecipients(args.to);
-            if (!to.length) return { error: '收件人为空或格式不对（需要邮箱地址）' };
+            if (!to.length) return { error: '收件人为空或格式不对（请传入有效工号或邮箱地址）' };
             if (to.length > 50) return { error: '一次最多发给 50 人' };
             if (!String(args.title || '').trim() || !String(args.content || '').trim()) return { error: '标题和正文都不能为空' };
-            return { preview: { channel: '基座邮件通知', targets: to.map((x) => x.replace(/^email:/, '')).join('、'), message: `${String(args.title).slice(0, 200)}\n\n${String(args.content).slice(0, 4000)}` } };
+            const ch = ['email', 'app', 'both'].includes(String(args.channel || '').toLowerCase()) ? String(args.channel).toLowerCase() : 'both';
+            const channelLabel = ch === 'email' ? '基座邮件通知 (msg_type=1)' : (ch === 'app' ? '基座应用号通知 (msg_type=2)' : '邮件 + 应用号双通道 + 站内横幅');
+            const cc = normalizeRecipients(args.cc);
+            const jumpUrl = String(args.jumpUrl || '').trim();
+            return {
+                preview: {
+                    channel: channelLabel,
+                    targets: to.join('、') + (cc.length ? `（抄送：${cc.join('、')}）` : ''),
+                    ...(jumpUrl ? { jumpUrl } : {}),
+                    message: `${String(args.title).slice(0, 200)}\n\n${String(args.content).slice(0, 4000)}`,
+                },
+            };
         },
-        async run(args) {
+        async run(args, ctx) {
             const to = normalizeRecipients(args.to);
-            const res = await sendExpediteNotification({ recipients: to, title: String(args.title).slice(0, 200), content: String(args.content).slice(0, 4000) });
+            const cc = normalizeRecipients(args.cc);
+            const ch = ['email', 'app', 'both'].includes(String(args.channel || '').toLowerCase()) ? String(args.channel).toLowerCase() : 'both';
+            const jumpUrl = String(args.jumpUrl || '').trim();
+            const res = await sendExpediteNotification({
+                recipients: to,
+                cc,
+                channel: ch,
+                jumpUrl,
+                title: String(args.title).slice(0, 200),
+                content: String(args.content).slice(0, 4000),
+                _actor: ctx?.identity?.username || '',
+            });
             const delivered = res?.baseResult?.code === 0 || res?.baseResult?.data?.success;
-            return { ok: Boolean(delivered), summary: delivered ? `已发送给 ${to.length} 人` : '发送失败', content: delivered ? `已通过基座通知发送给 ${to.length} 人。` : `基座通知接口返回：${JSON.stringify(res?.baseResult || {}).slice(0, 300)}` };
+            return {
+                ok: Boolean(delivered),
+                summary: delivered ? `已发送给 ${(res.resolvedRecipients || to).length} 人` : '发送失败',
+                content: delivered
+                    ? `已通过「${ch}」下发给 ${(res.resolvedRecipients || to).join('、')}（站内提醒写入 ${res.inAppAlertSent || 0} 人）。`
+                    : `基座通知接口返回：${JSON.stringify(res?.baseResult || {}).slice(0, 300)}`,
+            };
         },
     },
     {

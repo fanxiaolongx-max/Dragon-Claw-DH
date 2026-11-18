@@ -968,8 +968,9 @@ test('基座催办通知下发：预览可滚动、历史检索、工号分组�
     assert.equal(notifyRes.data.success, true);
     assert.ok(notifyRes.data.resolvedRecipients.includes('d00548379'), JSON.stringify(notifyRes.data.resolvedRecipients));
     assert.ok(notifyRes.data.resolvedRecipients.includes('l00123456'));
-    assert.ok(notifyRes.data.payload.receivers.includes('00998877'));
-    assert.ok(notifyRes.data.payload.receivers.includes('d00998877'));
+    const emailTargets = String(notifyRes.data.payload.email_params?.email_to || '').split(',');
+    assert.ok(emailTargets.includes('00998877'), notifyRes.data.payload.email_params?.email_to);
+    assert.ok(emailTargets.includes('d00998877'), notifyRes.data.payload.email_params?.email_to);
     assert.equal(
         notifyRes.data.resolutions.find(r => r.raw === '00548379')?.matchedBy,
         'prefix-lookup'
@@ -1194,4 +1195,107 @@ test('自定义 HTML 工具在真实基座下通过 fetch(x-dh-user) + srcdoc �
     const rawHtml = await rawRes.text();
     assert.match(rawHtml, /window\.DH=/);
     assert.match(rawHtml, /Hello Base/);
+});
+
+test('基座通知双通道协议（邮件 msg_type=1 & 应用号 msg_type=2）、一键下载全量自检与内置 smart-notify 技能权限', async () => {
+    const { call } = ctx;
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    // 1. 邮件通道 (msg_type="1") 符合基座 digitalHumanOperations / writeReport + email_params + email_cc 规范
+    const mailRes = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['wwx1528315', 'jwx1520867'],
+        cc: ['h00835326'],
+        channel: 'email',
+        title: '邮件催办标题',
+        content: '邮件催办正文',
+    });
+    assert.equal(mailRes.status, 200);
+    assert.deepEqual(mailRes.data.payload, {
+        module_type: 'digitalHumanOperations',
+        sub_module_type: 'writeReport',
+        msg_type: '1',
+        email_params: {
+            title: '邮件催办标题',
+            content: '邮件催办正文',
+            email_to: 'wwx1528315,jwx1520867',
+            email_cc: 'h00835326',
+        },
+    });
+
+    // 2. 应用号消息通道 (msg_type="2")：不传 jumpUrl 时省略 jump_url，传非空 jumpUrl 时透传
+    const appNoJump = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['wwx1528315'],
+        channel: 'app',
+        title: '应用号标题',
+        content: '应用号正文',
+    });
+    assert.equal(appNoJump.status, 200);
+    assert.deepEqual(appNoJump.data.payload, {
+        module_type: 'digitalHumanOperations',
+        sub_module_type: 'writeReport',
+        msg_type: '2',
+        app_msg_params: {
+            title: '应用号标题',
+            content: '应用号正文',
+            to_user_account: 'wwx1528315',
+            type: '1',
+        },
+    });
+
+    const appWithJump = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['wwx1528315'],
+        channel: 'app',
+        jumpUrl: 'https://example.huawei.com/task/1',
+        title: '带跳转的应用号消息',
+        content: '请点击处理',
+    });
+    assert.equal(appWithJump.status, 200);
+    assert.equal(appWithJump.data.payload.app_msg_params.jump_url, 'https://example.huawei.com/task/1');
+
+    // 3. 双通道 (channel="both") 同时产生 email 與 appMsg 载荷并触发站内未读通知
+    const bothRes = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['jwx1520867'],
+        channel: 'both',
+        title: '双发通知',
+        content: '双发正文',
+    });
+    assert.equal(bothRes.status, 200);
+    assert.equal(bothRes.data.payload.email.msg_type, '1');
+    assert.equal(bothRes.data.payload.appMsg.msg_type, '2');
+    assert.ok(bothRes.data.inAppAlertSent >= 1);
+
+    // 4. 新内置技能 smart-notify：默认仅超管可见/可用（非全员公开），超管手动全员开放后普通用户可见并可通过确认流调用 send_notification
+    const bobBefore = await call('bob', 'GET', '/api/agent-skills');
+    assert.equal(bobBefore.status, 200);
+    assert.equal(bobBefore.data.items.some(s => s.id === 'smart-notify'), false);
+    const aliceList = await call('alice', 'GET', '/api/agent-skills');
+    const smartSkill = aliceList.data.items.find(s => s.id === 'smart-notify');
+    assert.ok(smartSkill && smartSkill.builtIn === true && smartSkill.sharedAccess === false);
+
+    const { toolByName } = await import('../src/agent/tools.js');
+    const sendTool = toolByName.get('send_notification');
+    const bobBlocked = await sendTool.approval({ to: ['wwx1528315'], title: 'T', content: 'C' }, { identity: { username: 'bob', isAdmin: false, isSuper: false } });
+    assert.ok(bobBlocked.error);
+
+    // 超管在卡片右键设置为全员公开后，bob 可见且可发起确认卡（支持纯工号+通道）
+    const shareRes = await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'smart-notify', sharedAccess: true });
+    assert.equal(shareRes.status, 200);
+    assert.equal(shareRes.data.sharedAccess, true);
+    const bobAfter = await call('bob', 'GET', '/api/agent-skills');
+    assert.equal(bobAfter.data.items.some(s => s.id === 'smart-notify'), true);
+    const bobApproved = await sendTool.approval({ to: ['wwx1528315'], channel: 'app', title: '催办', content: '详情' }, { identity: { username: 'bob', isAdmin: false, isSuper: false } });
+    assert.ok(bobApproved.preview && !bobApproved.error);
+
+    // 收回默认非全员公开，保持后续断言干净
+    await call('alice', 'PATCH', '/api/distribution', { kind: 'skill', id: 'smart-notify', sharedAccess: false });
+
+    // 5. 诊断控制台一键全量自检完成后自动构建检查结果并支持直接下载、双模板切换
+    const dbgJs = fs.readFileSync(path.join(rootDir, 'static/js/shared/dh-debug-widget.js'), 'utf8');
+    assert.match(dbgJs, /async function buildDiagnosticBundle\(/);
+    assert.match(dbgJs, /await buildDiagnosticBundle\(\);\s*exportStatusText\.textContent/);
+    assert.match(dbgJs, /emailNotifyTemplate/);
+    assert.match(dbgJs, /appMsgNotifyTemplate/);
 });
