@@ -21,6 +21,7 @@ import {
     saveConversationList,
 } from '../services/ai-service.js';
 import { runAgent } from '../agent/loop.js';
+import { redactText } from '../agent/redact.js';
 import {
     handleChatUpload,
     handleChatUploadStart,
@@ -303,19 +304,54 @@ export async function aiRoutes(fastify) {
     }) }));
     fastify.delete('/schedules/:id', async (req) => ({ item: await cancelSchedule(req.params.id, ownerOf(req)) }));
 
-    // 增强提示词：把一句口语化的问题改写成清楚、可执行的提问；没配模型或失败时原样返回
-    fastify.post('/enhance-prompt', async (req) => {
-        const prompt = String(req.body?.prompt || '').trim();
-        if (!prompt) return { enhanced: '' };
+    // 增强提示词：兼容前端 { text, modelId, uiLanguage } 与旧版 { prompt }，返回 { prompt, enhanced, changed }
+    fastify.post('/enhance-prompt', async (req, reply) => {
+        const rawText = String(req.body?.text ?? req.body?.prompt ?? '').trim();
+        if (!rawText) return reply.code(400).send({ error: '请先输入需要增强的提示词' });
+        if (rawText.length > 8000) return reply.code(400).send({ error: '提示词最多支持 8000 个字符' });
+        if (/^\s*\/(?:new|session|schedule|btw|compact)\b/i.test(rawText)) {
+            return reply.code(400).send({ error: '快捷指令请直接执行，无需增强' });
+        }
+
+        const profiles = await listProfiles().catch(() => []);
+        const selected = profiles.find((p) => p.id === req.body?.modelId) || profiles.find((p) => p.isActive) || profiles[0];
+        if (!selected?.apiKey || !selected?.apiBaseUrl) {
+            return reply.code(503).send({ error: '请先配置可用的 AI 模型' });
+        }
+
+        const safeInput = redactText(rawText.slice(0, 4000));
+        const uiLang = req.body?.uiLanguage === 'en' ? 'English' : 'Chinese';
         const res = await callAiCompletion({
-            maxTokens: 600,
+            profileId: selected.id || '',
+            model: selected.model || '',
+            maxTokens: 800,
             messages: [
-                { role: 'system', content: '你是提示词编辑。把用户的提问改写得更清楚、具体、可执行：补全对象、范围、期望的输出形式，保留原意和原有的专有名词，不要回答问题，不要加客套话，不要超过 200 字。只输出改写后的提问。' },
-                { role: 'user', content: prompt.slice(0, 4000) },
+                {
+                    role: 'system',
+                    content: `你是提示词编辑。把用户的提问草稿改写得更清楚、具体、可执行：补全对象、范围、期望的输出形式，保留原意、原有 @skill 引用、URL、路径和专有名词，不要回答问题，不要加客套话，不要超过 250 字。界面语言为 ${uiLang}，改写结果保持用户原稿语言。只输出改写后的提问文本。`,
+                },
+                { role: 'user', content: safeInput },
             ],
         }).catch(() => null);
-        const text = String(res?.ok ? res.text : '').trim().replace(/^["“「]|["”」]$/g, '');
-        return { enhanced: text || prompt, changed: Boolean(text && text !== prompt) };
+
+        if (!res?.ok) {
+            return reply.code(502).send({ error: res?.error || '提示词增强失败，请稍后重试；原文已保留' });
+        }
+
+        let text = String(res.text || '').trim();
+        const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+        if (fenced) text = fenced[1].trim();
+        if (text.startsWith('{') && text.endsWith('}')) {
+            try {
+                const parsed = JSON.parse(text);
+                if (typeof parsed?.prompt === 'string') text = parsed.prompt.trim();
+            } catch { /* ignore */ }
+        }
+        text = redactText(text.replace(/^["“「]|["”」]$/g, '').trim());
+        if (!text) {
+            return reply.code(502).send({ error: '增强结果为空，原文已保留' });
+        }
+        return { prompt: text, enhanced: text, changed: text !== rawText };
     });
 
     // 月报中译英：保留加粗、颜色等行内格式（专题分析的中英对照用）

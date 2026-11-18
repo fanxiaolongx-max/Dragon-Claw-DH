@@ -1117,3 +1117,33 @@ test('自定义菜单栏：前后端菜单项对齐（含 requirements）且支�
     const reloaded = await call('bob', 'GET', '/api/sidebar-menu');
     assert.deepEqual(reloaded.data, saved.data);
 });
+
+test('AI BI 更多按钮与首页输入框首帧对齐样式校验', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    const aiBiCss = fs.readFileSync(path.join(rootDir, 'static/css/ai-bi.css'), 'utf8');
+    assert.match(aiBiCss, /\.bi-more>summary\{[^}]*height:32px[^}]*border-radius:8px/);
+
+    const trimCss = fs.readFileSync(path.join(rootDir, 'static/css/dh-web-trim.css'), 'utf8');
+    assert.match(trimCss, /#dcEnhance\[hidden\]\s*~\s*#dcModel\[hidden\]\s*~\s*#dcVoice\s*~\s*#dcSend/);
+
+    const indexHtml = fs.readFileSync(path.join(rootDir, 'static/index.html'), 'utf8');
+    assert.match(indexHtml, /id="dcAttach"[^>]*><svg viewBox="0 0 20 20"[^>]*><path d="M10 4v12M4 10h12"/);
+});
+
+test('提示词增强：支持前端 { text, modelId, uiLanguage } 入参并返回 { prompt }', async () => {
+    const { call } = ctx;
+    const emptyRes = await call('bob', 'POST', '/api/ai/enhance-prompt', { text: '   ' });
+    assert.equal(emptyRes.status, 400);
+
+    const cmdRes = await call('bob', 'POST', '/api/ai/enhance-prompt', { text: '/compact' });
+    assert.equal(cmdRes.status, 400);
+
+    const okRes = await call('bob', 'POST', '/api/ai/enhance-prompt', { text: '帮我看下本月未达标指标', uiLanguage: 'zh' });
+    assert.equal(okRes.status, 200, JSON.stringify(okRes.data));
+    assert.ok(typeof okRes.data.prompt === 'string' && okRes.data.prompt.trim().length > 0);
+    assert.equal(okRes.data.enhanced, okRes.data.prompt);
+});

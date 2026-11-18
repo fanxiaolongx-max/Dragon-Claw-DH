@@ -83,3 +83,8 @@ html.dh-web .is-dh-uiv-disabled {
     box-shadow: none !important;
     pointer-events: auto !important;
 }
+
+/* 首页输入框工具栏首帧对齐：#dcVoice 由 Web 版裁剪隐藏（无 [hidden] 属性），在模型列表返回前保持发送按钮右对齐 */
+html.platform-home.dh-web #dcComposer #dcEnhance[hidden] ~ #dcModel[hidden] ~ #dcVoice ~ #dcSend {
+    margin-left: auto;
+}
