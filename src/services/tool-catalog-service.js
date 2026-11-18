@@ -9,7 +9,7 @@ const CACHE_MS = 15_000;
 
 const GROUPS = [
     { id: 'query', label: '查询与分析', labelEn: 'Query & analysis', note: '只读，不会改动数据', kindLabel: '只读',
-        tools: ['list_databases', 'database_schema', 'query_database', 'read_database_table', 'get_report_overview', 'query_data', 'calculate', 'read_file', 'view_image'] },
+        tools: ['list_databases', 'database_schema', 'query_database', 'read_database_table', 'get_report_overview', 'get_expiring_followups', 'query_data', 'calculate', 'read_file', 'view_image'] },
     { id: 'netcare', label: 'NetCare 数据探查', labelEn: 'NetCare data', note: '只读查询平台授权的业务数据源', kindLabel: '只读',
         tools: ['netcare_tables', 'netcare_describe', 'netcare_query', 'netcare_sql'] },
     { id: 'platform', label: '平台能力', labelEn: 'Platform', note: '技能、自定义工具、抓取脚本', kindLabel: '平台',

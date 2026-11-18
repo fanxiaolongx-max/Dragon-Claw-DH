@@ -402,6 +402,22 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
         const docList = await (await fetch(`${appUrl}/api/ai-report/documents`)).json();
         assert.equal(Array.isArray(docList), true);
         assert.equal(docList.length, 1);
+        // 默认显示的月报（与主线版一致）：设为默认后排在最前、读取时带标记；另存的新报告不继承
+        const doc2 = await (await fetch(`${appUrl}/api/ai-report/documents`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: '2026-10 AI 月报', reportMonth: '2026-10', pages: [] }),
+        })).json();
+        const setDef = await (await fetch(`${appUrl}/api/ai-report/documents/${docSave.id}/default`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isDefault: true }),
+        })).json();
+        assert.deepEqual(setDef, { id: docSave.id, isDefault: true });
+        const listed = await (await fetch(`${appUrl}/api/ai-report/documents`)).json();
+        assert.equal(listed[0].id, docSave.id);
+        assert.deepEqual(listed.map((d) => d.isDefault), [true, false]);
+        assert.equal((await (await fetch(`${appUrl}/api/ai-report/documents/${doc2.id}`)).json()).isDefault, false);
+        assert.equal((await (await fetch(`${appUrl}/api/ai-report/documents/${docSave.id}`)).json()).isDefault, true);
+        await fetch(`${appUrl}/api/ai-report/documents/${docSave.id}/default`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isDefault: false }) });
+        assert.equal((await (await fetch(`${appUrl}/api/ai-report/documents`)).json()).some((d) => d.isDefault), false);
     } finally {
         if (child.exitCode === null && child.signalCode === null) {
             child.kill('SIGTERM');

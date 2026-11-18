@@ -2127,7 +2127,7 @@
         const streamStartedAt = Date.now();
         let streamFirstDeltaAt = 0;
         try {
-            const clientToolData = await collectClientToolData(`${state.messages.slice(-3, -1).map(item => item.role === 'user' ? item.content : '').join('\n')}\n${content}`);
+            const clientToolData = options.tourReportExample ? [] : await collectClientToolData(`${state.messages.slice(-3, -1).map(item => item.role === 'user' ? item.content : '').join('\n')}\n${content}`);
             const data = await api.requestStreamingChat({
                 toolSlug: state.focusedTool?.id || '',
                 clientToolData,
@@ -2138,6 +2138,7 @@
                 uiLanguage: lang() === 'en-US' ? 'en' : 'zh',
                 sessionId: state.sessionId,
                 agent: 'dragon-claw-home',
+                ...(options.tourReportExample ? { tourReportExample: true } : {}),
                 ...(homeConnector ? { homeConnector } : {}),
                 // 会话内保持的 Skill（输入框上方标签）；本条消息里的 @id 由后端直接解析
                 ...(keptSkills.length ? { skills: keptSkills } : {}),
@@ -3167,16 +3168,6 @@
                 return timeB - timeA;
             });
 
-            if (query) {
-                for (const root of projectMap.keys()) collapsedProjects.delete(root);
-            } else {
-                for (const [root, entries] of sortedProjects) {
-                    if (entries.some(e => isItemActive(e.item))) {
-                        collapsedProjects.delete(root);
-                    }
-                }
-            }
-
             const archivedBanner = isArchived
                 ? `<div class="home-chat-archive-banner" role="status"><span class="home-chat-archive-banner-label"><span class="home-chat-archive-dot" aria-hidden="true"></span>${escapeHtml(tx('archivedViewBanner'))}</span><button type="button" class="home-chat-archive-exit" data-chat-exit-archived>${escapeHtml(tx('archivedExit'))}</button></div>`
                 : '';
@@ -3222,7 +3213,7 @@
                     const hasActive = entries.some(e => isItemActive(e.item));
                     html.push(`
                         <div class="home-chat-project${isCollapsed ? ' is-collapsed' : ''}${hasActive ? ' is-active-project' : ''}" data-project-root="${escapeHtml(root)}">
-                            <div class="home-chat-project-head" role="button" tabindex="0" title="${escapeHtml(root)}" data-project-toggle>
+                            <div class="home-chat-project-head" role="button" tabindex="0" aria-expanded="${!isCollapsed}" title="${escapeHtml(root)}" data-project-toggle>
                                 <span class="home-chat-project-chevron" aria-hidden="true">${isCollapsed ? '›' : '⌄'}</span>
                                 <span class="home-chat-project-icon" aria-hidden="true">
                                     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6V5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h6A1.5 1.5 0 0 1 17.5 7v8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 15V6Z"/></svg>
@@ -3675,6 +3666,78 @@
         updateSendButton();
     }
 
+    let submittingTourExample = false;
+
+    function canTypeTourExample(draft) {
+        const connector = window.HomeAgentDiscussion?.getSelectedConnector?.() || 'none';
+        return !state.controller && !state.restoring && !state.sessionId && !state.messages.length && !state.attachments.length
+            && !external.active && !el.input.disabled && el.input.value === draft && connector === 'none';
+    }
+
+    async function typeTourExample(text, signal) {
+        if (signal.aborted || el.input.readOnly || !canTypeTourExample('')) return null;
+        const characters = Array.from(text);
+        const duration = prefersReducedMotion() ? 0 : 2200;
+        let typed = '';
+        const updateInput = value => {
+            el.input.value = value;
+            el.input.scrollTop = el.input.scrollHeight;
+            el.input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        function release() {
+            signal.removeEventListener('abort', cancel);
+            el.input.readOnly = false;
+        }
+        function cancel() {
+            release();
+            if (typed && el.input.value === typed) updateInput('');
+        }
+        el.input.readOnly = true;
+        el.input.focus({ preventScroll: true });
+        signal.addEventListener('abort', cancel, { once: true });
+        const started = performance.now() + (duration ? 240 : 0);
+        while (typed !== text) {
+            const time = await new Promise(resolve => requestAnimationFrame(resolve));
+            if (signal.aborted) return null;
+            if (!canTypeTourExample(typed)) {
+                cancel();
+                return null;
+            }
+            const count = duration ? Math.floor(characters.length * (time - started) / duration) : characters.length;
+            if (count <= 0) continue;
+            const next = characters.slice(0, count).join('');
+            if (next !== typed) updateInput(typed = next);
+        }
+        el.input.scrollTop = 0;
+        return {
+            cancel,
+            submit() {
+                if (signal.aborted || !canTypeTourExample(text)) {
+                    cancel();
+                    return false;
+                }
+                release();
+                submittingTourExample = true;
+                try {
+                    el.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+                } finally {
+                    submittingTourExample = false;
+                }
+                return Boolean(state.controller);
+            }
+        };
+    }
+
+    function showTourLanding() {
+        if (!document.body.classList.contains('dc-chatting')) return null;
+        const scrollTop = el.thread.scrollTop;
+        setChatting(false);
+        return () => {
+            setChatting(true);
+            el.thread.scrollTop = scrollTop;
+        };
+    }
+
     function openKnowledgeGraphFrom(trigger) {
         const api = window.ToolsAIAssistant;
         if (!api?.openKnowledgeGraph) return;
@@ -3782,7 +3845,9 @@
             }
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
                 event.preventDefault();
-                if (!state.controller || isSideCommand(el.input.value)) send(el.input.value, undefined, { fromComposer: true });
+                if (!el.input.readOnly && (!state.controller || isSideCommand(el.input.value))) {
+                    send(el.input.value, undefined, { fromComposer: true, tourReportExample: submittingTourExample });
+                }
             }
         });
 
@@ -3942,7 +4007,7 @@
         });
         window.addEventListener('home:resume-agent-discussion',event=>{if(!state.controller&&!state.restoring&&event.detail?.sessionId===state.sessionId)sendDesktopDiscussion('',event.detail);});
         watchSchedules();
-        window.DragonClaw = { refreshModelPicker: renderModelPicker, startWithSkill, enterExternal, exitExternal, newChat, openSchedules: openSchedulePanel, openChat: openChatFromList, openLatest:openLatestChat, currentSessionId:()=>state.sessionId, lang, isExternal: () => external.active };
+        window.DragonClaw = { refreshModelPicker: renderModelPicker, startWithSkill, typeTourExample, showTourLanding, enterExternal, exitExternal, newChat, openSchedules: openSchedulePanel, openChat: openChatFromList, openLatest:openLatestChat, currentSessionId:()=>state.sessionId, lang, isExternal: () => external.active };
         // 其他页面或新标签打开的 /?skill=<id>：直接进入该技能的新对话
         const linkedSkill = new URLSearchParams(location.search).get('skill');
         if (linkedSkill) {

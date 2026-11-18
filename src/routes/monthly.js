@@ -10,6 +10,7 @@ import {
     readAiReport,
     saveAiReport,
     deleteAiReport,
+    setDefaultAiReport,
     getAiReportTemplate,
     listAiReportSources,
     listAiReportMetrics,
@@ -143,6 +144,7 @@ export async function aiReportRoutes(fastify) {
         return readAiReport(req.params.id);
     });
     fastify.post('/documents', async (req) => saveAiReport(req.body || {}, userOf(req)));
+    fastify.post('/documents/:id/default', async (req) => setDefaultAiReport(req.params.id, { isDefault: req.body?.isDefault !== false }));
     fastify.delete('/documents/:id', async (req) => deleteAiReport(req.params.id));
 
     fastify.get('/template', async (req) => getAiReportTemplate(req.query?.month));

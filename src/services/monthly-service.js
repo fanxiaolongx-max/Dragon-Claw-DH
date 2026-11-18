@@ -255,20 +255,38 @@ export async function exportReportMsgBuffer(rawBody = {}) {
 // AI Report Documents (ai_report_documents) & Template
 // ============================================================
 
+// 打开月报页时默认显示哪份报告（与主线版一致）。基座加列要走 DBA，这里只记一个报告 ID 在键值表里。
+const AI_REPORT_DEFAULT_KEY = 'ai_report_default_id';
+const defaultAiReportId = async () => String((await kvGet(AI_REPORT_DEFAULT_KEY, '')) || '');
+
 export async function listAiReports() {
+    const defaultId = await defaultAiReportId();
     const rows = await selectTable('ai_report_documents', {
         columns: ['id', 'name', 'report_month', 'updated_at', 'updated_by'],
         orderBySql: '`updated_at` DESC, `id` ASC',
         limit: 300,
         memSort: (a, b) => ((b.updated_at || 0) - (a.updated_at || 0)) || String(a.id).localeCompare(String(b.id)),
     });
-    return rows.map((r) => ({
+    const list = rows.map((r) => ({
         id: r.id,
         name: r.name,
         reportMonth: r.report_month,
         updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : '',
         updatedBy: r.updated_by || '',
+        isDefault: Boolean(defaultId) && r.id === defaultId,
     }));
+    // 默认报告排最前，其余仍按更新时间
+    return [...list.filter((r) => r.isDefault), ...list.filter((r) => !r.isDefault)];
+}
+
+export async function setDefaultAiReport(id, { isDefault = true } = {}) {
+    checkId(id, 'report ID');
+    const existing = await readAiReport(id).catch(() => null);
+    if (!existing) fail('Report not found', 404);
+    const next = Boolean(isDefault);
+    if (next) await kvSet(AI_REPORT_DEFAULT_KEY, id);
+    else if ((await defaultAiReportId()) === id) await kvSet(AI_REPORT_DEFAULT_KEY, '');
+    return { id, isDefault: next };
 }
 
 export async function readAiReport(id) {
@@ -285,6 +303,7 @@ export async function readAiReport(id) {
         ...doc,
         id: r.id,
         updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : (doc.updatedAt || ''),
+        isDefault: (await defaultAiReportId()) === r.id,
     };
 }
 
@@ -306,7 +325,7 @@ export async function saveAiReport(input, user = '') {
         updated_at: now,
         updated_by: String(user || '').slice(0, 120),
     }, ['id'], ['name', 'report_month', 'payload_json', 'updated_at', 'updated_by']);
-    return doc;
+    return { ...doc, isDefault: (await defaultAiReportId()) === doc.id };
 }
 
 export async function deleteAiReport(id) {
@@ -317,6 +336,7 @@ export async function deleteAiReport(id) {
         whereSql: `\`id\` = ${sqlVal(id)}`,
         memFilter: (r) => r.id === id,
     });
+    if ((await defaultAiReportId()) === id) await kvSet(AI_REPORT_DEFAULT_KEY, '');
     return { id, deleted: true };
 }
 

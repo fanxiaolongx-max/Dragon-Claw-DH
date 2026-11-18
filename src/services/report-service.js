@@ -453,6 +453,61 @@ function summarizeWarningSnapshot(row) {
     };
 }
 
+// 最新一期入库报表里的临期 / 超期催办明细（与主线版 getLatestSnapshotFollowups 同一套口径，和「一键催办」用同一份预警明细）
+const FOLLOWUP_KIND_LABELS = { rectification: '整改', risk: '风险', special: '专项', sr: 'SR', vulnerability: '漏洞' };
+const cleanFollowupText = (value, fallback) => String(value || fallback || '').replace(/^[\s🔧🧯📞⚠️⭐]+/u, '').replace(/\s*合集\s*$/, '').trim();
+function followupOwner(ticket) {
+    const d = ticket && ticket.data && typeof ticket.data === 'object' ? ticket.data : {};
+    const owner = d.fullname || d.cur_assignee || d.task_owner || d.sr_owner || d.owner
+        || d.current_handler_name || d.owner_show || d.current_handler || d.risk_eliminate_plan_owner_name
+        || d.owner_name || d.handler || d.assignee || d.responsible_person
+        || d['责任人'] || d['负责人'] || d['当前处理人'];
+    return cleanFollowupText(owner, '未明确负责人');
+}
+
+export async function getLatestSnapshotFollowups({ now = Date.now() } = {}) {
+    const rows = await selectTable('report_snapshots', {
+        columns: ['id', 'snapshot_id', 'month', 'created_at', 'raw_data_json'],
+        orderBySql: '`id` DESC',
+        limit: 1,
+        memSort: (a, b) => (b.id || 0) - (a.id || 0),
+    });
+    if (!rows.length) return { available: false, reason: '尚无入库报表' };
+    const snapshot = rows[0];
+    const raw = parseJsonCol(snapshot.raw_data_json, {});
+    const tickets = Array.isArray(raw.expiringTickets) ? raw.expiringTickets : [];
+    const items = tickets.filter((t) => t && typeof t === 'object').map((ticket) => {
+        const d = ticket.data || {};
+        const dueDate = [ticket.deadline, d._slaDeadline, d.rectify_plan_end_time, d.exp_close_date, d.sus_exp_close_date, d.support_end_time]
+            .find((v) => typeof v === 'string' && Number.isFinite(Date.parse(v))) || null;
+        const dueTime = dueDate ? Date.parse(dueDate) : null;
+        const recordedDays = ticket._slaDays == null || ticket._slaDays === '' ? NaN : Number(ticket._slaDays);
+        const owner = followupOwner(ticket);
+        const id = d.sr_num || d.sr_id || d.task_id || d.risk_id || d.ticket_id || d['单号'] || d['问题风险编号'] || d['问题编号'];
+        return {
+            id: id ? String(id).slice(0, 100) : null,
+            kind: ticket.collection === 'special' ? 'CPT 专项风险' : FOLLOWUP_KIND_LABELS[ticket.collection] || cleanFollowupText(ticket.title, '其他任务').slice(0, 80),
+            owner: owner === '未明确负责人' ? null : owner.slice(0, 100),
+            dueDate: dueDate?.slice(0, 64) || null,
+            daysUntilDue: dueTime === null ? null : Math.ceil((dueTime - now) / 86_400_000),
+            daysAtSnapshot: Number.isFinite(recordedDays) && Math.abs(recordedDays) < 999_999 ? recordedDays : null,
+            status: dueTime === null ? 'unknown' : dueTime < now ? 'overdue' : 'upcoming',
+        };
+    });
+    const order = { upcoming: 0, overdue: 1, unknown: 2 };
+    items.sort((a, b) => order[a.status] - order[b.status]
+        || (a.dueDate ? Date.parse(a.dueDate) - Date.parse(b.dueDate) : (a.daysAtSnapshot ?? Infinity) - (b.daysAtSnapshot ?? Infinity)));
+    return {
+        available: true,
+        snapshot: { id: snapshot.snapshot_id, month: snapshot.month, collectedAt: raw.timestamp || snapshot.created_at },
+        checkedAt: new Date(now).toISOString(),
+        total: items.length,
+        dueWithin3Days: items.filter((i) => i.status === 'upcoming' && i.daysUntilDue <= 3).length,
+        overdue: items.filter((i) => i.status === 'overdue').length,
+        items: items.slice(0, 60),
+    };
+}
+
 export async function getExpiringWarningTrends(daysInput = 90) {
     const days = Number.isFinite(Number(daysInput)) && Number(daysInput) > 0 ? Math.min(Number(daysInput), 365) : 90;
     const cutoffStr = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);

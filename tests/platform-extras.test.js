@@ -96,7 +96,7 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         const catalog = (await call('alice', 'GET', '/api/agent-mcp/catalog')).data;
         assert.equal(catalog.manage, true);
         const allTools = catalog.groups.flatMap((g) => g.tools);
-        assert.equal(allTools.length, 38); // 含 NetCare 数据探查 4 个、跟进任务 4 个、指标规则条件维护 4 个、工具使用说明 1 个
+        assert.equal(allTools.length, 39); // 含 NetCare 数据探查 4 个、跟进任务 4 个、指标规则条件维护 4 个、工具使用说明 1 个、临期催办 1 个
         assert.deepEqual(catalog.groups.find((g) => g.id === 'sla_rules').tools.map((t) => t.name), ['sla_find_metric_rules', 'sla_update_metric_conditions', 'sla_list_metric_rule_changes', 'sla_revert_metric_rule_change']);
         assert.equal(allTools.find((t) => t.name === 'calculate').calls, 1);
         assert.equal((await call('bob', 'GET', '/api/agent-mcp/catalog')).data.manage, false);

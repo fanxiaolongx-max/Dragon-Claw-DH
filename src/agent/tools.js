@@ -10,8 +10,8 @@ import { saveCustomTool, listCustomTools } from '../services/custom-tool-service
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
 import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory, uivScriptOrigin } from '../services/uiv-service.js';
-import { filterSkillsForUser, filterUivScriptsForUser, canAccessAnyPage } from '../services/distribution-service.js';
-import { sendExpediteNotification } from '../services/report-service.js';
+import { filterSkillsForUser, filterUivScriptsForUser, canAccessAnyPage, canAccessApi } from '../services/distribution-service.js';
+import { sendExpediteNotification, getLatestSnapshotFollowups } from '../services/report-service.js';
 import { loadTables, runQuery } from './table-data.js';
 import { evaluate } from './calc.js';
 import { NETCARE_TOOLS } from './netcare-tools.js';
@@ -348,6 +348,19 @@ export const TOOLS = [
             let content = JSON.stringify(body);
             if (content.length > 30_000) content = JSON.stringify({ ...body, otherMetrics: `共 ${metrics.length - failing.length} 项达标指标，已省略；需要时用 query_database 查 report_metric_data` });
             return { ok: true, summary: `${metrics.length} 项指标，${failing.length} 项未达标`, content };
+        },
+    },
+    {
+        name: 'get_expiring_followups',
+        description: '取最新一期入库报表里的临期 / 超期催办明细（单号、类别、负责人、到期日、剩余天数、状态），和「一键催办」用同一份数据。用户问“哪些快到期”“哪些超期了”“该催谁”时调用；只读，不会发消息。',
+        parameters: { type: 'object', properties: {} },
+        async run(_args, ctx) {
+            if (!(await canAccessApi('/db/latest_failing', 'GET', ctx?.identity))) {
+                return { ok: false, summary: '一键催办未开放', content: '「一键催办」页面尚未向全员开放，当前账号不能读取催办快照。' };
+            }
+            const result = await getLatestSnapshotFollowups();
+            if (!result.available) return { ok: true, summary: result.reason, content: `${result.reason}。请先在「数据导入」(/sla) 导入并在「报表看板」(/report) 入库。` };
+            return { ok: true, summary: `${result.total} 条，3 天内到期 ${result.dueWithin3Days} 条，已超期 ${result.overdue} 条`, content: JSON.stringify(result) };
         },
     },
     {

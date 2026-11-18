@@ -104,7 +104,7 @@ if (typeof window !== 'undefined') {
         writeNavigationBootstrapCache();
         publishPlatformCatalog();
     };
-}列表
+}
 const NAV_WORKFLOW_IDS = ['uivf12', 'sla', 'report', 'expedite', 'monthly', 'ai-bi', 'bigscreen'];
 const NAV_WORKFLOW_CATEGORY = '__workflow';
 window.NavWorkflow = {
