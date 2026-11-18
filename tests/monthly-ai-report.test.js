@@ -590,12 +590,26 @@ test('leave-page guards use AppDialog without native beforeunload and homepage p
     assert.match(tourJs, /window\.HomeProductTour\s*=/);
     assert.match(tourJs, /dh_home_tour_v1:/);
     assert.match(tourJs, /navigator\.webdriver/);
-    // 新版引导（与主线版同一套）结束时关掉临时打开的工具、恢复对话和侧栏
+    // 新版引导（与主线版同一套）：结束时恢复对话和侧栏；工具步骤只显示静态快照，不打开真实工具
     assert.match(tourJs, /restoreTourChat/);
-    assert.match(tourJs, /closeTourTool/);
     assert.match(tourJs, /wasSidebarCollapsed/);
+    assert.match(tourJs, /sandbox="allow-same-origin"/);
+    assert.doesNotMatch(tourJs, /HomeToolFrame\?\.open/);
     assert.doesNotMatch(tourJs, /opsDrafts/, '基座没有运维待办，引导里不能有这一步');
-    assert.match(indexHtml, /js\/home\/product-tour\.js/);
+    assert.match(indexHtml, /js\/home\/product-tour-demos\.js[\s\S]*js\/home\/product-tour\.js/);
+    const demosJs = fs.readFileSync(path.join(rootDir, 'static/js/home/product-tour-demos.js'), 'utf8');
+    assert.doesNotMatch(demosJs, /opsDrafts/);
+    // 第一步在真实输入框和对话区演示，由 dragon-claw 提供不发请求的演示接口
+    const dragonClawJs = fs.readFileSync(path.join(rootDir, 'static/js/home/dragon-claw.js'), 'utf8');
+    assert.match(dragonClawJs, /function startTourDemo\(/);
+    assert.match(tourJs, /startTourDemo/);
+    // 公开仓库：快照不含脚本，也不含真实地名和内部地址
+    for (const name of ['uivf12', 'sla', 'report', 'expedite', 'monthly', 'bigscreen']) {
+        const snapshot = fs.readFileSync(path.join(rootDir, `static/assets/tour/${name}.html`), 'utf8');
+        assert.doesNotMatch(snapshot, /<script\b/i, `${name} snapshot has no scripts`);
+        assert.doesNotMatch(snapshot, /埃及|Egypt|fanxiaolong|huawei\.com|gtsdata/i, `${name} snapshot is anonymized`);
+        assert.doesNotMatch(snapshot, /(?:href|src)="\/(?!\/)/, `${name} snapshot uses relative asset paths`);
+    }
     assert.match(homeShellJs, /HomeProductTour\?\.replay/);
 });
 
