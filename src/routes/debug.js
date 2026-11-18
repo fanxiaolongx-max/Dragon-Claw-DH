@@ -2,8 +2,10 @@ import { config, endpoints } from '../config.js';
 import { resolveRequestIdentity, parseCookies } from '../core/identity.js';
 import { listLogs, clearLogs, subscribeLogs, pushLog } from '../core/log-ring.js';
 import { debugProbeAction, isMemoryMode } from '../services/system-service.js';
-import { sendExpediteNotification } from '../services/report-service.js';
+import { sendExpediteNotification, listExpediteDirectory } from '../services/report-service.js';
 import { getActiveSettings } from '../services/ai-service.js';
+import { alertSummary } from '../services/alert-service.js';
+import { redactText } from '../agent/redact.js';
 import { secretsAreStrong } from '../core/secrets.js';
 
 function maskVal(val) {
@@ -118,12 +120,35 @@ export async function debugRoutes(fastify) {
     fastify.post('/test/:action', async (req) => {
         const started = Date.now();
         const identity = resolveRequestIdentity(req);
-        const result = await debugProbeAction(req.params.action, {
-            ...(req.body && typeof req.body === 'object' ? req.body : {}),
-            userId: identity.username,
-        });
+        const { action } = req.params;
+        let result;
+        if (action === 'alert-notify-check') {
+            const [alerts, directory] = await Promise.all([
+                alertSummary(identity.username).catch((e) => ({ error: e.message })),
+                listExpediteDirectory().catch((e) => ({ error: e.message })),
+            ]);
+            result = {
+                code: 0,
+                notifyEndpointConfigured: Boolean(endpoints.notify),
+                notifyEndpoint: maskVal(endpoints.notify),
+                alerts,
+                expediteHistoryCount: Array.isArray(directory?.history) ? directory.history.length : 0,
+                expediteGroupCount: Array.isArray(directory?.groups) ? directory.groups.length : 0,
+                knownEmployeeCount: Array.isArray(directory?.knownEmployees) ? directory.knownEmployees.length : 0,
+            };
+        } else if (action === 'redact-check') {
+            const sample = '请求 https://admin:SecretPass99@example.com/api | 账号密码: admin / SecretPass99';
+            const output = redactText(sample);
+            const passed = output.includes('admin') && !output.includes('SecretPass99') && output.includes('[已隐藏]');
+            result = { code: passed ? 0 : 500, passed, sampleLength: sample.length, output };
+        } else {
+            result = await debugProbeAction(action, {
+                ...(req.body && typeof req.body === 'object' ? req.body : {}),
+                userId: identity.username,
+            });
+        }
         return {
-            action: req.params.action,
+            action,
             durationMs: Date.now() - started,
             memoryMode: isMemoryMode(),
             result,
@@ -166,7 +191,7 @@ export async function debugRoutes(fastify) {
         const started = Date.now();
         const raw = req.body && typeof req.body === 'object' ? req.body : {};
         const customPayload = raw.payload || (raw.module_type || raw.msg_type ? raw : null);
-        const result = await sendExpediteNotification({ ...raw, payload: customPayload });
+        const result = await sendExpediteNotification({ ...raw, payload: customPayload, _skipInboxAlert: true });
         return {
             action: 'notify-test',
             durationMs: Date.now() - started,

@@ -333,7 +333,17 @@ export async function platformShellRoutes(fastify) {
         const id = resolveRequestIdentity(req);
         const stored = await kvGet(`sidebar_menu:${id.username}`, null);
         if (stored && Array.isArray(stored.primary) && Array.isArray(stored.more)) {
-            return stored;
+            const seen = new Set();
+            const pick = (list) => list.filter((x) => SIDEBAR_IDS.has(x) && !seen.has(x) && seen.add(x));
+            const primary = pick(stored.primary);
+            const more = pick(stored.more);
+            for (const x of [...SIDEBAR_PRIMARY, ...SIDEBAR_MORE]) {
+                if (!seen.has(x)) {
+                    seen.add(x);
+                    more.push(x);
+                }
+            }
+            return { primary, more };
         }
         return { primary: [...SIDEBAR_PRIMARY], more: [...SIDEBAR_MORE] };
     });

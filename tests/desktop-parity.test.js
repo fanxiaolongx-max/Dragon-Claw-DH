@@ -905,3 +905,215 @@ test('对话附件上传：普通用户支持 JSON base64 与分块上传（绕�
     assert.equal(done.data.files[0].name, 'chunked-log.json');
     assert.equal(done.data.files[0].size, Buffer.byteLength(sample));
 });
+
+test('脱敏保留用户名：复合账号密码与 URL 中的 admin 不误脱敏', async () => {
+    const { redactText } = await import('../src/agent/redact.js');
+    const urlMasked = redactText('请求地址 https://admin:SuperSecret99@example.com/api');
+    assert.ok(urlMasked.includes('https://admin:[已隐藏]@example.com/api'), urlMasked);
+    assert.ok(!urlMasked.includes('SuperSecret99'), urlMasked);
+
+    const compoundMasked = redactText('账号密码: admin / SuperSecret99，请登录后导出');
+    assert.ok(compoundMasked.includes('admin'), compoundMasked);
+    assert.ok(compoundMasked.includes('[已隐藏]'), compoundMasked);
+    assert.ok(!compoundMasked.includes('SuperSecret99'), compoundMasked);
+});
+
+test('基座催办通知下发：预览可滚动、历史检索、工号分组与无首字母工号解析', async () => {
+    const { call } = ctx;
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    // 1. 前端预览区滚动与历史/分组/去首字母 UI 控件校验
+    const expediteHtml = fs.readFileSync(path.join(rootDir, 'static/expedite.html'), 'utf8');
+    assert.match(expediteHtml, /#base-notify-preview\s*\{[^}]*overflow-y:\s*auto/i);
+    assert.match(expediteHtml, /id="base-notify-history-search"/);
+    assert.match(expediteHtml, /id="base-notify-groups-bar"/);
+    assert.match(expediteHtml, /function saveCurrentNotifyGroup\(/);
+    assert.match(expediteHtml, /function isLetterlessNotifyId\(/);
+
+    // 2. 写入已知员工数据并验证 /api/expedite/notify-recipients 检索池
+    const ownerRes = await call('alice', 'POST', '/api/db/bigscreen_owners', {
+        items: [{ cat_name: '整体', metric_label: 'demo_kpi', emp_id: 'd00548379', owner_name: '张三' }],
+    });
+    assert.equal(ownerRes.status, 200);
+
+    const dir1 = await call('alice', 'GET', '/api/expedite/notify-recipients');
+    assert.equal(dir1.status, 200);
+    assert.ok(Array.isArray(dir1.data.knownEmployees));
+    assert.ok(dir1.data.knownEmployees.some(e => e.id === 'd00548379' && e.name === '张三'));
+
+    // 3. 创建与删除工号自定义分组
+    const groupRes = await call('alice', 'POST', '/api/expedite/notify-groups', {
+        name: '核心值班组',
+        members: [
+            { id: 'd00548379', name: '张三' },
+            { id: 'l00123456', name: '李四' },
+        ],
+    });
+    assert.equal(groupRes.status, 200);
+    assert.equal(groupRes.data.success, true);
+    assert.equal(groupRes.data.groups.length, 1);
+    const savedGroupId = groupRes.data.group.id;
+
+    // 4. 下发通知：无首字母已知工号 00548379 自动匹配 d00548379；未知无首字母 00998877 自动扩展 a..z 前缀
+    const notifyRes = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['00548379', '00998877', 'l00123456'],
+        recipientNames: { l00123456: '李四' },
+        title: '催办测试',
+        content: '测试内容',
+    });
+    assert.equal(notifyRes.status, 200, JSON.stringify(notifyRes.data));
+    assert.equal(notifyRes.data.success, true);
+    assert.ok(notifyRes.data.resolvedRecipients.includes('d00548379'), JSON.stringify(notifyRes.data.resolvedRecipients));
+    assert.ok(notifyRes.data.resolvedRecipients.includes('l00123456'));
+    assert.ok(notifyRes.data.payload.receivers.includes('00998877'));
+    assert.ok(notifyRes.data.payload.receivers.includes('d00998877'));
+    assert.equal(
+        notifyRes.data.resolutions.find(r => r.raw === '00548379')?.matchedBy,
+        'prefix-lookup'
+    );
+    assert.equal(
+        notifyRes.data.resolutions.find(r => r.raw === '00998877')?.matchedBy,
+        'prefix-expand'
+    );
+
+    // 5. 下发成功后自动写入历史，并且支持删除自定义分组
+    const dir2 = await call('alice', 'GET', '/api/expedite/notify-recipients');
+    assert.equal(dir2.status, 200);
+    assert.ok(dir2.data.history.some(h => h.id === 'd00548379' && h.useCount >= 1));
+    assert.ok(dir2.data.history.some(h => h.id === 'l00123456' && h.name === '李四'));
+
+    const delRes = await call('alice', 'DELETE', `/api/expedite/notify-groups/${encodeURIComponent(savedGroupId)}`);
+    assert.equal(delRes.status, 200);
+    assert.equal(delRes.data.groups.length, 0);
+});
+
+test('基座版导入自定义工具：移除 Python Web 应用托管提示并拦截 Python 包上传', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const homeToolsJs = fs.readFileSync(path.join(rootDir, 'static/js/home/home-tools.js'), 'utf8');
+
+    assert.doesNotMatch(homeToolsJs, /'home\.import\.fileHint':\s*'[^']*Python Web/);
+    assert.doesNotMatch(homeToolsJs, /\/api\/hosted-apps\/preview/);
+    assert.match(homeToolsJs, /'home\.import\.pyUnsupportedWeb':/);
+    assert.match(homeToolsJs, /function rejectPythonInBaseWeb|const rejectPythonInBaseWeb = \(\) =>/);
+});
+
+test('催办站内横幅闭环：下发写入被通知人未读消息（含无首字母工号），已读前刷新持续保留', async () => {
+    const { call } = ctx;
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    // 1. 静态检查首页主题一致右上角横幅与消息详情展开样式/逻辑
+    const homeShellJs = fs.readFileSync(path.join(rootDir, 'static/js/home/home-shell.js'), 'utf8');
+    const homeShellCss = fs.readFileSync(path.join(rootDir, 'static/css/home-shell.css'), 'utf8');
+    assert.match(homeShellJs, /async function refreshExpediteBanner\(/);
+    assert.match(homeShellJs, /async function markExpediteAlertsRead\(/);
+    assert.match(homeShellJs, /object_type === 'expedite_notify'/);
+    assert.match(homeShellCss, /\.v2-expedite-banner\s*\{/);
+    assert.match(homeShellCss, /\.v2-msg\.is-expanded \.v2-msg-text p/);
+
+    // 2. 下发催办通知给 d00548379(通过 00548379) 及未录入前缀的 00778899
+    const notifyRes = await call('alice', 'POST', '/api/expedite/notify', {
+        recipients: ['00548379', '00778899'],
+        title: '10月指标催办提醒',
+        content: '请尽快核查未达标指标并完成整改。',
+    });
+    assert.equal(notifyRes.status, 200);
+    assert.ok(notifyRes.data.inAppAlertSent >= 2);
+
+    // 3. 诊断自检 /api/debug/notify-test 不应写入真实用户的催办横幅队列
+    await call('alice', 'POST', '/api/debug/notify-test', {
+        recipients: ['bob'],
+        title: '调试探测消息',
+        content: '不应进入用户催办横幅',
+    });
+    const bobUnread = await call('bob', 'GET', '/api/alert-center/events?status=unread');
+    assert.equal(bobUnread.status, 200);
+    assert.equal(bobUnread.data.events.some(e => e.object_type === 'expedite_notify'), false);
+
+    // 4. 用户每次刷新（重复拉取未读列表）均可稳定拿到该未读催办，直到标已读
+    const zUnread1 = await call('z00778899', 'GET', '/api/alert-center/events?status=unread');
+    assert.equal(zUnread1.status, 200);
+    const expAlert = zUnread1.data.events.find(e => e.object_type === 'expedite_notify' && e.title === '10月指标催办提醒');
+    assert.ok(expAlert, JSON.stringify(zUnread1.data.events));
+
+    const zUnread2 = await call('z00778899', 'GET', '/api/alert-center/events?status=unread');
+    assert.equal(zUnread2.data.events.some(e => e.id === expAlert.id), true);
+
+    // 5. 点击已读或进入消息中心查看后，未读横幅消息清除
+    const readRes = await call('z00778899', 'PUT', '/api/alert-center/events/read', { ids: [expAlert.id] });
+    assert.equal(readRes.status, 200);
+    assert.ok(readRes.data.changed >= 1);
+    const zUnread3 = await call('z00778899', 'GET', '/api/alert-center/events?status=unread');
+    assert.equal(zUnread3.data.events.some(e => e.id === expAlert.id), false);
+});
+
+test('诊断控制台增强：新增最新自检探针与一键收集所有自检详细日志', async () => {
+    const { call } = ctx;
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    const kvRes = await call('alice', 'POST', '/api/debug/test/kv-roundtrip', {});
+    assert.equal(kvRes.status, 200);
+    assert.equal(kvRes.data.result.intact, true);
+
+    const bizRes = await call('alice', 'POST', '/api/debug/test/query-business', {});
+    assert.equal(bizRes.status, 200);
+    assert.ok(Array.isArray(bizRes.data.result.rows));
+
+    const alertCheck = await call('alice', 'POST', '/api/debug/test/alert-notify-check', {});
+    assert.equal(alertCheck.status, 200);
+    assert.equal(alertCheck.data.result.code, 0);
+    assert.ok(typeof alertCheck.data.result.expediteHistoryCount === 'number');
+
+    const redactCheck = await call('alice', 'POST', '/api/debug/test/redact-check', {});
+    assert.equal(redactCheck.status, 200);
+    assert.equal(redactCheck.data.result.passed, true);
+
+    const dbgJs = fs.readFileSync(path.join(rootDir, 'static/js/shared/dh-debug-widget.js'), 'utf8');
+    assert.match(dbgJs, /action: 'kv-roundtrip'/);
+    assert.match(dbgJs, /action: 'query-business'/);
+    assert.match(dbgJs, /action: 'alert-notify-check'/);
+    assert.match(dbgJs, /action: 'redact-check'/);
+    assert.match(dbgJs, /一键收集所有自检详细日志/);
+    assert.match(dbgJs, /runOutboundCheckProbe/);
+    assert.match(dbgJs, /runStreamCheckProbe/);
+    assert.match(dbgJs, /dh-diagnostic-/);
+});
+
+test('自定义菜单栏：前后端菜单项对齐（含 requirements）且支持读写与缺项兼容', async () => {
+    const { call } = ctx;
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+    const menuRes = await call('bob', 'GET', '/api/sidebar-menu');
+    assert.equal(menuRes.status, 200);
+    assert.ok(menuRes.data.more.includes('requirements'), JSON.stringify(menuRes.data));
+    const allIds = [...menuRes.data.primary, ...menuRes.data.more];
+
+    const sidebarJs = fs.readFileSync(path.join(rootDir, 'static/js/home/sidebar-menu.js'), 'utf8');
+    for (const id of allIds) {
+        assert.ok(sidebarJs.includes(`'${id}'`), `sidebar-menu.js missing entry: ${id}`);
+    }
+    assert.match(sidebarJs, /function normalizeLayout\(/);
+
+    const saved = await call('bob', 'PUT', '/api/sidebar-menu', {
+        primary: ['channels', 'skillHub', 'schedule', 'library', 'requirements'],
+        more: ['opsDrafts', 'links', 'promotions'],
+    });
+    assert.equal(saved.status, 200);
+    assert.ok(saved.data.primary.includes('requirements'));
+    const reloaded = await call('bob', 'GET', '/api/sidebar-menu');
+    assert.deepEqual(reloaded.data, saved.data);
+});

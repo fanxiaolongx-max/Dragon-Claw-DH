@@ -15,6 +15,8 @@ import {
 } from '../dao/scoped.js';
 import { saveBlobAsset, getBlobAsset } from './blob-service.js';
 import { selectLatestSnapshotPerMonth, validSnapshotFilter } from '../utils/ai-report-helpers.js';
+import { listAdmins, isSameUserId } from '../core/access.js';
+import { pushAlert } from './alert-service.js';
 
 const MANUAL_ADJUST_EXTENSIONS = new Set([
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp',
@@ -789,43 +791,311 @@ export async function importReportDataBackupZip(zipBuffer, { mode = 'merge' } = 
     };
 }
 
-export async function sendExpediteNotification({ recipients = [], title = '', content = '', channel = 'email', payload = null, items = null } = {}) {
+const EXPEDITE_DIRECTORY_KEY = 'expedite_notify_directory';
+const EXPEDITE_PREFIX_LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
+
+function isLetterlessEmpId(value) {
+    const s = String(value || '').trim();
+    return /^(?:\d{4,12}|wx\d{4,10})$/i.test(s);
+}
+
+function normalizeExpediteDirectory(raw) {
+    const obj = raw && typeof raw === 'object' ? raw : {};
+    const history = Array.isArray(obj.history)
+        ? obj.history
+            .filter((item) => item && String(item.id || '').trim())
+            .map((item) => ({
+                id: String(item.id).trim(),
+                name: String(item.name || '').trim(),
+                lastUsedAt: Number(item.lastUsedAt) || 0,
+                useCount: Number(item.useCount) || 1,
+            }))
+        : [];
+    const groups = Array.isArray(obj.groups)
+        ? obj.groups
+            .filter((g) => g && String(g.id || '').trim() && String(g.name || '').trim())
+            .map((g) => ({
+                id: String(g.id).trim(),
+                name: String(g.name).trim(),
+                members: (Array.isArray(g.members) ? g.members : [])
+                    .map((m) => (typeof m === 'string'
+                        ? { id: m.trim(), name: '' }
+                        : { id: String(m?.id || '').trim(), name: String(m?.name || '').trim() }))
+                    .filter((m) => m.id),
+                createdAt: Number(g.createdAt) || 0,
+                updatedAt: Number(g.updatedAt) || 0,
+            }))
+        : [];
+    return { history, groups };
+}
+
+async function collectKnownEmployees(directory = null) {
+    const dir = directory || normalizeExpediteDirectory(await kvGet(EXPEDITE_DIRECTORY_KEY, {}));
+    const map = new Map();
+    const put = (id, name = '', source = 'history', lastUsedAt = 0, useCount = 0) => {
+        const cleanId = String(id || '').trim();
+        if (!cleanId || cleanId === 'anonymous' || cleanId === 'dh-guest') return;
+        const key = cleanId.toLowerCase();
+        const prev = map.get(key);
+        const cleanName = String(name || '').trim();
+        map.set(key, {
+            id: cleanId,
+            name: cleanName && cleanName !== cleanId ? cleanName : (prev?.name || ''),
+            source: prev?.source || source,
+            lastUsedAt: Math.max(Number(lastUsedAt) || 0, prev?.lastUsedAt || 0),
+            useCount: Math.max(Number(useCount) || 0, prev?.useCount || 0),
+        });
+    };
+    for (const h of dir.history) put(h.id, h.name, 'history', h.lastUsedAt, h.useCount);
+    for (const g of dir.groups) {
+        for (const m of g.members) put(m.id, m.name, 'group');
+    }
+    const [owners, policy, adminInfo, sessions] = await Promise.all([
+        listBigscreenOwners().catch(() => []),
+        getDashboardConfig('distribution_policy').catch(() => null),
+        listAdmins().catch(() => ({ admins: [] })),
+        selectTable('ai_chat_sessions', { columns: ['owner_id'], limit: 200 }).catch(() => []),
+    ]);
+    for (const o of owners || []) {
+        if (o?.emp_id) put(o.emp_id, o.owner_name, 'owners');
+    }
+    if (Array.isArray(policy?.roster)) {
+        for (const emp of policy.roster) {
+            if (emp?.id) put(emp.id, emp.name, 'policy');
+        }
+    }
+    for (const adminId of adminInfo?.admins || []) {
+        put(adminId, '', 'admins');
+    }
+    for (const s of sessions || []) {
+        if (s?.owner_id) put(s.owner_id, '', 'sessions');
+    }
+    return [...map.values()];
+}
+
+function expandLetterlessId(raw) {
+    const clean = String(raw || '').trim();
+    if (/^\d{4,12}$/.test(clean)) {
+        return [clean, ...EXPEDITE_PREFIX_LETTERS.map((ch) => `${ch}${clean}`)];
+    }
+    if (/^wx\d{4,10}$/i.test(clean)) {
+        const suffixLower = clean.toLowerCase();
+        const suffixUpper = `WX${clean.slice(2)}`;
+        const out = [clean];
+        for (const ch of EXPEDITE_PREFIX_LETTERS) {
+            out.push(`${ch}${suffixUpper}`, `${ch}${suffixLower}`);
+        }
+        return out;
+    }
+    return [clean];
+}
+
+function resolveRecipientTarget(raw, knownEmployees = []) {
+    const clean = String(raw || '').trim();
+    if (!clean) return null;
+    const exact = knownEmployees.find((k) => k.id.toLowerCase() === clean.toLowerCase());
+    if (exact) {
+        return { raw: clean, resolved: exact.id, name: exact.name, candidates: [exact.id], matchedBy: 'exact' };
+    }
+    if (isLetterlessEmpId(clean)) {
+        const suffixMatch = knownEmployees.find((k) => /^[a-z]/i.test(k.id) && isSameUserId(k.id, clean));
+        if (suffixMatch) {
+            return { raw: clean, resolved: suffixMatch.id, name: suffixMatch.name, candidates: [suffixMatch.id], matchedBy: 'prefix-lookup' };
+        }
+        if (/^\d{4,7}$/.test(clean)) {
+            const padded = clean.padStart(8, '0');
+            const paddedMatch = knownEmployees.find((k) => /^[a-z]/i.test(k.id) && k.id.slice(1).toLowerCase() === padded);
+            if (paddedMatch) {
+                return { raw: clean, resolved: paddedMatch.id, name: paddedMatch.name, candidates: [paddedMatch.id], matchedBy: 'prefix-lookup' };
+            }
+        }
+        return { raw: clean, resolved: clean, name: '', candidates: expandLetterlessId(clean), matchedBy: 'prefix-expand' };
+    }
+    const nameMatches = knownEmployees.filter((k) => k.name && k.name.toLowerCase() === clean.toLowerCase());
+    if (nameMatches.length === 1) {
+        return { raw: clean, resolved: nameMatches[0].id, name: nameMatches[0].name, candidates: [nameMatches[0].id], matchedBy: 'name' };
+    }
+    return { raw: clean, resolved: clean, name: '', candidates: [clean], matchedBy: 'literal' };
+}
+
+export async function listExpediteDirectory() {
+    const dir = normalizeExpediteDirectory(await kvGet(EXPEDITE_DIRECTORY_KEY, {}));
+    const knownEmployees = await collectKnownEmployees(dir);
+    return {
+        history: [...dir.history].sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0)).slice(0, 120),
+        groups: [...dir.groups].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+        knownEmployees,
+    };
+}
+
+export async function saveExpediteGroup({ id = '', name = '', members = [] } = {}) {
+    const cleanName = String(name || '').trim().slice(0, 60);
+    if (!cleanName) fail('分组名称不能为空', 400);
+    const list = (Array.isArray(members) ? members : [])
+        .map((m) => (typeof m === 'string'
+            ? { id: m.trim(), name: '' }
+            : { id: String(m?.id || '').trim(), name: String(m?.name || '').trim() }))
+        .filter((m) => m.id);
+    if (!list.length) fail('分组成员不能为空', 400);
+    const dedup = [];
+    const seen = new Set();
+    for (const m of list) {
+        const key = m.id.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        dedup.push(m);
+    }
+    const dir = normalizeExpediteDirectory(await kvGet(EXPEDITE_DIRECTORY_KEY, {}));
+    const now = Date.now();
+    const targetId = String(id || '').trim() || `grp_${crypto.randomBytes(6).toString('hex')}`;
+    const existingIdx = dir.groups.findIndex((g) => g.id === targetId || g.name.toLowerCase() === cleanName.toLowerCase());
+    const group = {
+        id: existingIdx >= 0 ? dir.groups[existingIdx].id : targetId,
+        name: cleanName,
+        members: dedup,
+        createdAt: existingIdx >= 0 ? (dir.groups[existingIdx].createdAt || now) : now,
+        updatedAt: now,
+    };
+    if (existingIdx >= 0) dir.groups[existingIdx] = group;
+    else dir.groups.unshift(group);
+    dir.groups = dir.groups.slice(0, 50);
+    await kvSet(EXPEDITE_DIRECTORY_KEY, dir);
+    return { success: true, group, groups: dir.groups };
+}
+
+export async function deleteExpediteGroup(groupId) {
+    const cleanId = String(groupId || '').trim();
+    if (!cleanId) fail('缺少分组 ID', 400);
+    const dir = normalizeExpediteDirectory(await kvGet(EXPEDITE_DIRECTORY_KEY, {}));
+    const nextGroups = dir.groups.filter((g) => g.id !== cleanId);
+    if (nextGroups.length === dir.groups.length) fail('分组不存在', 404);
+    dir.groups = nextGroups;
+    await kvSet(EXPEDITE_DIRECTORY_KEY, dir);
+    return { success: true, groups: dir.groups };
+}
+
+async function recordExpediteHistory(entries = []) {
+    if (!Array.isArray(entries) || !entries.length) return;
+    try {
+        const dir = normalizeExpediteDirectory(await kvGet(EXPEDITE_DIRECTORY_KEY, {}));
+        const now = Date.now();
+        const byKey = new Map(dir.history.map((h) => [h.id.toLowerCase(), { ...h }]));
+        for (const entry of entries) {
+            const id = String(entry?.resolved || entry?.id || entry?.raw || '').trim();
+            if (!id) continue;
+            const key = id.toLowerCase();
+            const prev = byKey.get(key);
+            byKey.set(key, {
+                id,
+                name: String(entry?.name || prev?.name || '').trim(),
+                lastUsedAt: now,
+                useCount: (prev?.useCount || 0) + 1,
+            });
+        }
+        dir.history = [...byKey.values()].sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0)).slice(0, 120);
+        await kvSet(EXPEDITE_DIRECTORY_KEY, dir);
+    } catch { /* ignore history write failures */ }
+}
+
+export async function sendExpediteNotification({ recipients = [], title = '', content = '', channel = 'email', payload = null, items = null, recipientNames = null, _knownEmployees = null, _skipHistoryRecord = false, _actor = '', _skipInboxAlert = false } = {}) {
     if (Array.isArray(items) && items.length > 0) {
+        const knownEmployees = await collectKnownEmployees();
         const results = [];
+        const historyEntries = [];
         for (const item of items) {
             try {
-                const res = await sendExpediteNotification(item);
-                results.push({ success: true, recipients: item.recipients, title: item.title, res });
+                const res = await sendExpediteNotification({ ...item, _knownEmployees: knownEmployees, _skipHistoryRecord: true, _actor, _skipInboxAlert });
+                results.push({ success: true, recipients: item.recipients, resolvedRecipients: res.resolvedRecipients, title: item.title, res });
+                if (Array.isArray(res.historyEntries)) historyEntries.push(...res.historyEntries);
             } catch (err) {
                 results.push({ success: false, recipients: item.recipients, title: item.title, error: err.message });
             }
         }
+        if (historyEntries.length) await recordExpediteHistory(historyEntries);
         return {
             success: results.some((r) => r.success),
             batch: true,
             total: items.length,
             sentCount: results.filter((r) => r.success).length,
             failedCount: results.filter((r) => !r.success).length,
+            inAppAlertCount: results.reduce((sum, r) => sum + (Number(r.res?.inAppAlertSent) || 0), 0),
             results,
         };
     }
-    const to = Array.isArray(recipients) ? recipients.map((r) => String(r || '').trim()).filter(Boolean) : [];
+    const rawTo = Array.isArray(recipients) ? recipients.map((r) => String(r || '').trim()).filter(Boolean) : [];
     // 没有收件人就不发：不能把通知默默发到一个占位地址
-    if (!payload && !to.length) fail('请先选择催办对象（收件人为空）', 400);
-    const body = payload || {
+    if (!payload && !rawTo.length) fail('请先选择催办对象（收件人为空）', 400);
+
+    const knownEmployees = Array.isArray(_knownEmployees)
+        ? _knownEmployees
+        : await collectKnownEmployees();
+    const nameMap = recipientNames && typeof recipientNames === 'object' ? recipientNames : {};
+    const resolutions = rawTo.map((r) => {
+        const res = resolveRecipientTarget(r, knownEmployees);
+        if (res && nameMap[r] && !res.name) res.name = String(nameMap[r]).trim();
+        return res;
+    }).filter(Boolean);
+
+    const expandedReceivers = [...new Set(resolutions.flatMap((r) => r.candidates))];
+    const exactReceivers = [...new Set(resolutions.map((r) => r.resolved))];
+    const hasExpansion = expandedReceivers.length > exactReceivers.length;
+
+    const buildBody = (toList) => payload || {
         module_type: 'AIOps一键催办',
         sub_module_type: channel === 'welink' ? 'WeLink催办通知' : '未达标指标催办',
         msg_type: '1',
-        receivers: to,
-        user_ids: to,
+        receivers: toList,
+        user_ids: toList,
         email_params: {
             title: title || '【AIOps 一键催办】未达标指标跟进提醒',
             content: content || '存在未达标运营指标，请及时核查整改。',
-            email_to: to.join(','),
-            receivers: to.join(','),
-            user_ids: to.join(','),
+            email_to: toList.join(','),
+            receivers: toList.join(','),
+            user_ids: toList.join(','),
         },
     };
-    const res = await sendBaseNotify(body);
-    return { success: true, payload: body, baseResult: res };
+
+    const body = buildBody(expandedReceivers);
+    let res;
+    try {
+        res = await sendBaseNotify(body);
+    } catch (err) {
+        if (hasExpansion && !payload) {
+            res = await sendBaseNotify(buildBody(exactReceivers));
+        } else {
+            throw err;
+        }
+    }
+    const historyEntries = resolutions.map((r) => ({ id: r.resolved, name: r.name }));
+    if (!_skipHistoryRecord && historyEntries.length) {
+        await recordExpediteHistory(historyEntries);
+    }
+    let inAppAlertSent = 0;
+    if (!_skipInboxAlert && exactReceivers.length) {
+        const notifyTitle = String(title || body?.email_params?.title || '【AIOps 一键催办】未达标指标跟进提醒').trim();
+        const notifyContent = String(content || body?.email_params?.content || '存在未达标运营指标，请及时核查整改。').trim();
+        inAppAlertSent = await pushAlert(exactReceivers, {
+            type: 'user_action',
+            severity: 'warn',
+            title: notifyTitle,
+            message: notifyContent,
+            actor: _actor || 'system',
+            source: 'expedite',
+            objectType: 'expedite_notify',
+            objectId: channel || 'base',
+            detail: {
+                channel: channel || 'base',
+                targets: exactReceivers,
+            },
+        }, { allowDuplicate: true }).catch(() => 0);
+    }
+    return {
+        success: true,
+        payload: body,
+        baseResult: res,
+        resolvedRecipients: exactReceivers,
+        inAppAlertSent,
+        resolutions: resolutions.map((r) => ({ raw: r.raw, resolved: r.resolved, matchedBy: r.matchedBy, candidateCount: r.candidates.length })),
+        ...(_skipHistoryRecord ? { historyEntries } : {}),
+    };
 }

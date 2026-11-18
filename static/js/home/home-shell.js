@@ -1745,7 +1745,9 @@
     });
 
     // ── 消息中心：主区整页显示平台告警（沿用 /api/alert-center） ──
-    const msg = { el: null, filter: 'all', events: [], error: '' };
+    const msg = { el: null, filter: 'all', events: [], error: '', expanded: new Set() };
+    const expediteBanner = { el: null, items: [], hiddenInSession: false, loading: false, lastUnread: -1 };
+    const isExpediteAlert = event => Boolean(event && (event.object_type === 'expedite_notify' || event.source === 'expedite'));
     function msgHeaders(json) { return { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(typeof getAuthHeaderForNav === 'function' ? getAuthHeaderForNav() : {}) }; }
     function msgDay(value) {
         const date = new Date(String(value || '').replace(' ', 'T'));
@@ -1755,7 +1757,98 @@
         const day = same(date, today) ? t('today') : same(date, y) ? t('yesterday') : date.toLocaleDateString(lang(), { month: 'long', day: 'numeric' });
         return { day, time: date.toLocaleTimeString(lang(), { hour: '2-digit', minute: '2-digit', hour12: false }) };
     }
-    async function loadMessages() {
+    async function markExpediteAlertsRead(ids) {
+        if (!Array.isArray(ids) || !ids.length) return;
+        await fetch('/api/alert-center/events/read', {
+            method: 'PUT',
+            headers: msgHeaders(true),
+            body: JSON.stringify({ ids }),
+        }).catch(() => {});
+        expediteBanner.items = expediteBanner.items.filter(item => !ids.includes(item.id));
+        renderExpediteBanner();
+        window.refreshAlertCenterBadge?.();
+    }
+    function renderExpediteBanner() {
+        const items = expediteBanner.items;
+        if (!items.length || expediteBanner.hiddenInSession) {
+            if (expediteBanner.el) expediteBanner.el.hidden = true;
+            return;
+        }
+        if (!expediteBanner.el) {
+            const box = document.createElement('aside');
+            box.id = 'v2ExpediteBanner';
+            box.className = 'v2-expedite-banner';
+            box.setAttribute('role', 'region');
+            box.setAttribute('aria-live', 'polite');
+            box.addEventListener('click', async event => {
+                const actionBtn = event.target.closest('[data-exp-action]');
+                if (!actionBtn) return;
+                const action = actionBtn.dataset.expAction;
+                const ids = expediteBanner.items.map(item => item.id).filter(Boolean);
+                if (action === 'dismiss') {
+                    // 仅当前页面会话收起：不写本地缓存也不标已读，刷新或重新登录首页会再次提醒
+                    expediteBanner.hiddenInSession = true;
+                    renderExpediteBanner();
+                    return;
+                }
+                if (action === 'read') {
+                    actionBtn.disabled = true;
+                    await markExpediteAlertsRead(ids);
+                    return;
+                }
+                if (action === 'view') {
+                    ids.forEach(id => msg.expanded.add(id));
+                    msg.filter = 'all';
+                    openMessages({ autoReadIds: ids });
+                }
+            });
+            document.body.appendChild(box);
+            expediteBanner.el = box;
+        }
+        const latest = items[0];
+        const isEn = lang() === 'en-US';
+        const badgeLabel = isEn
+            ? `Expedite · ${items.length} unread`
+            : `催办通知 · ${items.length} 条未读`;
+        const { time } = msgDay(latest.created_at);
+        const snippet = String(latest.ai_summary || latest.message || '').replace(/\s+/g, ' ').trim();
+        const extraNote = items.length > 1
+            ? (isEn ? `+${items.length - 1} more unread` : `另有 ${items.length - 1} 条待查看`)
+            : (isEn ? 'From One-click Expedite' : '来自一键催办下发');
+        expediteBanner.el.setAttribute('aria-label', badgeLabel);
+        expediteBanner.el.innerHTML = `<div class="v2-expedite-head">
+                <span class="v2-expedite-badge"><i class="v2-expedite-dot" aria-hidden="true"></i>${esc(badgeLabel)}</span>
+                <span class="v2-expedite-time">${esc(time)}</span>
+                <button type="button" class="v2-expedite-close" data-exp-action="dismiss" aria-label="${esc(isEn ? 'Hide for now' : '本次暂隐')}" title="${esc(isEn ? 'Hide for now (shows again after reload)' : '本次暂隐（刷新或重新登录后仍会提示）')}">×</button>
+            </div>
+            <p class="v2-expedite-title">${esc(latest.title || (isEn ? 'Expedite Notification' : '催办通知'))}</p>
+            ${snippet ? `<p class="v2-expedite-snippet">${esc(snippet)}</p>` : ''}
+            <div class="v2-expedite-foot">
+                <span class="v2-expedite-extra">${esc(extraNote)}</span>
+                <button type="button" class="v2-expedite-btn" data-exp-action="read">${esc(isEn ? 'Mark read' : '点击已读')}</button>
+                <button type="button" class="v2-expedite-btn is-primary" data-exp-action="view">${esc(isEn ? 'View in Inbox' : '进入消息中心查看')}</button>
+            </div>`;
+        expediteBanner.el.hidden = false;
+    }
+    async function refreshExpediteBanner({ force = false } = {}) {
+        if (expediteBanner.loading && !force) return;
+        expediteBanner.loading = true;
+        try {
+            const res = await fetch('/api/alert-center/events?status=unread&limit=30', { headers: msgHeaders(), cache: 'no-store' });
+            if (!res.ok) {
+                expediteBanner.items = [];
+                renderExpediteBanner();
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            expediteBanner.items = (data.events || []).filter(isExpediteAlert);
+            renderExpediteBanner();
+        } catch { /* ignore network probe errors */ }
+        finally {
+            expediteBanner.loading = false;
+        }
+    }
+    async function loadMessages(autoReadIds = null) {
         msg.error = '';
         const params = new URLSearchParams({ limit: '120' });
         if (msg.filter === 'unread') params.set('status', 'unread');
@@ -1764,6 +1857,12 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
             msg.events = (data.events || []).filter(event => msg.filter !== 'warn' || ['warn', 'error', 'critical'].includes(event.severity));
+            if (Array.isArray(autoReadIds) && autoReadIds.length) {
+                await markExpediteAlertsRead(autoReadIds);
+                msg.events.forEach(event => {
+                    if (autoReadIds.includes(event.id)) event.status = 'read';
+                });
+            }
         } catch (error) { msg.error = error.message; msg.events = []; }
         renderMessages();
     }
@@ -1783,9 +1882,10 @@
             : !msg.events.length ? `<div class="v2-discover-empty">${esc(t('noMessages'))}</div>`
                 : groups.map(group => `<section><h3>${esc(`${group.day} ${group.first}`)}</h3>${group.items.map(event => {
                     const href = /^https?:\/\//.test(event.source || '') ? event.source : '';
-                    return `<article class="v2-msg${event.status === 'unread' ? ' is-unread' : ''}" data-id="${esc(event.id)}">
+                    const expanded = msg.expanded.has(event.id);
+                    return `<article class="v2-msg${event.status === 'unread' ? ' is-unread' : ''}${expanded ? ' is-expanded' : ''}" data-id="${esc(event.id)}">
                         <span class="v2-msg-icon is-${esc(event.severity || 'info')}"><span class="v2-ico" data-icon="${severityIcon(event.severity)}"></span></span>
-                        <div class="v2-msg-text"><strong>${esc(event.title || '')}</strong><p>${esc(event.ai_summary || event.message || '')}</p></div>
+                        <div class="v2-msg-text" data-msg-toggle title="${esc(lang() === 'en-US' ? 'Click to expand/collapse details' : '点击展开或收起详情')}"><strong>${esc(event.title || '')}</strong><p>${esc(event.ai_summary || event.message || '')}</p></div>
                         <span class="v2-msg-time">${esc(msgDay(event.created_at).time)}</span>
                         ${href ? `<a class="v2-account-btn" href="${esc(href)}" data-msg-read>${esc(t('view'))}</a>` : event.status === 'unread' ? `<button type="button" class="v2-account-btn" data-msg-read>${esc(t('markRead'))}</button>` : ''}
                     </article>`;
@@ -1794,7 +1894,7 @@
         msg.el.querySelectorAll('[data-msg-filter]').forEach(btn => btn.setAttribute('aria-selected', String(btn.dataset.msgFilter === msg.filter)));
         fillIcons(msg.el);
     }
-    function openMessages() {
+    function openMessages({ autoReadIds = null } = {}) {
         closePop();
         if (!msg.el) {
             msg.el = document.createElement('section');
@@ -1808,7 +1908,7 @@
                 if (event.target.closest('[data-msg-close]')) return closeMessages();
                 if (event.target.closest('[data-msg-all]')) {
                     await fetch('/api/alert-center/events/read-all', { method: 'PUT', headers: msgHeaders(true), body: '{}' }).catch(() => {});
-                    window.refreshAlertCenterBadge?.(); loadMessages(); return;
+                    window.refreshAlertCenterBadge?.(); loadMessages(); refreshExpediteBanner({ force: true }); return;
                 }
                 if (event.target.closest('[data-msg-clear]')) {
                     const confirmMsg = lang() === 'en-US' ? 'Clear all alert messages?' : '确定清空所有告警消息？';
@@ -1819,13 +1919,23 @@
                             : false);
                     if (!ok) return;
                     await fetch('/api/alert-center/events/clear-all', { method: 'POST', headers: msgHeaders(true), body: '{}' }).catch(() => {});
-                    window.refreshAlertCenterBadge?.(); loadMessages(); return;
+                    window.refreshAlertCenterBadge?.(); loadMessages(); refreshExpediteBanner({ force: true }); return;
                 }
                 const read = event.target.closest('[data-msg-read]');
                 if (read) {
                     const id = read.closest('[data-id]')?.dataset.id;
-                    if (id) fetch('/api/alert-center/events/read', { method: 'PUT', headers: msgHeaders(true), body: JSON.stringify({ ids: [id] }) }).then(() => window.refreshAlertCenterBadge?.()).catch(() => {});
+                    if (id) fetch('/api/alert-center/events/read', { method: 'PUT', headers: msgHeaders(true), body: JSON.stringify({ ids: [id] }) }).then(() => { window.refreshAlertCenterBadge?.(); refreshExpediteBanner({ force: true }); }).catch(() => {});
                     if (read.tagName === 'BUTTON') { read.closest('.v2-msg')?.classList.remove('is-unread'); read.remove(); }
+                    return;
+                }
+                const toggle = event.target.closest('[data-msg-toggle]');
+                if (toggle) {
+                    const row = toggle.closest('[data-id]');
+                    const id = row?.dataset.id;
+                    if (!id) return;
+                    if (msg.expanded.has(id)) msg.expanded.delete(id);
+                    else msg.expanded.add(id);
+                    row.classList.toggle('is-expanded', msg.expanded.has(id));
                 }
             });
         }
@@ -1835,7 +1945,7 @@
         fillIcons(msg.el);
         msg.el.classList.add('is-open');
         document.body.classList.add('v2-messages-open');
-        loadMessages();
+        loadMessages(autoReadIds);
     }
     function closeMessages() {
         msg.el?.classList.remove('is-open');
@@ -2624,8 +2734,19 @@
         if (activeChatSource() === 'agents') window.HomeWelinkThreads?.setSource?.('mine');
         renderQuick();
         loadRecentQuestions();
+        refreshExpediteBanner({ force: true });
         if (window.ToolsOpsInbox?.total) window.dispatchEvent(new CustomEvent('tools:ops-inbox-total', { detail: { total: window.ToolsOpsInbox.total() } }));
     }
+    window.addEventListener('platform:status', event => {
+        const unread = Number(event?.detail?.unread);
+        if (Number.isFinite(unread) && unread !== expediteBanner.lastUnread) {
+            if (unread > expediteBanner.lastUnread && expediteBanner.lastUnread >= 0) {
+                expediteBanner.hiddenInSession = false;
+            }
+            expediteBanner.lastUnread = unread;
+            refreshExpediteBanner();
+        }
+    });
     window.addEventListener('hashchange', () => {
         if (location.hash === '#channels') {
             const navItem = document.querySelector('.v2-nav-item[data-v2-action="channels"]');
@@ -2646,17 +2767,22 @@
     window.addEventListener('tools:authchange', () => {
         renderUser();
         if (openPop?.pop === userPop) renderUserMenu();
+        expediteBanner.hiddenInSession = false;
+        refreshExpediteBanner({ force: true });
     });
     window.addEventListener('storage', event => {
         if (!event.key || ['tools_user', 'tools_role', 'tools_super'].includes(event.key)) {
             renderUser();
             if (openPop?.pop === userPop) renderUserMenu();
+            expediteBanner.hiddenInSession = false;
+            refreshExpediteBanner({ force: true });
         }
     });
     window.addEventListener('tools:languagechange', () => {
         applyText();
         renderPlatformStatus();
         renderQuick();
+        renderExpediteBanner();
         if (!quick.scene) loadRecentQuestions();
         updateChannelsNavState();
         if (openPop?.pop === discover.pop) renderDiscover();
@@ -2666,5 +2792,5 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
     else init();
 
-    window.HomeShell = { setSideCollapsed, isSideCollapsed, setTheme, closePop, fillIcons, openLinks, updateChannelsNavState, renderUser };
+    window.HomeShell = { setSideCollapsed, isSideCollapsed, setTheme, closePop, fillIcons, openLinks, updateChannelsNavState, renderUser, refreshExpediteBanner };
 })();

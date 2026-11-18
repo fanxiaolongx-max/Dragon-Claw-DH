@@ -916,6 +916,109 @@
             gap: 6px;
             cursor: pointer;
         }
+
+        #base-notify-modal .dist-body {
+            max-height: calc(90vh - 135px);
+            overflow-y: auto;
+        }
+
+        #base-notify-preview {
+            overflow-y: auto;
+            overflow-x: hidden;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
+            min-height: 160px;
+            max-height: 360px;
+        }
+
+        .notify-groups-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+
+        .notify-group-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-size: 11px;
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+            color: #334155;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .notify-group-chip:hover {
+            border-color: #93c5fd;
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .notify-group-chip.active {
+            border-color: #10b981;
+            background: #ecfdf5;
+            color: #047857;
+            font-weight: 600;
+        }
+
+        .notify-group-chip .notify-group-del {
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0 2px;
+            font-size: 13px;
+            line-height: 1;
+        }
+
+        .notify-group-chip .notify-group-del:hover {
+            color: #dc2626;
+        }
+
+        .notify-history-dropdown {
+            margin-top: 6px;
+            margin-bottom: 8px;
+            max-height: 170px;
+            overflow-y: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+        }
+
+        .notify-history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            font-size: 12px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+        }
+
+        .notify-history-item:last-child {
+            border-bottom: none;
+        }
+
+        .notify-history-item:hover {
+            background: #f8fafc;
+        }
+
+        .notify-badge-letterless {
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 4px;
+            background: #fef3c7;
+            color: #b45309;
+        }
     </style>
     <link rel="stylesheet" href="css/startup-screen.css">
 </head>
@@ -1117,17 +1220,40 @@
 
                 <!-- 接收人与名册状态 -->
                 <div style="margin-bottom: 16px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; flex-wrap: wrap;">
                         <label style="font-weight: 600; font-size: 13px; color: #1e293b; display: flex; align-items: center; gap: 6px;">
                             <span>👤</span> <span data-i18n="notify_recipients_lbl">目标接收人 (工号 / 姓名)</span>
                             <span id="notify-selected-count" style="font-size: 12px; font-weight: normal; color: #059669; background: #ecfdf5; padding: 1px 8px; border-radius: 10px;">0 人已选</span>
                         </label>
-                        <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                             <button type="button" class="btn-copy" onclick="toggleAllBaseNotifyRecipients(true)" style="padding: 2px 10px; font-size: 11px;">全选</button>
                             <button type="button" class="btn-copy" onclick="toggleAllBaseNotifyRecipients(false)" style="padding: 2px 10px; font-size: 11px;">全不选</button>
+                            <button type="button" class="btn-copy" id="btn-toggle-notify-history" onclick="toggleNotifyHistoryPanel()" style="padding: 2px 10px; font-size: 11px; background: #fffbeb; color: #b45309; border-color: #fde68a;">🕒 历史常用</button>
+                            <button type="button" class="btn-copy" onclick="toggleSaveNotifyGroupForm(true)" style="padding: 2px 10px; font-size: 11px; background: #f0fdf4; color: #047857; border-color: #bbf7d0;">💾 存为分组</button>
                             <button type="button" class="btn-copy" onclick="openDistPolicyFromNotify()" style="padding: 2px 10px; font-size: 11px; background: #f1f5f9; color: #0284c7; border-color: #bae6fd;">⚙️ 分发策略</button>
                         </div>
                     </div>
+
+                    <!-- 新建/保存工号分组内联栏 -->
+                    <div id="base-notify-group-save-row" style="display: none; gap: 6px; margin-bottom: 8px; padding: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; align-items: center;">
+                        <input type="text" id="base-notify-group-name-input" placeholder="输入分组名称 (如: 核心TL / 现网一线)，将把当前已选接收人存为分组"
+                            style="flex: 1; padding: 5px 9px; border: 1px solid #86efac; border-radius: 4px; font-size: 12px; background: #fff;"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault();saveCurrentNotifyGroup();}else if(event.key==='Escape'){event.stopPropagation();toggleSaveNotifyGroupForm(false);}">
+                        <button type="button" class="btn-primary" onclick="saveCurrentNotifyGroup()" style="padding: 5px 12px; font-size: 12px; background: #059669; border: none;">保存</button>
+                        <button type="button" class="btn-secondary" onclick="toggleSaveNotifyGroupForm(false)" style="padding: 5px 10px; font-size: 12px;">取消</button>
+                    </div>
+
+                    <!-- 工号分组快捷栏（自定义分组 + 策略分类 + 工号格式） -->
+                    <div id="base-notify-groups-bar" class="notify-groups-bar"></div>
+
+                    <!-- 历史与员工库搜索选择 -->
+                    <div style="display: flex; gap: 6px; margin-bottom: 6px; align-items: center;">
+                        <input type="text" id="base-notify-history-search" placeholder="🔍 从历史记录或员工库搜索选择（支持工号、姓名、不带首字母纯数字如 00548379）..."
+                            oninput="onNotifyHistorySearchInput()" onfocus="renderBaseNotifyHistoryResults()"
+                            style="flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; background: #fff;">
+                        <button type="button" class="btn-copy" onclick="clearNotifyHistorySearch()" style="padding: 5px 10px; font-size: 11px;">收起</button>
+                    </div>
+                    <div id="base-notify-history-results" class="notify-history-dropdown" style="display: none;"></div>
 
                     <!-- 人员复选列表 -->
                     <div id="base-notify-roster-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; padding: 8px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;">
@@ -1136,10 +1262,13 @@
 
                     <!-- 手动快速添加接收人 -->
                     <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
-                        <input type="text" id="base-notify-manual-input" placeholder="手动添加工号、姓名或邮箱 (例如: l00123 或 name@huawei.com)"
+                        <input type="text" id="base-notify-manual-input" placeholder="手动添加工号、无首字母数字、姓名或邮箱 (如: l00123 / 00548379 / 张三)"
                             style="flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px;"
                             onkeydown="if(event.key==='Enter'){event.preventDefault();addManualNotifyRecipient();}">
                         <button type="button" class="btn-secondary" onclick="addManualNotifyRecipient()" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">＋ 添加</button>
+                    </div>
+                    <div style="margin-top: 4px; font-size: 11px; color: #64748b;">
+                        💡 支持只填数字/去首字母工号（如 <code>00548379</code>），下发时将自动匹配名册或补全首字母推送给对应带字母工号接收人。
                     </div>
                 </div>
 
@@ -1161,7 +1290,7 @@
                             <!-- Dynamic recipient options -->
                         </select>
                     </div>
-                    <textarea id="base-notify-preview" readonly style="width: 100%; box-sizing: border-box; height: 140px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: monospace; font-size: 12px; color: #334155; background: #f8fafc; line-height: 1.5; resize: vertical;"></textarea>
+                    <textarea id="base-notify-preview" readonly style="width: 100%; box-sizing: border-box; height: 180px; min-height: 160px; max-height: 360px; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; word-break: break-word; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: monospace; font-size: 12px; color: #334155; background: #f8fafc; line-height: 1.5; resize: vertical;"></textarea>
                 </div>
 
                 <!-- 下发状态反馈区域 -->
@@ -2320,10 +2449,32 @@
             }
         }
 
+        function stripNotifyLeadingLetter(id) {
+            const norm = String(id || '').trim().toLowerCase();
+            if (!norm || norm.includes('@')) return norm;
+            const match = norm.match(/^[a-z]((?:[a-z]{1,2})?\d{4,})$/);
+            return match ? match[1] : norm;
+        }
+
+        function isSameNotifyUserId(a, b) {
+            const left = String(a || '').trim().toLowerCase();
+            const right = String(b || '').trim().toLowerCase();
+            if (!left || !right) return false;
+            if (left === right) return true;
+            return stripNotifyLeadingLetter(left) === stripNotifyLeadingLetter(right);
+        }
+
+        function isLetterlessNotifyId(id) {
+            const val = String(id || '').trim();
+            if (!val || val.includes('@')) return false;
+            return /^(?:\d{4,}|wx\d{4,})$/i.test(val);
+        }
+
         function generatePersonalizedText(empId, dynamicCats) {
             const assignedCats = [];
             for (const cat of dynamicCats) {
-                if (window._distPolicy.assignments[cat] && window._distPolicy.assignments[cat].includes(empId)) {
+                const assigned = window._distPolicy.assignments[cat];
+                if (Array.isArray(assigned) && assigned.some(id => isSameNotifyUserId(id, empId))) {
                     assignedCats.push(cat);
                 }
             }
@@ -2382,6 +2533,173 @@
         // 基座一键下发通知逻辑 (基座特有功能)
         // ============================================================
         window._baseNotifyRecipients = [];
+        window._baseNotifyDirectory = { history: [], groups: [], knownEmployees: [] };
+        window._showNotifyHistoryPanel = false;
+
+        async function loadBaseNotifyDirectory(force = false) {
+            if (!force && window._baseNotifyDirectoryLoaded) return window._baseNotifyDirectory;
+            try {
+                const data = await API.get('/api/expedite/notify-recipients');
+                window._baseNotifyDirectory = {
+                    history: Array.isArray(data?.history) ? data.history : [],
+                    groups: Array.isArray(data?.groups) ? data.groups : [],
+                    knownEmployees: Array.isArray(data?.knownEmployees) ? data.knownEmployees : [],
+                };
+                window._baseNotifyDirectoryLoaded = true;
+                enrichBaseNotifyRecipientsFromDirectory();
+                renderBaseNotifyGroupsBar();
+                renderBaseNotifyHistoryResults();
+                renderBaseNotifyRoster();
+                renderBaseNotifyPreview();
+            } catch (err) {
+                console.warn('loadBaseNotifyDirectory failed:', err);
+            }
+            return window._baseNotifyDirectory;
+        }
+
+        function getCombinedNotifySearchPool() {
+            const dir = window._baseNotifyDirectory || {};
+            const merged = new Map();
+            const addEntry = (item, defaultSource) => {
+                if (!item || !item.id) return;
+                const id = String(item.id).trim();
+                if (!id) return;
+                const key = id.toLowerCase();
+                const prev = merged.get(key);
+                if (!prev) {
+                    merged.set(key, {
+                        id,
+                        name: String(item.name || '').trim(),
+                        source: item.source || defaultSource || 'known',
+                        lastUsedAt: item.lastUsedAt || '',
+                        useCount: Number(item.useCount) || 0,
+                    });
+                } else {
+                    if (!prev.name && item.name) prev.name = String(item.name).trim();
+                    if ((Number(item.useCount) || 0) > prev.useCount) prev.useCount = Number(item.useCount) || 0;
+                    if (item.lastUsedAt && (!prev.lastUsedAt || item.lastUsedAt > prev.lastUsedAt)) prev.lastUsedAt = item.lastUsedAt;
+                }
+            };
+            (dir.history || []).forEach(item => addEntry(item, 'history'));
+            (dir.knownEmployees || []).forEach(item => addEntry(item, 'known'));
+            const roster = (window._distPolicy && Array.isArray(window._distPolicy.roster)) ? window._distPolicy.roster : [];
+            roster.forEach(item => addEntry(item, 'roster'));
+            return Array.from(merged.values());
+        }
+
+        function findKnownEmployeeMatch(token) {
+            const q = String(token || '').trim();
+            if (!q) return null;
+            const qLower = q.toLowerCase();
+            const pool = getCombinedNotifySearchPool();
+
+            // 1. 精确工号匹配
+            const exact = pool.find(item => item.id.toLowerCase() === qLower);
+            if (exact) return exact;
+
+            // 2. 去首字母工号匹配（优先返回带首字母的完整工号记录）
+            const sameIdMatches = pool.filter(item => isSameNotifyUserId(item.id, q));
+            if (sameIdMatches.length > 0) {
+                return sameIdMatches.sort((a, b) => Number(isLetterlessNotifyId(a.id)) - Number(isLetterlessNotifyId(b.id)))[0];
+            }
+
+            // 3. 按姓名精确或唯一模糊匹配
+            const exactName = pool.filter(item => item.name && item.name.toLowerCase() === qLower);
+            if (exactName.length === 1) return exactName[0];
+            const partialName = pool.filter(item => item.name && item.name.toLowerCase().includes(qLower));
+            if (partialName.length === 1) return partialName[0];
+
+            return null;
+        }
+
+        function enrichBaseNotifyRecipientsFromDirectory() {
+            const pool = getCombinedNotifySearchPool();
+            if (!pool.length || !Array.isArray(window._baseNotifyRecipients)) return;
+            window._baseNotifyRecipients.forEach(emp => {
+                if (!emp || !emp.id) return;
+                const match = pool.find(item => item.id.toLowerCase() === emp.id.toLowerCase())
+                    || pool.find(item => isSameNotifyUserId(item.id, emp.id));
+                if (match) {
+                    if (!emp.name && match.name) emp.name = match.name;
+                    if (!emp.resolvedId && match.id.toLowerCase() !== emp.id.toLowerCase()) {
+                        emp.resolvedId = match.id;
+                    }
+                }
+            });
+        }
+
+        function addOrSelectBaseNotifyRecipient(entry, options = {}) {
+            if (!entry || !entry.id) return false;
+            const id = String(entry.id).trim();
+            const name = String(entry.name || '').trim();
+            const list = window._baseNotifyRecipients || (window._baseNotifyRecipients = []);
+            const existing = list.find(r => r.id.toLowerCase() === id.toLowerCase())
+                || list.find(r => isSameNotifyUserId(r.id, id));
+            if (existing) {
+                existing.selected = options.selected !== undefined ? Boolean(options.selected) : true;
+                if (!existing.name && name) existing.name = name;
+                return false;
+            }
+            const dynamicCats = getDistributionCategories();
+            const assignments = (window._distPolicy && window._distPolicy.assignments) ? window._distPolicy.assignments : {};
+            const matchedCats = dynamicCats.filter(cat =>
+                Array.isArray(assignments[cat]) && assignments[cat].some(cid => isSameNotifyUserId(cid, id))
+            );
+            list.push({
+                id,
+                name: name || id,
+                categories: matchedCats.length ? matchedCats : [options.categoryTag || '手动/历史'],
+                selected: options.selected !== undefined ? Boolean(options.selected) : true,
+                manual: Boolean(options.manual),
+                resolvedId: entry.resolvedId || '',
+            });
+            return true;
+        }
+
+        function buildNotifyCategoriesFromPolicy() {
+            const dynamicCats = getDistributionCategories();
+            const roster = (window._distPolicy && Array.isArray(window._distPolicy.roster)) ? window._distPolicy.roster : [];
+            const assignments = (window._distPolicy && window._distPolicy.assignments) ? window._distPolicy.assignments : {};
+
+            const map = new Map();
+            roster.forEach(emp => {
+                if (emp && emp.id) {
+                    const id = String(emp.id).trim();
+                    map.set(id, {
+                        id,
+                        name: String(emp.name || '').trim(),
+                        categories: [],
+                        selected: true,
+                        manual: false,
+                    });
+                }
+            });
+
+            dynamicCats.forEach(cat => {
+                const assigned = assignments[cat] || [];
+                assigned.forEach(rawId => {
+                    const id = String(rawId || '').trim();
+                    if (!id) return;
+                    if (!map.has(id)) {
+                        map.set(id, { id, name: '', categories: [], selected: true, manual: false });
+                    }
+                    if (!map.get(id).categories.includes(cat)) {
+                        map.get(id).categories.push(cat);
+                    }
+                });
+            });
+
+            (assignments['GLOBAL_EMAIL'] || []).forEach(rawId => {
+                const id = String(rawId || '').trim();
+                if (!id) return;
+                if (!map.has(id)) {
+                    map.set(id, { id, name: '', categories: [], selected: true, manual: false });
+                }
+                if (!map.get(id).categories.includes('邮件抄送')) map.get(id).categories.push('邮件抄送');
+            });
+
+            return Array.from(map.values());
+        }
 
         function openBaseNotifyModal() {
             if (!latestFailingData) return showToast('无快照数据，无法提取催办内容', 'error');
@@ -2394,54 +2712,17 @@
                 titleInput.value = defaultTitle;
             }
 
-            // 从 window._distPolicy 提取接收人
-            const dynamicCats = getDistributionCategories();
-            const roster = (window._distPolicy && Array.isArray(window._distPolicy.roster)) ? window._distPolicy.roster : [];
-            const assignments = (window._distPolicy && window._distPolicy.assignments) ? window._distPolicy.assignments : {};
+            window._baseNotifyRecipients = buildNotifyCategoriesFromPolicy();
+            enrichBaseNotifyRecipientsFromDirectory();
+            window._showNotifyHistoryPanel = false;
 
-            const map = new Map();
-            // 1. 先加入 roster 中人员
-            roster.forEach(emp => {
-                if (emp && emp.id) {
-                    map.set(emp.id, {
-                        id: String(emp.id).trim(),
-                        name: String(emp.name || '').trim(),
-                        categories: [],
-                        selected: true,
-                        manual: false,
-                    });
-                }
-            });
+            const saveRow = document.getElementById('base-notify-group-save-row');
+            if (saveRow) saveRow.style.display = 'none';
+            const searchInput = document.getElementById('base-notify-history-search');
+            if (searchInput) searchInput.value = '';
 
-            // 2. 统计每位人员分配的分类
-            dynamicCats.forEach(cat => {
-                const assigned = assignments[cat] || [];
-                assigned.forEach(id => {
-                    if (!map.has(id)) {
-                        map.set(id, {
-                            id: String(id).trim(),
-                            name: '',
-                            categories: [],
-                            selected: true,
-                            manual: false,
-                        });
-                    }
-                    if (!map.get(id).categories.includes(cat)) {
-                        map.get(id).categories.push(cat);
-                    }
-                });
-            });
-
-            // 3. 加入 GLOBAL_EMAIL / GLOBAL_GROUP
-            (assignments['GLOBAL_EMAIL'] || []).forEach(id => {
-                if (!map.has(id)) {
-                    map.set(id, { id: String(id).trim(), name: '', categories: [], selected: true, manual: false });
-                }
-                if (!map.get(id).categories.includes('邮件抄送')) map.get(id).categories.push('邮件抄送');
-            });
-
-            window._baseNotifyRecipients = Array.from(map.values());
-
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyHistoryResults();
             renderBaseNotifyRoster();
             renderBaseNotifyPreview();
 
@@ -2459,6 +2740,8 @@
             if (bodyEl) bodyEl.scrollTop = 0;
             const closeBtn = modal.querySelector('.close-btn');
             if (closeBtn) closeBtn.focus();
+
+            loadBaseNotifyDirectory(true);
         }
 
         function closeBaseNotifyModal() {
@@ -2496,6 +2779,7 @@
 
         function toggleAllBaseNotifyRecipients(checked) {
             (window._baseNotifyRecipients || []).forEach(r => { r.selected = Boolean(checked); });
+            renderBaseNotifyGroupsBar();
             renderBaseNotifyRoster();
             renderBaseNotifyPreview();
         }
@@ -2504,7 +2788,18 @@
             if (window._baseNotifyRecipients && window._baseNotifyRecipients[index]) {
                 window._baseNotifyRecipients[index].selected = Boolean(checked);
             }
-            updateBaseNotifySelectedCount();
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyHistoryResults();
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function removeBaseNotifyRecipient(index) {
+            if (!Array.isArray(window._baseNotifyRecipients)) return;
+            window._baseNotifyRecipients.splice(index, 1);
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyHistoryResults();
+            renderBaseNotifyRoster();
             renderBaseNotifyPreview();
         }
 
@@ -2518,25 +2813,323 @@
             if (noteEl) noteEl.textContent = selected.length ? `已就绪，将通过基座接口向 ${selected.length} 人下发通知` : '请勾选至少一位接收人';
         }
 
+        function toggleSaveNotifyGroupForm(show) {
+            const row = document.getElementById('base-notify-group-save-row');
+            const input = document.getElementById('base-notify-group-name-input');
+            if (!row) return;
+            if (!show) {
+                row.style.display = 'none';
+                if (input) input.value = '';
+                return;
+            }
+            const selected = (window._baseNotifyRecipients || []).filter(r => r.selected);
+            if (selected.length === 0) {
+                showToast('请先勾选至少一位接收人后再保存为分组', 'error');
+                return;
+            }
+            row.style.display = 'flex';
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        async function saveCurrentNotifyGroup() {
+            const input = document.getElementById('base-notify-group-name-input');
+            const name = (input?.value || '').trim();
+            if (!name) return showToast('请输入分组名称', 'error');
+            const selected = (window._baseNotifyRecipients || []).filter(r => r.selected);
+            if (selected.length === 0) return showToast('请至少选择一位接收人', 'error');
+
+            try {
+                const res = await API.post('/api/expedite/notify-groups', {
+                    name,
+                    members: selected.map(r => ({ id: r.id, name: r.name && r.name !== r.id ? r.name : '' })),
+                });
+                window._baseNotifyDirectory.groups = Array.isArray(res?.groups) ? res.groups : window._baseNotifyDirectory.groups;
+                toggleSaveNotifyGroupForm(false);
+                renderBaseNotifyGroupsBar();
+                showToast(`已保存工号分组「${name}」(${selected.length} 人)`, 'success');
+            } catch (err) {
+                showToast(`保存分组失败: ${err.message}`, 'error');
+            }
+        }
+
+        async function deleteSavedNotifyGroup(groupId, groupName) {
+            if (!groupId) return;
+            try {
+                const res = await API.delete(`/api/expedite/notify-groups/${encodeURIComponent(groupId)}`);
+                window._baseNotifyDirectory.groups = Array.isArray(res?.groups) ? res.groups : [];
+                renderBaseNotifyGroupsBar();
+                showToast(`已删除分组「${groupName || groupId}」`, 'success');
+            } catch (err) {
+                showToast(`删除分组失败: ${err.message}`, 'error');
+            }
+        }
+
+        function applyCustomNotifyGroup(group) {
+            if (!group || !Array.isArray(group.members)) return;
+            const current = window._baseNotifyRecipients || (window._baseNotifyRecipients = []);
+            const allAlreadySelected = group.members.length > 0 && group.members.every(m => {
+                const found = current.find(r => isSameNotifyUserId(r.id, m.id));
+                return found && found.selected;
+            });
+
+            if (allAlreadySelected) {
+                group.members.forEach(m => {
+                    const found = current.find(r => isSameNotifyUserId(r.id, m.id));
+                    if (found) found.selected = false;
+                });
+            } else {
+                group.members.forEach(m => {
+                    addOrSelectBaseNotifyRecipient(
+                        { id: m.id, name: m.name || '' },
+                        { selected: true, manual: true, categoryTag: `分组:${group.name}` }
+                    );
+                });
+            }
+            enrichBaseNotifyRecipientsFromDirectory();
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyHistoryResults();
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function toggleCategoryNotifyGroup(catName) {
+            const members = (window._baseNotifyRecipients || []).filter(r =>
+                Array.isArray(r.categories) && r.categories.includes(catName)
+            );
+            if (!members.length) return;
+            const allSelected = members.every(r => r.selected);
+            members.forEach(r => { r.selected = !allSelected; });
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function toggleIdPatternNotifyGroup(patternType) {
+            const members = (window._baseNotifyRecipients || []).filter(r => {
+                const letterless = isLetterlessNotifyId(r.id);
+                return patternType === 'letterless' ? letterless : !letterless;
+            });
+            if (!members.length) return;
+            const allSelected = members.every(r => r.selected);
+            members.forEach(r => { r.selected = !allSelected; });
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyRoster();
+            renderBaseNotifyPreview();
+        }
+
+        function renderBaseNotifyGroupsBar() {
+            const bar = document.getElementById('base-notify-groups-bar');
+            if (!bar) return;
+            bar.replaceChildren();
+
+            const recipients = window._baseNotifyRecipients || [];
+            const savedGroups = (window._baseNotifyDirectory && Array.isArray(window._baseNotifyDirectory.groups))
+                ? window._baseNotifyDirectory.groups
+                : [];
+            const dynamicCats = getDistributionCategories().filter(cat =>
+                recipients.some(r => Array.isArray(r.categories) && r.categories.includes(cat))
+            );
+            const letterlessCount = recipients.filter(r => isLetterlessNotifyId(r.id)).length;
+            const prefixedCount = recipients.filter(r => !isLetterlessNotifyId(r.id)).length;
+
+            if (savedGroups.length === 0 && dynamicCats.length === 0 && letterlessCount === 0) {
+                return;
+            }
+
+            const label = document.createElement('span');
+            label.textContent = '工号分组:';
+            label.style.fontSize = '11px';
+            label.style.color = '#64748b';
+            bar.appendChild(label);
+
+            savedGroups.forEach(group => {
+                const chip = document.createElement('span');
+                const allSel = Array.isArray(group.members) && group.members.length > 0 && group.members.every(m => {
+                    const found = recipients.find(r => isSameNotifyUserId(r.id, m.id));
+                    return found && found.selected;
+                });
+                chip.className = `notify-group-chip${allSel ? ' active' : ''}`;
+                chip.title = group.members.map(m => m.name ? `${m.name}(${m.id})` : m.id).join(', ');
+                chip.onclick = () => applyCustomNotifyGroup(group);
+
+                const txt = document.createElement('span');
+                txt.textContent = `📁 ${group.name} (${(group.members || []).length})`;
+                chip.appendChild(txt);
+
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'notify-group-del';
+                delBtn.textContent = '×';
+                delBtn.title = '删除该自定义分组';
+                delBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteSavedNotifyGroup(group.id, group.name);
+                };
+                chip.appendChild(delBtn);
+                bar.appendChild(chip);
+            });
+
+            dynamicCats.forEach(cat => {
+                const members = recipients.filter(r => Array.isArray(r.categories) && r.categories.includes(cat));
+                const allSel = members.length > 0 && members.every(r => r.selected);
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = `notify-group-chip${allSel ? ' active' : ''}`;
+                chip.textContent = `${cat} (${members.length})`;
+                chip.onclick = () => toggleCategoryNotifyGroup(cat);
+                bar.appendChild(chip);
+            });
+
+            if (letterlessCount > 0 && prefixedCount > 0) {
+                const letterChip = document.createElement('button');
+                letterChip.type = 'button';
+                const prefAll = recipients.filter(r => !isLetterlessNotifyId(r.id)).every(r => r.selected);
+                letterChip.className = `notify-group-chip${prefAll ? ' active' : ''}`;
+                letterChip.textContent = `字母工号 (${prefixedCount})`;
+                letterChip.onclick = () => toggleIdPatternNotifyGroup('prefixed');
+                bar.appendChild(letterChip);
+
+                const numChip = document.createElement('button');
+                numChip.type = 'button';
+                const numAll = recipients.filter(r => isLetterlessNotifyId(r.id)).every(r => r.selected);
+                numChip.className = `notify-group-chip${numAll ? ' active' : ''}`;
+                numChip.textContent = `纯数字工号 (${letterlessCount})`;
+                numChip.onclick = () => toggleIdPatternNotifyGroup('letterless');
+                bar.appendChild(numChip);
+            }
+        }
+
+        function toggleNotifyHistoryPanel() {
+            window._showNotifyHistoryPanel = !window._showNotifyHistoryPanel;
+            renderBaseNotifyHistoryResults();
+        }
+
+        function onNotifyHistorySearchInput() {
+            const val = (document.getElementById('base-notify-history-search')?.value || '').trim();
+            if (val) window._showNotifyHistoryPanel = true;
+            renderBaseNotifyHistoryResults();
+        }
+
+        function clearNotifyHistorySearch() {
+            const input = document.getElementById('base-notify-history-search');
+            if (input) input.value = '';
+            window._showNotifyHistoryPanel = false;
+            renderBaseNotifyHistoryResults();
+        }
+
+        function renderBaseNotifyHistoryResults() {
+            const box = document.getElementById('base-notify-history-results');
+            const input = document.getElementById('base-notify-history-search');
+            if (!box) return;
+
+            const q = (input?.value || '').trim();
+            const qLower = q.toLowerCase();
+            if (!q && !window._showNotifyHistoryPanel) {
+                box.style.display = 'none';
+                box.replaceChildren();
+                return;
+            }
+
+            const pool = getCombinedNotifySearchPool();
+            const filtered = pool.filter(item => {
+                if (!qLower) return true;
+                if (item.id.toLowerCase().includes(qLower)) return true;
+                if (item.name && item.name.toLowerCase().includes(qLower)) return true;
+                return isSameNotifyUserId(item.id, q);
+            }).slice(0, 30);
+
+            box.style.display = 'block';
+            box.replaceChildren();
+
+            if (filtered.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.padding = '10px 12px';
+                empty.style.fontSize = '12px';
+                empty.style.color = '#64748b';
+                empty.textContent = q ? `未在历史或员工库找到「${q}」，可直接在下方手动添加（无首字母数字将自动补全匹配）` : '暂无历史发送记录，首次下发后将自动沉淀至此';
+                box.appendChild(empty);
+                return;
+            }
+
+            filtered.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'notify-history-item';
+                const alreadyInList = (window._baseNotifyRecipients || []).find(r => isSameNotifyUserId(r.id, item.id));
+                const isSelected = Boolean(alreadyInList && alreadyInList.selected);
+
+                const left = document.createElement('div');
+                left.style.display = 'flex';
+                left.style.alignItems = 'center';
+                left.style.gap = '6px';
+                const label = document.createElement('span');
+                label.style.fontWeight = '500';
+                label.style.color = '#1e293b';
+                label.textContent = item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id;
+                left.appendChild(label);
+
+                const srcBadge = document.createElement('span');
+                srcBadge.style.fontSize = '10px';
+                srcBadge.style.padding = '1px 5px';
+                srcBadge.style.borderRadius = '4px';
+                srcBadge.style.background = item.source === 'history' ? '#fef3c7' : '#f1f5f9';
+                srcBadge.style.color = item.source === 'history' ? '#b45309' : '#475569';
+                srcBadge.textContent = item.source === 'history'
+                    ? `历史×${Math.max(1, item.useCount || 1)}`
+                    : (item.source === 'admin' ? '管理员' : (item.source === 'bigscreen' ? '大屏' : '员工库'));
+                left.appendChild(srcBadge);
+
+                const action = document.createElement('span');
+                action.style.fontSize = '11px';
+                action.style.fontWeight = '600';
+                action.style.color = isSelected ? '#059669' : '#2563eb';
+                action.textContent = isSelected ? '✓ 已选中' : '＋ 选取';
+
+                row.onclick = () => {
+                    addOrSelectBaseNotifyRecipient(item, {
+                        selected: true,
+                        manual: true,
+                        categoryTag: item.source === 'history' ? '历史常用' : '历史搜索',
+                    });
+                    renderBaseNotifyGroupsBar();
+                    renderBaseNotifyHistoryResults();
+                    renderBaseNotifyRoster();
+                    renderBaseNotifyPreview();
+                };
+
+                row.append(left, action);
+                box.appendChild(row);
+            });
+        }
+
         function addManualNotifyRecipient() {
             const input = document.getElementById('base-notify-manual-input');
             const val = (input?.value || '').trim();
             if (!val) return;
             const tokens = val.split(/[,，;；\s]+/).filter(Boolean);
+            let matchedCount = 0;
             tokens.forEach(tok => {
-                if (!window._baseNotifyRecipients.find(r => r.id === tok)) {
-                    window._baseNotifyRecipients.push({
-                        id: tok,
-                        name: tok,
-                        categories: ['手动指定'],
-                        selected: true,
-                        manual: true,
-                    });
-                }
+                const known = findKnownEmployeeMatch(tok);
+                const resolvedEntry = known
+                    ? { id: known.id, name: known.name || known.id, resolvedId: '' }
+                    : { id: tok, name: tok, resolvedId: '' };
+                if (known && known.id.toLowerCase() !== tok.toLowerCase()) matchedCount++;
+                addOrSelectBaseNotifyRecipient(resolvedEntry, {
+                    selected: true,
+                    manual: true,
+                    categoryTag: known ? '库匹配' : '手动指定',
+                });
             });
             input.value = '';
+            renderBaseNotifyGroupsBar();
+            renderBaseNotifyHistoryResults();
             renderBaseNotifyRoster();
             renderBaseNotifyPreview();
+            if (matchedCount > 0) {
+                showToast(`已自动匹配 ${matchedCount} 位带首字母工号人员`, 'success');
+            }
         }
 
         function renderBaseNotifyRoster() {
@@ -2551,7 +3144,7 @@
                 empty.style.textAlign = 'center';
                 empty.style.color = '#64748b';
                 empty.style.fontSize = '12px';
-                empty.innerHTML = `⚠️ 暂未在「高级分发策略」中配置员工名册。<br>点击上方 <strong>⚙️ 分发策略</strong> 进行配置，或在下方输入工号/姓名直接添加。`;
+                empty.innerHTML = `⚠️ 暂未在「高级分发策略」中配置员工名册。<br>可点上方 <strong>🕒 历史常用</strong> 搜索添加，或在下方输入工号 / 无首字母纯数字添加。`;
                 listEl.appendChild(empty);
                 updateBaseNotifySelectedCount();
                 return;
@@ -2587,6 +3180,16 @@
 
                 left.append(chk, info);
 
+                if (isLetterlessNotifyId(emp.id)) {
+                    const badge = document.createElement('span');
+                    badge.className = 'notify-badge-letterless';
+                    badge.textContent = emp.resolvedId ? `匹配 ${emp.resolvedId}` : '自动补首字母';
+                    badge.title = emp.resolvedId
+                        ? `将自动按已知工号 ${emp.resolvedId} 推送`
+                        : '无首字母工号，下发时自动尝试匹配带首字母工号';
+                    left.appendChild(badge);
+                }
+
                 const right = document.createElement('div');
                 right.style.display = 'flex';
                 right.style.alignItems = 'center';
@@ -2621,6 +3224,25 @@
                     right.appendChild(noCat);
                 }
 
+                if (emp.manual) {
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.textContent = '×';
+                    removeBtn.title = '从本次列表移除';
+                    removeBtn.style.border = 'none';
+                    removeBtn.style.background = 'transparent';
+                    removeBtn.style.color = '#94a3b8';
+                    removeBtn.style.cursor = 'pointer';
+                    removeBtn.style.fontSize = '14px';
+                    removeBtn.style.padding = '0 2px';
+                    removeBtn.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        removeBaseNotifyRecipient(idx);
+                    };
+                    right.appendChild(removeBtn);
+                }
+
                 row.append(left, right);
                 listEl.appendChild(row);
             });
@@ -2640,6 +3262,7 @@
             if (mode === 'broadcast') {
                 selectEl.style.display = 'none';
                 previewEl.value = document.getElementById('brief-textarea')?.value || '';
+                previewEl.scrollTop = 0;
                 return;
             }
 
@@ -2653,13 +3276,14 @@
                 opt.textContent = '暂无选中人员';
                 selectEl.appendChild(opt);
                 previewEl.value = '（请先在上方勾选至少一位接收人）';
+                previewEl.scrollTop = 0;
                 return;
             }
 
             selected.forEach(emp => {
                 const opt = document.createElement('option');
                 opt.value = emp.id;
-                opt.textContent = `预览：${emp.name ? `${emp.name} (${emp.id})` : emp.id}`;
+                opt.textContent = `预览：${emp.name && emp.name !== emp.id ? `${emp.name} (${emp.id})` : emp.id}`;
                 selectEl.appendChild(opt);
             });
 
@@ -2680,6 +3304,7 @@
             } else {
                 previewEl.value = '';
             }
+            previewEl.scrollTop = 0;
         }
 
         async function executeBaseNotify() {
@@ -2713,8 +3338,11 @@
                         if (!text) {
                             text = `Hi ${emp.name || emp.id},\n\n✅ 您所负责的分组指标当前已全部达标，无需跟进。感谢您的支持！`;
                         }
+                        const recipientNames = {};
+                        if (emp.name && emp.name !== emp.id) recipientNames[emp.id] = emp.name;
                         return {
                             recipients: [emp.id],
+                            recipientNames,
                             title: title,
                             content: text,
                         };
@@ -2722,20 +3350,42 @@
                     res = await API.post('/api/expedite/notify', { items });
                 } else {
                     const fullText = document.getElementById('brief-textarea')?.value || '';
+                    const recipientNames = {};
+                    selected.forEach(r => {
+                        if (r.name && r.name !== r.id) recipientNames[r.id] = r.name;
+                    });
                     res = await API.post('/api/expedite/notify', {
                         recipients: selected.map(r => r.id),
+                        recipientNames,
                         title: title,
                         content: fullText,
                     });
                 }
 
+                const resolutions = [];
+                if (Array.isArray(res?.resolutions)) resolutions.push(...res.resolutions);
+                if (Array.isArray(res?.results)) {
+                    res.results.forEach(item => {
+                        if (Array.isArray(item?.resolutions)) resolutions.push(...item.resolutions);
+                    });
+                }
+                const matchedNotes = resolutions
+                    .filter(item => item && item.matchedBy === 'prefix-lookup' && item.resolved && item.resolved !== item.raw)
+                    .map(item => `${item.raw} → ${item.resolved}`);
+                const expandedCount = resolutions.filter(item => item && item.matchedBy === 'prefix-expand').length;
+                const extraHintParts = [];
+                if (matchedNotes.length > 0) extraHintParts.push(`自动匹配完整工号: ${matchedNotes.join(', ')}`);
+                if (expandedCount > 0) extraHintParts.push(`已为 ${expandedCount} 个无首字母工号自动补全首字母候选接收人`);
+
                 if (statusBox) {
                     statusBox.style.background = '#f0fdf4';
                     statusBox.style.color = '#15803d';
                     statusBox.style.border = '1px solid #bbf7d0';
-                    statusBox.innerHTML = `<strong>✅ 基座通知下发成功！</strong><br>已成功通过基座原生通知服务向 ${selected.length} 位责任人下发催办消息。模式：${mode === 'personalized' ? '专属差异化催办' : '全量通报广播'}。`;
+                    const msgHead = `✅ 基座通知下发成功！已成功通过基座原生通知服务向 ${selected.length} 位责任人下发催办消息。模式：${mode === 'personalized' ? '专属差异化催办' : '全量通报广播'}。`;
+                    statusBox.textContent = extraHintParts.length ? `${msgHead} (${extraHintParts.join('；')})` : msgHead;
                 }
                 showToast(`✅ 已通过基座成功下发 ${selected.length} 条催办通知`, 'success');
+                loadBaseNotifyDirectory(true);
             } catch (err) {
                 console.error('Base notify failed:', err);
                 if (statusBox) {

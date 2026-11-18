@@ -584,6 +584,20 @@ export async function debugProbeAction(action, params = {}) {
             return cacheScan(params.pattern || '*', Number(params.limit) || 50);
         case 'cache-delete':
             return cacheDelete(params.key || 'debug_probe_key');
+        case 'query-business':
+            return { mode: 'memory', action, simulated: true, message: '离线内存模式：未连接只读业务库 netcare', rows: [] };
+        case 'kv-roundtrip': {
+            const probeKey = `dh_probe_kv_roundtrip_${Date.now()}`;
+            const sampleText = 'k'.repeat(CHUNK_CHARS + 512);
+            try {
+                await kvSet(probeKey, { ts: Date.now(), sampleText });
+                const readBack = await kvGet(probeKey, null);
+                const intact = Boolean(readBack && readBack.sampleText === sampleText);
+                return { mode: 'memory', action, intact, bytes: sampleText.length, chunkChars: CHUNK_CHARS };
+            } finally {
+                await deleteRows('sys_kv_store', { whereSql: `\`kv_key\` = ${sqlVal(probeKey)}`, memFilter: (r) => r.kv_key === probeKey }).catch(() => {});
+            }
+        }
         case 'rep-offices':
         case 'app-menus':
         case 'datasources':
@@ -708,6 +722,18 @@ export async function debugProbeAction(action, params = {}) {
         return rawBaseGet(endpoints.appMenus, 'debug:app_menus');
     case 'query-business':
         return { rows: await queryBusiness(String(params.sql || 'SELECT 1 AS ok'), Number(params.limit) || 10) };
+    case 'kv-roundtrip': {
+        const probeKey = `dh_probe_kv_roundtrip_${Date.now()}`;
+        const sampleText = 'k'.repeat(Math.min(CHUNK_CHARS + 512, 160 * 1024));
+        try {
+            await kvSet(probeKey, { ts: Date.now(), sampleText });
+            const readBack = await kvGet(probeKey, null);
+            const intact = Boolean(readBack && readBack.sampleText === sampleText);
+            return { mode: 'online', action, intact, bytes: sampleText.length, chunkChars: CHUNK_CHARS };
+        } finally {
+            await deleteRows('sys_kv_store', { whereSql: `\`kv_key\` = ${sqlVal(probeKey)}`, memFilter: (r) => r.kv_key === probeKey }).catch(() => {});
+        }
+    }
     case 'cache-set':
         return cacheSet(params.key || 'debug_probe_key', params.value || `probe_${Date.now()}`, Number(params.ttl) || 300);
     case 'cache-get':

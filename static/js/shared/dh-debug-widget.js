@@ -20,9 +20,11 @@
     const PROBE_ACTIONS = [
         { action: 'schema-check', label: '🗄️ 数据库完整性检查 (缺表自检)' },
         { action: 'db-tables', label: '📋 列出自建库表' },
+        { action: 'kv-roundtrip', label: '🧩 KV 读写与大字段分片闭环' },
         { action: 'write-self', label: '✏️ 写自身 Schema (debug_audit_test)' },
         { action: 'query-self', label: '🔍 查自身 Schema' },
         { action: 'query-base', label: '📖 读共享库 netcare_base' },
+        { action: 'query-business', label: '🏭 测读只读业务库 (netcare)' },
         { action: 'write-base', label: '🛡️ 测写 netcare_base (预期拒绝)' },
         { action: 'query-netcare', label: '🛡️ 测读基座 netcare (预期拒绝)' },
         { action: 'write-netcare', label: '🛡️ 测写基座 netcare (预期拒绝)' },
@@ -35,19 +37,44 @@
         { action: 'app-menus', label: '📑 应用菜单权限' },
         { action: 'row-limit', label: '📏 查询行数上限' },
         { action: 'sql-size', label: '📦 单条 SQL 大小上限' },
+        { action: 'alert-notify-check', label: '🔔 消息中心与催办名录状态' },
+        { action: 'redact-check', label: '🔒 敏感凭据脱敏规则自检' },
     ];
 
     const state = {
         open: false,
         activeTab: 'probes',
         logs: [],
+        clientErrors: [],
         logLevelFilter: 'ALL',
         logQuery: '',
         sse: null,
         ssePaused: false,
         probeResults: [],
+        lastSchemaResult: null,
+        lastNetResults: {},
+        lastNotifyResult: null,
+        lastDiagnosticBundle: null,
         summary: null,
     };
+
+    const pushClientError = (kind, message, detail = '') => {
+        state.clientErrors.push({
+            ts: new Date().toISOString(),
+            kind,
+            message: String(message || '').slice(0, 400),
+            detail: String(detail || '').slice(0, 400),
+            path: window.location.pathname + window.location.search,
+        });
+        if (state.clientErrors.length > 40) state.clientErrors.shift();
+    };
+    window.addEventListener('error', (evt) => {
+        pushClientError('error', evt?.message || 'Script error', evt?.filename ? `${evt.filename}:${evt.lineno}:${evt.colno}` : '');
+    });
+    window.addEventListener('unhandledrejection', (evt) => {
+        const reason = evt?.reason;
+        pushClientError('unhandledrejection', reason?.message || String(reason || 'Unhandled rejection'), reason?.stack || '');
+    });
 
     // ── Mount Floating Pill ──
     const pill = document.createElement('button');
@@ -129,10 +156,27 @@
     const probePanel = panels.get('probes');
     const probeSec = el('div', 'dh-dbg-section');
     const probeH4 = el('h4', '', 'MySQL / Redis / Gateway 探针');
+    const headActions = el('div', 'dh-dbg-head-actions');
     const runAllBtn = el('button', 'dh-dbg-btn primary', '🚀 一键全量自检');
     runAllBtn.type = 'button';
-    probeH4.appendChild(runAllBtn);
+    const collectLogsBtn = el('button', 'dh-dbg-btn secondary', '📦 一键收集所有自检详细日志');
+    collectLogsBtn.type = 'button';
+    collectLogsBtn.title = '一键汇集所有探针结果、环境摘要、后端日志与前端异常，用于反馈排查';
+    headActions.append(runAllBtn, collectLogsBtn);
+    probeH4.appendChild(headActions);
     probeSec.appendChild(probeH4);
+
+    const exportBar = el('div', 'dh-dbg-export-bar');
+    exportBar.hidden = true;
+    const exportStatusText = el('span', '', '');
+    const exportActions = el('div', 'dh-dbg-head-actions');
+    const copyBundleBtn = el('button', 'dh-dbg-btn', '📋 复制完整日志');
+    copyBundleBtn.type = 'button';
+    const downloadBundleBtn = el('button', 'dh-dbg-btn primary', '⬇️ 下载 JSON 诊断包');
+    downloadBundleBtn.type = 'button';
+    exportActions.append(copyBundleBtn, downloadBundleBtn);
+    exportBar.append(exportStatusText, exportActions);
+    probeSec.appendChild(exportBar);
 
     const btnGrid = el('div', 'dh-dbg-btn-grid');
     for (const item of PROBE_ACTIONS) {
@@ -177,6 +221,7 @@
             });
             const data = await res.json();
             const r = data.result || data;
+            state.lastSchemaResult = r;
             const duration = Date.now() - started;
             if (r.healthy) {
                 schemaStatusBadge.className = 'dh-dbg-pill-ok';
@@ -219,34 +264,13 @@
 
     streamBtn.onclick = async () => {
         netPre.textContent = '测试中（约 3 秒）...';
-        try {
-            const started = Date.now();
-            const res = await fetch(apiUrl('/api/debug/stream-test'));
-            const reader = res.body.getReader();
-            const arrivals = [];
-            for (;;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (value && value.length) arrivals.push(Date.now() - started);
-            }
-            const spread = arrivals.length ? arrivals[arrivals.length - 1] - arrivals[0] : 0;
-            const buffered = arrivals.length <= 1 || spread < 1000;
-            netPre.textContent = JSON.stringify({
-                结论: buffered ? '被缓冲：数据在结束时一次性到达，对话无法逐字输出（需要平台对该路径关闭代理缓冲）' : '正常：数据分批实时到达，对话可以逐字输出',
-                分片到达时间ms: arrivals,
-            }, null, 2);
-        } catch (err) {
-            netPre.textContent = `流式测试失败: ${err.message}`;
-        }
+        const res = await runStreamCheckProbe();
+        netPre.textContent = JSON.stringify(res.body, null, 2);
     };
     outboundBtn.onclick = async () => {
         netPre.textContent = '测试中...';
-        try {
-            const res = await fetch(apiUrl('/api/debug/outbound-test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-            netPre.textContent = JSON.stringify(await res.json(), null, 2);
-        } catch (err) {
-            netPre.textContent = `出站测试失败: ${err.message}`;
-        }
+        const res = await runOutboundCheckProbe();
+        netPre.textContent = JSON.stringify(res.body, null, 2);
     };
 
     // Custom Notify Tester
@@ -288,15 +312,17 @@
                 body: JSON.stringify({ payload }),
             });
             const data = await res.json();
+            state.lastNotifyResult = data;
             notifyPre.textContent = JSON.stringify(data, null, 2);
         } catch (err) {
+            state.lastNotifyResult = { error: err.message };
             notifyPre.textContent = `请求失败: ${err.message}`;
         }
     };
 
     function renderProbeResults() {
         probeResultsBox.replaceChildren();
-        for (const r of state.probeResults.slice(0, 20)) {
+        for (const r of state.probeResults.slice(0, 60)) {
             const card = el('div', 'dh-dbg-probe-card');
             const top = el('div', 'dh-dbg-probe-top');
             const title = el('span', '', `${r.action} (${r.durationMs ?? '-'}ms)`);
@@ -305,6 +331,47 @@
             const pre = el('pre', 'dh-dbg-pre', JSON.stringify(r.body, null, 2));
             card.append(top, pre);
             probeResultsBox.appendChild(card);
+        }
+    }
+
+    async function runStreamCheckProbe() {
+        const started = Date.now();
+        try {
+            const res = await fetch(apiUrl('/api/debug/stream-test'));
+            const reader = res.body.getReader();
+            const arrivals = [];
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value && value.length) arrivals.push(Date.now() - started);
+            }
+            const spread = arrivals.length ? arrivals[arrivals.length - 1] - arrivals[0] : 0;
+            const buffered = arrivals.length <= 1 || spread < 1000;
+            const out = {
+                结论: buffered ? '被缓冲：数据在结束时一次性到达，对话无法逐字输出（需要平台对该路径关闭代理缓冲）' : '正常：数据分批实时到达，对话可以逐字输出',
+                分片到达时间ms: arrivals,
+                buffered,
+            };
+            state.lastNetResults.streamTest = out;
+            return { ok: !buffered, durationMs: Date.now() - started, body: out };
+        } catch (err) {
+            const out = { error: err.message };
+            state.lastNetResults.streamTest = out;
+            return { ok: false, durationMs: Date.now() - started, body: out };
+        }
+    }
+
+    async function runOutboundCheckProbe() {
+        const started = Date.now();
+        try {
+            const res = await fetch(apiUrl('/api/debug/outbound-test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const out = await res.json();
+            state.lastNetResults.outboundTest = out;
+            return { ok: Boolean(out?.ok), durationMs: Date.now() - started, body: out };
+        } catch (err) {
+            const out = { ok: false, error: err.message };
+            state.lastNetResults.outboundTest = out;
+            return { ok: false, durationMs: Date.now() - started, body: out };
         }
     }
 
@@ -317,9 +384,14 @@
                 body: JSON.stringify(payload),
             });
             const data = await res.json();
+            if (action === 'schema-check' && data?.result) {
+                state.lastSchemaResult = data.result;
+            }
             const resultCode = data?.result?.code;
             const isExpectedReject = /^write-(base|netcare)|query-netcare$/.test(action) && (resultCode === 400 || resultCode === 409);
-            const ok = res.ok && (isExpectedReject || resultCode === undefined || resultCode === 0);
+            const kvFailed = action === 'kv-roundtrip' && data?.result && data.result.intact === false;
+            const redactFailed = action === 'redact-check' && data?.result && data.result.passed === false;
+            const ok = res.ok && !kvFailed && !redactFailed && (isExpectedReject || resultCode === undefined || resultCode === 0);
             state.probeResults.unshift({
                 action,
                 durationMs: data.durationMs || (Date.now() - started),
@@ -341,14 +413,185 @@
 
     runAllBtn.onclick = async () => {
         runAllBtn.disabled = true;
-        runAllBtn.textContent = '⏳ 正在探测...';
+        collectLogsBtn.disabled = true;
         state.probeResults = [];
         renderProbeResults();
+
+        const extraSteps = 3; // healthz + outbound-test + stream-test
+        const totalSteps = PROBE_ACTIONS.length + extraSteps;
+        let stepIndex = 0;
+        const setProgress = () => {
+            stepIndex += 1;
+            runAllBtn.textContent = `⏳ 自检中 (${stepIndex}/${totalSteps})...`;
+        };
+
+        // 1. /api/healthz
+        setProgress();
+        try {
+            const t0 = Date.now();
+            const hRes = await fetch(apiUrl('/api/healthz'));
+            const hJson = await hRes.json();
+            state.lastNetResults.healthz = hJson;
+            state.probeResults.unshift({
+                action: 'healthz',
+                durationMs: Date.now() - t0,
+                ok: hRes.ok && hJson?.status !== 'error',
+                statusLabel: hRes.ok ? '✓ 成功' : `✕ 异常 (${hRes.status})`,
+                body: hJson,
+            });
+            renderProbeResults();
+        } catch (err) {
+            state.probeResults.unshift({
+                action: 'healthz',
+                durationMs: 0,
+                ok: false,
+                statusLabel: `✕ ${err.message}`,
+                body: { error: err.message },
+            });
+            renderProbeResults();
+        }
+
+        // 2. 所有基座/业务/脱敏探针
         for (const item of PROBE_ACTIONS) {
+            setProgress();
             await runProbe(item.action);
         }
+
+        // 3. 模型网关出站连通
+        setProgress();
+        const outboundRes = await runOutboundCheckProbe();
+        state.probeResults.unshift({
+            action: 'outbound-test',
+            durationMs: outboundRes.durationMs,
+            ok: outboundRes.ok,
+            statusLabel: outboundRes.ok ? '✓ 可达' : '⚠️ 未配置或不可达',
+            body: outboundRes.body,
+        });
+        renderProbeResults();
+
+        // 4. SSE/NDJSON 流式代理缓冲检测
+        setProgress();
+        const streamRes = await runStreamCheckProbe();
+        state.probeResults.unshift({
+            action: 'stream-test',
+            durationMs: streamRes.durationMs,
+            ok: streamRes.ok,
+            statusLabel: streamRes.ok ? '✓ 流式正常' : '⚠️ 被网关缓冲',
+            body: streamRes.body,
+        });
+        renderProbeResults();
+
+        const passCount = state.probeResults.filter((x) => x.ok).length;
+        const failCount = state.probeResults.length - passCount;
+        exportStatusText.textContent = `全量自检完成：共 ${state.probeResults.length} 项（✓ ${passCount} 通过 / ${failCount} 异常或提示），可点右侧收集/导出详细日志`;
+        exportBar.hidden = false;
+
         runAllBtn.disabled = false;
+        collectLogsBtn.disabled = false;
         runAllBtn.textContent = '🚀 一键全量自检';
+    };
+
+    function downloadBundleFile(bundle) {
+        const text = JSON.stringify(bundle, null, 2);
+        const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const ts = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+        a.href = url;
+        a.download = `dh-diagnostic-${ts}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function copyDiagnosticBundle(bundle) {
+        const text = JSON.stringify(bundle, null, 2);
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (_) { /* fallback below */ }
+        return false;
+    }
+
+    copyBundleBtn.onclick = async () => {
+        if (!state.lastDiagnosticBundle) return;
+        const copied = await copyDiagnosticBundle(state.lastDiagnosticBundle);
+        copyBundleBtn.textContent = copied ? '✓ 已复制 JSON' : '⚠️ 剪贴板受限，请点下载';
+        setTimeout(() => { copyBundleBtn.textContent = '📋 复制完整日志'; }, 2400);
+    };
+
+    downloadBundleBtn.onclick = () => {
+        if (!state.lastDiagnosticBundle) return;
+        downloadBundleFile(state.lastDiagnosticBundle);
+    };
+
+    collectLogsBtn.onclick = async () => {
+        collectLogsBtn.disabled = true;
+        collectLogsBtn.textContent = '⏳ 正在收集...';
+        try {
+            const [summaryRes, healthRes, logsRes] = await Promise.all([
+                fetch(apiUrl('/api/debug/summary')).then((r) => r.json()).catch((e) => ({ error: e.message })),
+                fetch(apiUrl('/api/healthz')).then((r) => r.json()).catch((e) => ({ error: e.message })),
+                fetch(apiUrl('/api/debug/logs?limit=300')).then((r) => r.json()).catch((e) => ({ items: [], error: e.message })),
+            ]);
+            if (summaryRes && !summaryRes.error) state.summary = summaryRes;
+
+            const fetchedLogs = Array.isArray(logsRes?.items) ? logsRes.items : [];
+            const mergedLogMap = new Map();
+            for (const entry of [...fetchedLogs, ...state.logs]) {
+                const key = entry?.id ? `id:${entry.id}` : `raw:${entry?.ts || ''}:${entry?.message || ''}`;
+                mergedLogMap.set(key, entry);
+            }
+            const serverLogs = [...mergedLogMap.values()];
+
+            const passCount = state.probeResults.filter((x) => x.ok).length;
+            const failCount = state.probeResults.length - passCount;
+            const bundle = {
+                generatedAt: new Date().toISOString(),
+                client: {
+                    pageUrl: window.location.href,
+                    dhBase: window.DH_BASE || '',
+                    userAgent: navigator.userAgent,
+                    language: navigator.language,
+                    theme: document.documentElement.getAttribute('data-theme') || 'light',
+                },
+                healthz: healthRes,
+                summary: summaryRes,
+                probeSummary: {
+                    total: state.probeResults.length,
+                    passed: passCount,
+                    failedOrWarn: failCount,
+                    failedActions: state.probeResults.filter((x) => !x.ok).map((x) => ({
+                        action: x.action,
+                        statusLabel: x.statusLabel,
+                        detail: x.body?.error || x.body?.result?.message || x.body?.result?.upgradeAdvice || '',
+                    })),
+                },
+                probeResults: state.probeResults,
+                schemaCheck: state.lastSchemaResult,
+                networkChecks: state.lastNetResults,
+                notifyTest: state.lastNotifyResult,
+                serverLogsCount: serverLogs.length,
+                serverLogs,
+                clientErrors: state.clientErrors,
+            };
+            state.lastDiagnosticBundle = bundle;
+
+            const copied = await copyDiagnosticBundle(bundle);
+            downloadBundleFile(bundle);
+            const tip = state.probeResults.length === 0 ? '（提示：可先点左侧“一键全量自检”再收集以包含完整探针结果）' : '';
+            exportStatusText.textContent = `已收集 ${state.probeResults.length} 项自检、${serverLogs.length} 条后端日志、${state.clientErrors.length} 条前端异常，已自动下载诊断 JSON${copied ? ' 并复制到剪贴板' : ''}${tip}`;
+            exportBar.hidden = false;
+        } catch (err) {
+            exportStatusText.textContent = `收集详细日志失败: ${err.message}`;
+            exportBar.hidden = false;
+        } finally {
+            collectLogsBtn.disabled = false;
+            collectLogsBtn.textContent = '📦 一键收集所有自检详细日志';
+        }
     };
 
     // ── Panel 2: 身份与环境 ──

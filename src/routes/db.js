@@ -16,6 +16,9 @@ import {
     exportReportDataBackupZip,
     importReportDataBackupZip,
     sendExpediteNotification,
+    listExpediteDirectory,
+    saveExpediteGroup,
+    deleteExpediteGroup,
 } from '../services/report-service.js';
 
 export async function dbRoutes(fastify) {
@@ -92,5 +95,11 @@ export async function dbRoutes(fastify) {
 }
 
 export async function expediteRoutes(fastify) {
-    fastify.post('/notify', async (req) => sendExpediteNotification(req.body || {}));
+    fastify.post('/notify', async (req) => sendExpediteNotification({
+        ...(req.body || {}),
+        _actor: req.userIdentity?.username || '',
+    }));
+    fastify.get('/notify-recipients', async () => listExpediteDirectory());
+    fastify.post('/notify-groups', async (req) => saveExpediteGroup(req.body || {}));
+    fastify.delete('/notify-groups/:id', async (req) => deleteExpediteGroup(req.params.id));
 }

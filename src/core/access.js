@@ -14,7 +14,7 @@ let bootstrapping = null;
 
 const norm = (v) => String(v || '').trim().toLowerCase();
 
-function stripFirstLetter(id) {
+export function stripFirstLetter(id) {
     const s = norm(id);
     // 工号去掉可选首字母（如 z00569258 -> 00569258、dwx1545337 -> wx1545337），避免误匹配普通英文名
     const m = /^[a-z]((?:[a-z]{1,2})?\d{4,})$/.exec(s);

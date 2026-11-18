@@ -8,6 +8,7 @@
         ['library', 'book', '资料库', 'Library'],
         ['opsDrafts', 'inbox', '运维待办', 'Ops drafts'],
         ['links', 'link', '友情链接', 'Links'],
+        ['requirements', 'target', '需求广场', 'Requirements'],
         ['promotions', 'compass', '平台推广', 'Promotions']
     ];
     const defaults = () => ({ primary: entries.slice(0, 5).map(item => item[0]), more: entries.slice(5).map(item => item[0]) });
@@ -16,6 +17,23 @@
     const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let layout = defaults(), draft, nav, moreButton, stash, overlay, loaded = false, pending = null, busy = false, dragging = null, suppressDragClick = false;
     const buttons = new Map();
+
+    function normalizeLayout(data) {
+        if (!data || !Array.isArray(data.primary) || !Array.isArray(data.more)) {
+            throw new Error(L('服务器返回的菜单配置无效', 'Invalid menu configuration from the server'));
+        }
+        const seen = new Set();
+        const keep = list => list.filter(id => buttons.has(id) && !seen.has(id) && seen.add(id));
+        const primary = keep(data.primary);
+        const more = keep(data.more);
+        for (const [id] of entries) {
+            if (!seen.has(id)) {
+                seen.add(id);
+                more.push(id);
+            }
+        }
+        return { primary, more };
+    }
 
     async function request(method, body) {
         const token = localStorage.getItem('tools_token') || sessionStorage.getItem('tools_token');
@@ -26,10 +44,7 @@
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-        const ids = [...(data.primary || []), ...(data.more || [])];
-        if (!Array.isArray(data.primary) || !Array.isArray(data.more) || ids.length !== entries.length
-            || new Set(ids).size !== entries.length || ids.some(id => !buttons.has(id))) throw new Error(L('服务器返回的菜单配置无效', 'Invalid menu configuration from the server'));
-        return data;
+        return normalizeLayout(data);
     }
     function restoreMore() {
         if (!stash) return;

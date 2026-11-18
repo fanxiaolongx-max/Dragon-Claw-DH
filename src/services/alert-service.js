@@ -2,7 +2,7 @@
 // 每人一份，存键值表 alerts:<工号>，最多保留 200 条；读改写不是原子的，并发下偶尔少一条，可以接受。
 import crypto from 'node:crypto';
 import { kvGet, kvSet } from '../dao/scoped.js';
-import { listAdmins } from '../core/access.js';
+import { listAdmins, stripFirstLetter } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
 import { enqueueAlertAnalysis, registerAlertStore } from './alert-ai-service.js';
 
@@ -13,11 +13,35 @@ const SEVERITIES = new Set(['info', 'warn', 'error', 'critical']);
 const keyOf = (user) => `alerts:${String(user || '').trim().toLowerCase()}`;
 const clip = (v, n) => String(v ?? '').trim().slice(0, n);
 
+function getUserKeys(user) {
+    const primary = String(user || '').trim().toLowerCase();
+    if (!primary) return [];
+    const stripped = stripFirstLetter(primary);
+    return stripped && stripped !== primary ? [primary, stripped] : [primary];
+}
+
 async function load(user) {
     const stored = await kvGet(keyOf(user), null);
     return Array.isArray(stored?.items) ? stored.items : [];
 }
 const save = (user, items) => kvSet(keyOf(user), { items: items.slice(0, MAX_ITEMS) });
+
+async function loadForUser(user) {
+    const keys = getUserKeys(user);
+    if (!keys.length) return [];
+    const lists = await Promise.all(keys.map((k) => load(k)));
+    if (lists.length === 1) return lists[0];
+    const merged = [];
+    const seenIds = new Set();
+    for (const list of lists) {
+        for (const item of list) {
+            if (!item || seenIds.has(item.id)) continue;
+            seenIds.add(item.id);
+            merged.push(item);
+        }
+    }
+    return merged.sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0));
+}
 
 function buildEvent(input) {
     return {
@@ -39,7 +63,7 @@ function buildEvent(input) {
 }
 
 /** 给一个或多个用户留言。失败只记日志，不影响主流程。 */
-export async function pushAlert(users, input) {
+export async function pushAlert(users, input, { allowDuplicate = false } = {}) {
     const targets = [...new Set((Array.isArray(users) ? users : [users]).map((u) => String(u || '').trim().toLowerCase()).filter((u) => u && u !== 'anonymous'))];
     const event = buildEvent(input || {});
     if (!event.title) return 0;
@@ -49,7 +73,7 @@ export async function pushAlert(users, input) {
         try {
             const items = await load(user);
             // 同一标题 10 分钟内不重复提醒（模型连续失败、任务反复报同一个错）
-            const dup = items.find((x) => x.title === event.title && x.status === 'unread' && Date.now() - Date.parse(x.created_at) < DEDUPE_MS);
+            const dup = !allowDuplicate && items.find((x) => x.title === event.title && x.status === 'unread' && Date.now() - Date.parse(x.created_at) < DEDUPE_MS);
             if (dup) continue;
             await save(user, [{ ...event, id: crypto.randomUUID() }, ...items]);
             sent += 1;
@@ -83,14 +107,14 @@ export async function pushAdminAlert(input) {
 }
 
 export async function listAlerts(user, { status = '', type = '', limit = 120 } = {}) {
-    let items = await load(user);
+    let items = await loadForUser(user);
     if (status === 'unread') items = items.filter((x) => x.status === 'unread');
     if (TYPES.has(type)) items = items.filter((x) => x.event_type === type);
     return { events: items.slice(0, Math.min(Math.max(Number(limit) || 120, 1), MAX_ITEMS)) };
 }
 
 export async function alertSummary(user) {
-    const items = await load(user);
+    const items = await loadForUser(user);
     const unread = items.filter((x) => x.status === 'unread');
     const count = (list, pick) => list.reduce((acc, x) => { acc[pick(x)] = (acc[pick(x)] || 0) + 1; return acc; }, {});
     return {
@@ -104,21 +128,33 @@ export async function alertSummary(user) {
 }
 
 export async function markAlertsRead(user, ids = null) {
-    const items = await load(user);
     const wanted = Array.isArray(ids) ? new Set(ids.map(String)) : null;
-    let changed = 0;
-    for (const item of items) {
-        if (item.status === 'unread' && (!wanted || wanted.has(item.id))) { item.status = 'read'; changed += 1; }
+    let totalChanged = 0;
+    for (const key of getUserKeys(user)) {
+        const items = await load(key);
+        let changed = 0;
+        for (const item of items) {
+            if (item.status === 'unread' && (!wanted || wanted.has(item.id))) { item.status = 'read'; changed += 1; }
+        }
+        if (changed) {
+            await save(key, items);
+            totalChanged += changed;
+        }
     }
-    if (changed) await save(user, items);
-    return { success: true, changed };
+    return { success: true, changed: totalChanged };
 }
 
 export async function removeAlerts(user, id = null) {
-    const items = await load(user);
-    const next = id ? items.filter((x) => x.id !== String(id)) : [];
-    if (next.length !== items.length) await save(user, next);
-    return { success: true, removed: items.length - next.length };
+    let removed = 0;
+    for (const key of getUserKeys(user)) {
+        const items = await load(key);
+        const next = id ? items.filter((x) => x.id !== String(id)) : [];
+        if (next.length !== items.length) {
+            await save(key, next);
+            removed += items.length - next.length;
+        }
+    }
+    return { success: true, removed };
 }
 
 /** 补做 AI 摘要：本人还没有摘要的警告及以上消息重新排队（最多 limit 条） */
