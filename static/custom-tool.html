@@ -97,9 +97,55 @@
                 })
                 .catch((err) => showError(err?.message || '加载自定义工具失败。'));
 
+            function currentLangCode() {
+                try {
+                    const raw = localStorage.getItem('tools_lang') || localStorage.getItem('tools_language') || document.documentElement.lang || 'zh-CN';
+                    return String(raw).toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN';
+                } catch (_) { return 'zh-CN'; }
+            }
+            function forwardLanguageToTool(lang) {
+                const next = String(lang || currentLangCode()).toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN';
+                try {
+                    if (localStorage.getItem('tools_lang') !== next) {
+                        localStorage.setItem('tools_lang', next);
+                        localStorage.setItem('tools_language', next);
+                    }
+                } catch (_) {}
+                document.documentElement.lang = next;
+                const activeFrame = document.getElementById('toolFrame');
+                try {
+                    if (activeFrame?.contentWindow?.ToolsI18n?.getLanguage?.() !== next) {
+                        activeFrame?.contentWindow?.ToolsI18n?.setLanguage?.(next);
+                    }
+                } catch (_) {}
+                activeFrame?.contentWindow?.postMessage?.({ type: 'tools-platform-language', lang: next }, '*');
+            }
+            window.addEventListener('tools:languagechange', (event) => {
+                forwardLanguageToTool(event?.detail?.lang || currentLangCode());
+            });
+            window.addEventListener('storage', (event) => {
+                if (event.key === 'tools_lang' || event.key === 'tools_language') {
+                    forwardLanguageToTool(event.newValue);
+                }
+            });
             window.addEventListener('message', (event) => {
-                if (event.source !== frame.contentWindow) return;
+                const activeFrame = document.getElementById('toolFrame');
+                if (event.origin === window.location.origin && event.data?.type === 'tools-platform-language') {
+                    forwardLanguageToTool(event.data.lang);
+                    return;
+                }
+                if (event.source !== activeFrame?.contentWindow) return;
                 const d = event.data;
+                if (d?.type === 'tools-custom-tool-language') {
+                    forwardLanguageToTool(d.lang);
+                    try {
+                        if (window.parent && window.parent !== window && window.parent.location.origin === window.location.origin) {
+                            const next = String(d.lang || '').toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN';
+                            if (window.parent.ToolsI18n?.getLanguage?.() !== next) window.parent.ToolsI18n?.setLanguage?.(next);
+                        }
+                    } catch (_) {}
+                    return;
+                }
                 if (!d || d.__dh !== 1) return;
                 fetch(apiUrl('/bridge'), {
                     method: 'POST',
