@@ -145,7 +145,12 @@
         document.documentElement.classList.add('dh-web');
         const trim = document.createElement('link');
         trim.rel = 'stylesheet';
-        trim.href = DH_BASE + '/css/dh-web-trim.css';
+        let trimQuery = '';
+        try {
+            const cs = document.currentScript && document.currentScript.src;
+            if (cs) trimQuery = new URL(cs, window.location.href).search || '';
+        } catch (_) { /* ignore */ }
+        trim.href = DH_BASE + '/css/dh-web-trim.css' + trimQuery;
         (document.head || document.documentElement).appendChild(trim);
     } catch (_) { /* ignore */ }
 
