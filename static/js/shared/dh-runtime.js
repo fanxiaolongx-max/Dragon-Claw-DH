@@ -515,18 +515,13 @@
     window.dhIsPhase2Href = phase2Check;
     window.dhNotifyPhase2 = showPhase2Notice;
 
-    // ── 基座版禁用本地 UI.Vision 插件批脚本与浮窗脚本运行（无论是否超级管理员），悬停/点击提示下载 OpenX 桌面版 ──
+    // ── 基座版禁用本地 UI.Vision 插件一键批脚本与插件下载（无论是否超级管理员），浮窗脚本/F12 手动复制保留可用 ──
     const OPENX_DESKTOP_URL = 'https://openx.huawei.com/Egypt_CNBG_CS_Tools_Platform/overview';
     const DH_UIV_DISABLED_SELECTOR = [
         '#btnDownloadUivExtension',
         '.btn-batch-uiv-run',
         '.btn-batch-speed',
         '.btn-batch-filter',
-        '.btn-batch-site-console',
-        '[data-cap-group="float"] .home-cap-card',
-        '[data-cap-group="float"] .home-caps-go',
-        '.v2-hub-card[data-src="float"]',
-        '.v2-hub-menu a[href*="siteScripts=1"]',
         '[data-dh-uiv-disabled]',
     ].join(', ');
 

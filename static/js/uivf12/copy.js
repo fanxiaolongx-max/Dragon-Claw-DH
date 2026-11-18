@@ -966,7 +966,6 @@ async function copySiteConsoleScripts(origin) {
 }
 
 async function openSiteConsoleScriptPicker() {
-    if (isDhWebUivDisabled('.btn-batch-site-console')) return;
     try {
         const { scripts = [] } = await API.get('/api/uiv/scripts');
         const scope = applyUivBatchCategoryFilter(scripts);
@@ -4430,11 +4429,11 @@ document.addEventListener('DOMContentLoaded', () => {
     new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-platform-theme'] });
     updateUivBatchSpeedButton();
     if (typeof window.dhApplyUivDisabledState === 'function') window.dhApplyUivDisabledState(document);
+    // 首页「插件与脚本」入口：?siteScripts=1 直接打开浮窗脚本选择（支持手动复制 F12 粘贴）
+    if (new URLSearchParams(location.search).get('siteScripts') === '1') openSiteConsoleScriptPicker();
     if (document.documentElement?.classList?.contains('dh-web')) return;
     syncUivBatchScopeFromServer().finally(() => {
         startUivBatchSchedule();
     });
-    // 首页「插件与脚本」入口：?siteScripts=1 直接打开浮窗脚本选择
-    if (new URLSearchParams(location.search).get('siteScripts') === '1') openSiteConsoleScriptPicker();
     refreshDesktopSiteScripts();
 });

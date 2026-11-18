@@ -854,20 +854,22 @@ test('基座版输入框加号菜单、UI.Vision 本地批脚本/浮窗脚本禁
     assert.match(agentDiscJs, /window\.addEventListener\('tools:authchange'/);
     assert.match(composerControlsJs, /try \{ window\.HomeAgentDiscussion\?\.closePicker\?\.\(\); \} catch \{\}/);
 
-    // 3. 基座版（dh-web）全面禁用数据抓取页 UI.Vision 批脚本、浮窗脚本与插件下载，并悬停提示下载 OpenX 桌面版
+    // 3. 基座版（dh-web）禁用数据抓取页 UI.Vision 一键批脚本与插件下载，但保留浮窗脚本（手动 F12 复制）可用
     const trimCss = fs.readFileSync(path.join(rootDir, 'static/css/dh-web-trim.css'), 'utf8');
     const dhRuntimeJs = fs.readFileSync(path.join(rootDir, 'static/js/shared/dh-runtime.js'), 'utf8');
     const uivCopyJs = fs.readFileSync(path.join(rootDir, 'static/js/uivf12/copy.js'), 'utf8');
     const uivExtGuideJs = fs.readFileSync(path.join(rootDir, 'static/js/uivf12/extension-guide.js'), 'utf8');
     const openxUrl = 'https://openx.huawei.com/Egypt_CNBG_CS_Tools_Platform/overview';
 
-    assert.ok(trimCss.includes('html.dh-web .btn-batch-uiv-run') && trimCss.includes('html.dh-web .btn-batch-site-console'));
+    assert.ok(trimCss.includes('html.dh-web .btn-batch-uiv-run'));
+    assert.ok(!trimCss.includes('.btn-batch-site-console') && !trimCss.includes('[data-cap-group="float"]'), 'floating script entry must stay enabled in dh-web');
     assert.ok(dhRuntimeJs.includes(openxUrl), 'dh-runtime.js includes OpenX desktop download URL');
     assert.ok(dhRuntimeJs.includes('dhOpenxDesktopTooltip') && dhRuntimeJs.includes('dhApplyUivDisabledState'));
+    assert.ok(!dhRuntimeJs.includes('.btn-batch-site-console') && !dhRuntimeJs.includes('[data-cap-group="float"]'));
     assert.match(uivCopyJs, /function isDhWebUivDisabled\(/);
     assert.match(uivCopyJs, /async function runAllUivScriptsDirect[\s\S]{0,160}isDhWebUivDisabled/);
     assert.match(uivCopyJs, /async function runTestUivScriptsDirect[\s\S]{0,160}isDhWebUivDisabled/);
-    assert.match(uivCopyJs, /async function openSiteConsoleScriptPicker[\s\S]{0,160}isDhWebUivDisabled/);
+    assert.doesNotMatch(uivCopyJs, /async function openSiteConsoleScriptPicker[\s\S]{0,160}isDhWebUivDisabled/);
     assert.match(uivExtGuideJs, /document\.documentElement\?\.classList\?\.contains\('dh-web'\)/);
 });
 
