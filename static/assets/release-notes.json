@@ -1,8 +1,8 @@
 {
   "zh": [
-    "新手引导升级到与桌面版同一套：依次介绍工作台入口，并在导航里可见的数据抓取、数据导入、报表、催办、月报、大屏页面上逐个演示，最后自动发出一个报表示例问题（只读演示，不写数据、不发消息）。自定义工具可以改名了，英文界面下改的是英文名。新增内置浏览器收藏接口（仅超级管理员可改）。"
+    "与桌面版同步浏览器侧栏：「⋯」菜单里的下载、历史记录、收藏夹改为二级菜单，鼠标移上去即展开，按屏幕空间自动在左侧或右侧弹出，也支持方向键。"
   ],
   "en": [
-    "The welcome tour now matches the desktop edition: it walks through the workspace, demonstrates each visible system page (data capture, import, reports, follow-ups, monthly report, big screen), and finishes by sending a sample report question as a read-only demo that never writes data or sends messages. Custom tools can be renamed, and renaming in the English UI changes the English name. Added the built-in browser bookmarks API (super admins only)."
+    "Synced the browser sidebar with the desktop edition: Downloads, History and Bookmarks in the ⋯ menu are now submenus that open on hover, flip left or right to fit the screen, and support arrow keys."
   ]
 }
