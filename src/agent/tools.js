@@ -231,8 +231,8 @@ const TOOL_GUIDES = (() => {
 
 const PLATFORM_TOOLS = [
     { id: 'uivf12', name: '数据抓取', href: '/uivf12', guide: '管理从业务系统页面抓数的脚本：把浏览器 F12 里复制的 fetch 代码粘贴进来解析、命名、分类；可生成 UI.Vision 宏。抓到的数据可一键送到「数据导入」。' },
-    { id: 'sla', name: '数据导入', href: '/sla', guide: '上传 Excel/CSV（支持批量，或指定整改/常规/专项/SR/漏洞类别），页面内配置指标规则和目标，点击「保存当前指标数据」生成快照；可导出裕湘模板。' },
-    { id: 'report', name: '报表看板', href: '/report', guide: '选择快照入库，查看各分类得分、未达标指标和趋势；支持手工校准并上传佐证附件。入库后的数据供大屏、催办、月报和 AI 对话使用。' },
+    { id: 'sla', name: '数据导入', href: '/sla', guide: '上传 Excel/CSV（支持批量，或指定整改/常规/专项/SR/漏洞类别），页面内配置指标规则和目标，点击「保存当前指标数据」生成快照。' },
+    { id: 'report', name: '报表看板', href: '/report', guide: '选择快照入库，查看各分类得分、未达标指标和趋势；支持手工校准并上传佐证附件。点击「一键导出“于祥”的赛马表」可预览并导出 Excel。入库后的数据供大屏、催办、月报和 AI 对话使用。' },
     { id: 'expedite', name: '一键催办', href: '/expedite', guide: '按最新入库数据列出未达标/超期事项，按责任人分组生成催办内容，可通过基座通知发送。' },
     { id: 'monthly', name: '月报页面', href: '/monthly', guide: 'AI 月报编辑器：按模板生成月报，每个单元格可与 AI 对话改写、生成图表；经典月报在 /monthly/legacy，可导出 .msg 邮件。' },
     { id: 'bigscreen', name: '大屏看板', href: '/bigscreen', guide: '会议室大屏：责任人矩阵、趋势与告警指标，数据来自报表看板的入库结果。' },

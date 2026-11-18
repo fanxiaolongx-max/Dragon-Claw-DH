@@ -532,6 +532,25 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.equal((await (await bridge({ method: 'me' })).json()).username, 'bob');
         assert.equal((await (await bridge({ method: 'report' })).json()).failingCount, 1);
 
+        // ── 13.5 历史对话继续聊天后刷新会话 updated_at，侧栏排序稳居最上方不回落 ──
+        mock.aiScript.push({ text: '等于 2。' }, { text: '好的。' }, { text: '继续算等于 3。' });
+        const histFirst = (await chat('bob', { messages: [{ role: 'user', content: '1+1 等于多少' }] })).find((e) => e.type === 'done');
+        await new Promise((r) => setTimeout(r, 15));
+        const newerChat = (await chat('bob', { messages: [{ role: 'user', content: '新建的后续对话' }] })).find((e) => e.type === 'done');
+        const listBeforeResume = (await (await fetch(`${url}/api/ai/sessions`, { headers: as('bob') })).json()).items;
+        const s1Before = listBeforeResume.find((s) => s.id === histFirst.sessionId);
+        const s2Before = listBeforeResume.find((s) => s.id === newerChat.sessionId);
+        assert.ok(s1Before && s2Before);
+        assert.ok(s2Before.updatedAt > s1Before.updatedAt);
+
+        await new Promise((r) => setTimeout(r, 15));
+        await chat('bob', { sessionId: histFirst.sessionId, messages: [{ role: 'user', content: '1+1 等于多少' }, { role: 'model', content: '等于 2。' }, { role: 'user', content: '再加 1 呢' }] });
+        const listAfterResume = (await (await fetch(`${url}/api/ai/sessions`, { headers: as('bob') })).json()).items;
+        const s1After = listAfterResume.find((s) => s.id === histFirst.sessionId);
+        const s2After = listAfterResume.find((s) => s.id === newerChat.sessionId);
+        assert.ok(s1After.updatedAt > s1Before.updatedAt, '继续历史对话应更新 ai_chat_sessions.updated_at');
+        assert.ok(s1After.updatedAt > s2After.updatedAt, '继续历史对话后 updatedAt 应大于此前更新的会话');
+
         // ── 6. 模型服务报错时，把原因告诉用户而不是“内部错误” ──
         mock.aiScript.length = 0;
         await fetch(`${url}/api/ai-settings/profiles`, {

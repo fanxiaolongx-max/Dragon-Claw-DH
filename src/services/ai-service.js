@@ -535,12 +535,19 @@ export async function listMessages(sessionId) {
 }
 
 export async function appendMessage(sessionId, role, content, meta = {}) {
+    const sid = String(sessionId);
+    const now = Date.now();
     await insertRow('ai_chat_messages', {
-        session_id: String(sessionId),
+        session_id: sid,
         role: String(role),
         content: String(content || ''),
         meta_json: JSON.stringify(meta || {}),
-        created_at: Date.now(),
+        created_at: now,
+    });
+    // 追加消息（包括在历史对话中继续提问与模型落库）时同步刷新会话 updated_at，避免侧栏刷新后按旧时间掉回原位
+    await updateRows('ai_chat_sessions', { updated_at: now }, {
+        whereSql: `\`id\` = ${sqlVal(sid)}`,
+        memFilter: (r) => r.id === sid,
     });
 }
 

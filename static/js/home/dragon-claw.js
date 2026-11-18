@@ -2124,6 +2124,7 @@
             window.DragonHtmlSwarm.startSession({ prompt: content });
         }
         let started = false;
+        let sessionTouched = false;
         const streamStartedAt = Date.now();
         let streamFirstDeltaAt = 0;
         try {
@@ -2151,6 +2152,7 @@
                     if (!delta || controller.signal.aborted || !reply.isConnected) return;
                     if (!streamFirstDeltaAt) streamFirstDeltaAt = Date.now();
                     started = true;
+                    sessionTouched = true;
                     renderer.append(delta);
                     if (isNormalChat) window.DragonHtmlSwarm?.onStreamDelta?.(renderer.current(), { prompt: content });
                 },
@@ -2160,6 +2162,7 @@
                     if (event.type === 'title') { scheduleChatListRefresh(100); return; }
                     if (controller.signal.aborted || !reply.isConnected) return;
                     if (event.type === 'start' && event.sessionId) {
+                        sessionTouched = true;
                         state.sessionId = event.sessionId;
                         rememberLastChat(event.sessionId, workspacePayload ? { agentSessionId: workspacePayload.agentSessionId, root: workspacePayload.root } : null);
                     }
@@ -2204,6 +2207,7 @@
             });
             if (controller.signal.aborted || !reply.isConnected) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
             if (data.sessionId) {
+                sessionTouched = true;
                 state.sessionId = data.sessionId;
                 rememberLastChat(data.sessionId, workspacePayload ? { agentSessionId: data.agentSessionId || workspacePayload.agentSessionId, root: data.agent?.root || workspacePayload.root } : null);
             }
@@ -2256,6 +2260,10 @@
             activity.finish();
             workspace()?.performance?.(reply, reply.dcRounds || reply.dcLiveRounds || []);
             workspace()?.finishMessage?.(reply);
+            if (sessionTouched && state.sessionId) {
+                touchChatListItem(state.sessionId);
+                scheduleChatListRefresh(200);
+            }
             if (state.controller === controller) state.controller = null;
             updateSendButton();
             scrollThread();
@@ -2290,6 +2298,14 @@
         return false;
     }
 
+    function touchChatListItem(sessionId, at = Date.now()) {
+        if (!sessionId || !Array.isArray(chatList?.items)) return;
+        const item = chatList.items.find(row => row.id === sessionId);
+        if (!item) return;
+        const prev = Number(parseChatTime(item.updatedAt || item.updated_at || 0).getTime()) || 0;
+        item.updatedAt = Math.max(prev, at);
+    }
+
     // agent：这次对话用过的工作区智能体会话 { agentSessionId, root }，续接时一并接回，模型才记得做过的工具操作
     function rememberLastChat(sessionId, agent = null) {
         if (!sessionId) return;
@@ -2299,6 +2315,7 @@
         try {
             localStorage.setItem(LAST_CHAT_KEY, JSON.stringify({ sessionId, user: currentUser(), updatedAt: Date.now(), ...(keptAgent ? { agent: keptAgent } : {}) }));
         } catch { /* 存储不可用时不提供续接 */ }
+        touchChatListItem(sessionId);
         markActiveChat();
         scheduleChatListRefresh();
     }
