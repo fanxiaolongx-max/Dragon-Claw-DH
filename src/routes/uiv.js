@@ -3,7 +3,7 @@ import path from 'node:path';
 import { STATIC_DIR } from '../config.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { ensureQuickStartSeeded } from '../services/onboarding-service.js';
-import { isSuperUser, filterUivScriptsForUser } from '../services/distribution-service.js';
+import { isSuperUser, filterUivScriptsForUser, canAccessAllUivScripts } from '../services/distribution-service.js';
 import {
     uivScriptOrigin,
     listCategories,
@@ -31,9 +31,9 @@ export async function uivRoutes(fastify) {
         await ensureQuickStartSeeded();
         reply.header('X-Data-Source', 'mysql');
         const identity = resolveRequestIdentity(req);
-        const [allScripts, allCategories] = await Promise.all([listScripts(), listCategories()]);
+        const [allScripts, allCategories, canSeeAll] = await Promise.all([listScripts(), listCategories(), canAccessAllUivScripts(identity)]);
         const scripts = await filterUivScriptsForUser(allScripts, identity, uivScriptOrigin);
-        const categories = isSuperUser(identity)
+        const categories = (isSuperUser(identity) || canSeeAll)
             ? allCategories
             : [...new Set(scripts.map((s) => s.category || '默认分类'))];
         return { scripts, categories };
@@ -58,7 +58,7 @@ export async function uivRoutes(fastify) {
     fastify.get('/categories', async (req) => {
         await ensureQuickStartSeeded();
         const identity = resolveRequestIdentity(req);
-        if (isSuperUser(identity)) return listCategories();
+        if (isSuperUser(identity) || await canAccessAllUivScripts(identity)) return listCategories();
         const visible = await filterUivScriptsForUser(await listScripts(), identity, uivScriptOrigin);
         return [...new Set(visible.map((s) => s.category || '默认分类'))];
     });

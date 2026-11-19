@@ -1,12 +1,12 @@
 import { BusinessError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
 import { config } from '../config.js';
-import { hasAdminMatch, isAuthEnforced, listAdmins, saveAdmins } from '../core/access.js';
+import { hasAdminMatch, isAuthEnforced, isSameUserId, listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
 import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
-import { rememberUser } from '../services/share-service.js';
+import { listKnownUsers, rememberUser } from '../services/share-service.js';
 
 const LOGIN_WINDOW_MS = 8 * 3600_000;
 
@@ -62,7 +62,43 @@ export async function authRoutes(fastify) {
     });
 
     // 管理员名单（仅管理员；写操作由入口权限钩子拦截非管理员）
-    fastify.get('/admins', async () => listAdmins());
+    async function buildAdminsView(me) {
+        const { env, stored, openAdmin } = await listAdmins();
+        const known = await listKnownUsers().catch(() => []);
+        const map = new Map();
+        const upsert = (username, displayName = '', seenAt = 0) => {
+            const cleanId = String(username || '').trim();
+            if (!cleanId) return;
+            const key = cleanId.toLowerCase();
+            const prev = map.get(key);
+            map.set(key, {
+                username: prev?.username || cleanId,
+                displayName: String(displayName || prev?.displayName || '').trim(),
+                seenAt: Math.max(Number(prev?.seenAt) || 0, Number(seenAt) || 0),
+            });
+        };
+        for (const u of known) upsert(u.username, u.name, u.seenAt);
+        if (me?.identified) upsert(me.username, me.displayName, Date.now());
+        for (const u of [...env, ...stored]) upsert(u);
+        const users = [...map.values()]
+            .map((u) => {
+                const isEnvAdmin = hasAdminMatch(env, u.username);
+                const isStoredAdmin = hasAdminMatch(stored, u.username);
+                return {
+                    username: u.username,
+                    displayName: u.displayName || u.username,
+                    seenAt: u.seenAt || 0,
+                    isEnvAdmin,
+                    isStoredAdmin,
+                    isSuper: isEnvAdmin || isStoredAdmin,
+                    isSelf: Boolean(me?.identified && isSameUserId(u.username, me.username)),
+                };
+            })
+            .sort((a, b) => (Number(b.isSuper) - Number(a.isSuper)) || (b.seenAt - a.seenAt) || a.username.localeCompare(b.username));
+        return { env, stored, openAdmin, users };
+    }
+
+    fastify.get('/admins', async (req) => buildAdminsView(resolveRequestIdentity(req)));
     fastify.put('/admins', async (req) => {
         const me = resolveRequestIdentity(req);
         const users = Array.isArray(req.body?.users) ? req.body.users : [];
@@ -75,6 +111,6 @@ export async function authRoutes(fastify) {
         pushLog({ level: 'WARN', category: 'AUTH', message: `管理员名单已更新（${stored.length} 人）`, userId: me.username });
         await recordAudit(req, { actor: me.username, action: 'admins_update', detail: stored.join('、') || '（空）' });
         await pushAdminAlert({ type: 'security', severity: 'warn', title: '管理员名单已更新', message: `${me.username} 把管理员名单改为：${stored.join('、') || '（空）'}`, actor: me.username, objectType: 'admins' });
-        return { success: true, stored };
+        return { success: true, ...(await buildAdminsView(me)) };
     });
 }

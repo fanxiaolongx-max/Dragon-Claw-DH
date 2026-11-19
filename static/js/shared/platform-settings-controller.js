@@ -83,7 +83,7 @@ function renderNavSettingsSidebar() {
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'media' ? 'active' : ''}" data-tab="media" onclick="switchNavSettingsTab('media')">${renderNavSettingsTabLabel('🎬', navT('nav.set.tab.media'))}</button>` : ''}
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'promotions' ? 'active' : ''}" data-tab="promotions" onclick="switchNavSettingsTab('promotions')">${renderNavSettingsTabLabel('📣', navT('nav.set.tab.promotions'))}</button>` : ''}
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'customBackup' ? 'active' : ''}" data-tab="customBackup" onclick="switchNavSettingsTab('customBackup')">${renderNavSettingsTabLabel('🧰', navT('nav.set.tab.customBackup'))}</button>` : ''}
-        <button class="nav-settings-tab ${t === 'accounts' ? 'active' : ''}" data-tab="accounts" onclick="switchNavSettingsTab('accounts')">${renderNavSettingsTabLabel('🧾', navLocaleText('审计日志', 'Audit log'))}</button>
+        ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'accounts' ? 'active' : ''}" data-tab="accounts" onclick="switchNavSettingsTab('accounts')">${renderNavSettingsTabLabel('👥', navLocaleText('账号与权限', 'Accounts & roles'))}</button>` : ''}
         ${isNavSuperAdmin() ? `<button class="nav-settings-tab ${t === 'security' ? 'active' : ''}" data-tab="security" onclick="switchNavSettingsTab('security')">${renderNavSettingsTabLabel('🛡️', navT('nav.set.tab.security'))}</button>` : ''}
         <div class="nav-settings-title nav-settings-section-title">${navEscape(navT('nav.set.tab.pages'))}</div>
         ${renderPageSettingsTabs()}
@@ -197,7 +197,7 @@ window.openChatModelSettings = async function () {
 window.closeNavSettingsModal = closeNavSettingsModal;
 
 // 只有超级管理员能看到的平台级设置页
-const NAV_SUPER_ONLY_SETTINGS_TABS = new Set(['logo', 'channels', 'desktopAgents', 'update', 'snapshotPublish', 'media', 'promotions', 'security', 'backup', 'customBackup', 'page:home', 'page:f12-extension', 'page:storage', 'page:netcare-explorer']);
+const NAV_SUPER_ONLY_SETTINGS_TABS = new Set(['logo', 'accounts', 'channels', 'desktopAgents', 'update', 'snapshotPublish', 'media', 'promotions', 'security', 'backup', 'customBackup', 'page:home', 'page:f12-extension', 'page:storage', 'page:netcare-explorer']);
 window.switchNavSettingsTab = function (tab) {
     if (localStorage.getItem('tools_role') !== 'admin' && tab !== 'vault') tab = 'agentTools';
     if (tab === 'tenants') tab = 'accounts';
@@ -220,7 +220,7 @@ function getNavSettingsTitle() {
         const item = NAV_BUILTIN_LINKS.find(link => link.id === pageId);
         return item ? navT('nav.set.pageConfig', { page: getNavLabel(item) }) : navT('nav.set.tab.pages');
     }
-    if (navState.settingsTab === 'accounts') return navLocaleText('审计日志', 'Audit log'); // 基座 Web 版：账号由数字人门户管理，这个页签只放审计日志
+    if (navState.settingsTab === 'accounts') return navLocaleText('账号与权限', 'Accounts & roles');
     if (navState.settingsTab === 'security') return navT('nav.set.tab.security');
     if (navState.settingsTab === 'ai') return navT('nav.set.tab.ai');
     if (navState.settingsTab === 'agentTools') return navLocaleText('智能体工具', 'Agent tools');
@@ -248,7 +248,7 @@ function getNavSettingsSubtitle() {
         if (pageId === 'duty-roster') return navLocaleText('夜间运维值班表服务端持久化及月报资料库互通说明。', 'Night operation duty roster server persistence and report library overview.');
         return navT('nav.set.sub.pageFallback');
     }
-    if (navState.settingsTab === 'accounts') return navLocaleText('谁在什么时候、从什么客户端进入了平台或做了敏感操作。仅管理员可见。', 'Who entered the platform or performed sensitive actions, when and from which client. Administrators only.');
+    if (navState.settingsTab === 'accounts') return navLocaleText('管理基座登录用户的超级管理员与团队管理员角色，并查看敏感操作审计日志。仅超级管理员可见。', 'Assign Super admin and Team admin roles for Base SSO users and review audit logs. Super Admins only.');
     if (navState.settingsTab === 'security') return navT('nav.set.sub.security');
     if (navState.settingsTab === 'ai') return navT('nav.set.sub.ai');
     if (navState.settingsTab === 'agentTools') return navLocaleText('Dragon Claw 的 MCP 服务与工具清单：哪些工具常驻、哪些按需加载、占多少上下文、被调用了多少次。', 'Dragon Claw MCP servers and tool catalog: what is always loaded, what loads on demand, context cost and call counts.');
@@ -311,7 +311,7 @@ async function renderNavSettingsContent() {
 
     if (NAV_SUPER_ONLY_SETTINGS_TABS.has(navState.settingsTab) && !isNavSuperAdmin()) navState.settingsTab = 'primary';
     if (navState.settingsTab.startsWith('page:')) return renderPageSettings(content, navState.settingsTab.slice(5));
-    if (navState.settingsTab === 'accounts') { content.innerHTML = renderAuditLogSection(); return window.reloadAuditLogTable(); }
+    if (navState.settingsTab === 'accounts') return renderAccountSettings(content);
     if (navState.settingsTab === 'security') return renderSecuritySettings(content);
     if (navState.settingsTab === 'ai') return renderAiSettings(content);
     if (navState.settingsTab === 'agentTools') return renderAgentToolsSettings(content);

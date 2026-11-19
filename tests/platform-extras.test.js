@@ -370,6 +370,18 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal((await call('bob', 'GET', '/api/uiv/categories')).data.includes('NetCare'), false);
         assert.equal((await call('bob', 'GET', '/api/uiv/scripts')).data.categories.includes('NetCare'), false);
         assert.equal((await call('alice', 'DELETE', `/api/uiv/categories/${encodeURIComponent('默认分类')}`)).status, 400);
+
+        // ── 16. 数据抓取页全员开放时，普通成员可新建自定义分类、保存/改名/移动/删除抓取脚本 ──
+        assert.equal((await call('alice', 'PATCH', '/api/distribution', { kind: 'page', id: 'uivf12', sharedAccess: true })).status, 200);
+        const bobCat = await call('bob', 'POST', '/api/uiv/categories', { name: '我的抓取分类' });
+        assert.equal(bobCat.status, 201);
+        assert.ok((await call('bob', 'GET', '/api/uiv/categories')).data.includes('我的抓取分类'));
+        const bobScript = await call('bob', 'POST', '/api/uiv/scripts', [{ id: 's-bob-1', name: '普通用户脚本', category: '我的抓取分类', url: 'https://bob.example.invalid/api', method: 'GET', code: 'fetch("https://bob.example.invalid/api")' }]);
+        assert.equal(bobScript.status, 200);
+        assert.equal((await call('bob', 'PATCH', '/api/uiv/scripts/s-bob-1/rename', { name: '普通用户脚本2' })).status, 200);
+        assert.equal((await call('bob', 'PATCH', '/api/uiv/scripts/s-bob-1/category', { category: '默认分类' })).status, 200);
+        assert.equal((await call('bob', 'DELETE', '/api/uiv/scripts/s-bob-1')).status, 200);
+        assert.equal((await call('bob', 'DELETE', `/api/uiv/categories/${encodeURIComponent('我的抓取分类')}`)).status, 200);
     } finally {
         await app.close();
         await mock.close();

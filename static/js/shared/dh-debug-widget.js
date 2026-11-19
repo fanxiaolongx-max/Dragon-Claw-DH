@@ -640,7 +640,7 @@
     // 管理员名单：环境变量 DH_ADMIN_USERS 之外的管理员在这里维护（每行或逗号分隔一个工号）
     const adminSec = el('div', 'dh-dbg-section');
     adminSec.appendChild(el('h4', '', '👤 管理员名单'));
-    const adminHint = el('small', '', '首位访问者自动成为管理员。普通用户只能使用对话、AI 月报和个人偏好，不能修改全局配置。');
+    const adminHint = el('small', '', '首位访问者自动成为超级管理员。团队管理员（非超管）受「全员开放」开关控制，仅可用开放功能及个人/协同操作，不能修改全局配置。');
     const adminTextarea = el('textarea', 'dh-dbg-textarea');
     adminTextarea.rows = 3;
     const adminActions = el('div', 'dh-dbg-btn-grid');

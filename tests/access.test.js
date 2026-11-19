@@ -129,6 +129,21 @@ test('首位已识别用户成为管理员，其余用户按桌面版规则只�
         assert.equal(wrappedFail.headers.get('x-dh-status'), '403');
         const failBody = await wrappedFail.json();
         assert.deepEqual([failBody.code, failBody.message, failBody.data.code], [403, '该功能仅管理员可用', 'ADMIN_REQUIRED']);
+
+        // 全局设置「账号与权限」：/api/auth/admins 返回已登录用户清单，支持预配置与升降级，禁止降级自己
+        const adminsView = await (await fetch(`${app.url}/api/auth/admins`, { headers: as('alice') })).json();
+        assert.ok(adminsView.users.some((u) => u.username === 'alice' && u.isSuper && u.isSelf));
+        assert.ok(adminsView.users.some((u) => u.username === 'bob' && !u.isSuper));
+        const promoted = await fetch(`${app.url}/api/auth/admins`, { method: 'PUT', headers: json(as('alice')), body: JSON.stringify({ users: ['alice', 'bob', 'wwx999999'] }) });
+        assert.equal(promoted.status, 200);
+        const promotedBody = await promoted.json();
+        assert.ok(promotedBody.users.some((u) => u.username === 'bob' && u.isSuper));
+        assert.ok(promotedBody.users.some((u) => u.username === 'wwx999999' && u.isSuper));
+        assert.equal((await (await fetch(`${app.url}/api/auth/me`, { headers: as('bob') })).json()).isAdmin, true);
+        const selfDemote = await fetch(`${app.url}/api/auth/admins`, { method: 'PUT', headers: json(as('alice')), body: JSON.stringify({ users: ['bob'] }) });
+        assert.equal(selfDemote.status, 400);
+        // 还原 bob 为普通用户
+        await fetch(`${app.url}/api/auth/admins`, { method: 'PUT', headers: json(as('alice')), body: JSON.stringify({ users: ['alice'] }) });
     } finally {
         await app.stop();
         await mock.close();

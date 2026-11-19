@@ -120,6 +120,7 @@ const API_PAGE_RULES = [
     { pattern: /^\/expedite(?:\/|$)/, pages: ['expedite'] },
     { pattern: /^\/uiv-ai-adapter(?:\/|$)/, pages: ['uivf12'] },
     { pattern: /^\/uiv\/(?:extension-download|backup|run-uivision-macro|uivision-runner)(?:\/|$)/, pages: ['uivf12'] },
+    { pattern: /^\/uiv\/(?:scripts|categories|batch-scope)(?:\/|$)/, check: (identity, _apiPath, method) => (method === 'GET' ? true : canAccessPage('uivf12', identity)) },
     { pattern: /^\/upload(?:\/|$)/, pages: ['sla', 'monthly'] },
     { pattern: /^\/sla\/(?:snapshot|snapshots\/cleanup-redundant|rule-templates|copied-fields|template-mapping)(?:\/|$)/, pages: ['sla'] },
     { pattern: /^\/sla\/(?:export-yuxiang|preview-yuxiang|rename-metric)(?:\/|$)/, pages: ['sla', 'report'] },

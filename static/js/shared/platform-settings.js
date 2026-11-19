@@ -5386,6 +5386,124 @@ window.changeMyPassword = async function () {
     }
 };
 
+async function renderBaseAdminsAccountSettings(content, adminsData) {
+    const user = localStorage.getItem('tools_user') || '';
+    const state = {
+        env: Array.isArray(adminsData.env) ? adminsData.env : [],
+        stored: Array.isArray(adminsData.stored) ? adminsData.stored : [],
+        users: Array.isArray(adminsData.users) ? adminsData.users : [],
+        query: '',
+        saving: false,
+    };
+    content.innerHTML = `
+        <div class="nav-settings-help">${navEscape(accountText(`当前基座账号：${user}（超级管理员）。基座版与主线版保持一致的两级角色（仅分「超级管理员」与「团队管理员」）：超级管理员拥有全局设置、模型配置、全员开放分发、审计日志、数据库探索、诊断、终端、全局 SLA/数据导入及奖惩审批权；团队管理员可使用所有已「全员开放」的工具/技能与个人及协同业务功能。`, `Signed in via Base SSO as ${user} (Super Admin). Base edition mirrors Mainline’s two-tier model ("Super admin" & "Team admin"): Super Admins manage global settings, models, distribution, audit logs, DB explorer, diagnostics, terminal, global SLA/import, and approvals; Team Admins access shared tools/skills and collaborative workflows.`))}</div>
+        <div class="nav-account-create" style="flex-wrap:wrap;gap:8px;align-items:center">
+            <input id="dhAdminPreUser" autocomplete="off" placeholder="${navEscape(accountText('输入工号预配置（如 wwx1528315）', 'Enter user ID to pre-assign (e.g. wwx1528315)'))}" style="min-width:220px">
+            <select id="dhAdminPreRole" class="nav-settings-input" style="width:auto;min-width:130px;padding:7px 10px;border-radius:8px">
+                <option value="super">${navEscape(accountText('超级管理员', 'Super admin'))}</option>
+                <option value="user">${navEscape(accountText('团队管理员', 'Team admin'))}</option>
+            </select>
+            <button type="button" id="dhAdminPreSaveBtn">${navEscape(accountText('添加 / 应用', 'Apply'))}</button>
+            <input id="dhAdminSearch" autocomplete="off" placeholder="${navEscape(accountText('搜索工号或姓名…', 'Search user ID or name…'))}" style="margin-left:auto;min-width:190px">
+        </div>
+        <div id="dhAdminSaveStatus" class="nav-settings-help" style="margin:6px 0 8px"></div>
+        <div class="nav-account-table-wrap">
+            <table class="nav-account-table">
+                <thead>
+                    <tr>
+                        <th>${navEscape(accountText('工号', 'User ID'))}</th>
+                        <th>${navEscape(accountText('姓名', 'Name'))}</th>
+                        <th>${navEscape(accountText('最近登录', 'Last seen'))}</th>
+                        <th>${navEscape(accountText('角色权限', 'Role'))}</th>
+                    </tr>
+                </thead>
+                <tbody id="dhAdminUserRows"></tbody>
+            </table>
+        </div>
+        ${renderAuditLogSection()}
+    `;
+
+    const tbody = content.querySelector('#dhAdminUserRows');
+    const statusEl = content.querySelector('#dhAdminSaveStatus');
+    const searchInput = content.querySelector('#dhAdminSearch');
+    const preUserInput = content.querySelector('#dhAdminPreUser');
+    const preRoleSelect = content.querySelector('#dhAdminPreRole');
+    const preSaveBtn = content.querySelector('#dhAdminPreSaveBtn');
+
+    function renderRows() {
+        const q = state.query.trim().toLowerCase();
+        const filtered = state.users.filter((u) => !q || String(u.username || '').toLowerCase().includes(q) || String(u.displayName || '').toLowerCase().includes(q));
+        tbody.innerHTML = filtered.map((u) => {
+            const lockedEnv = Boolean(u.isEnvAdmin);
+            const lockedSelf = Boolean(u.isSelf && !u.isEnvAdmin);
+            const disabled = state.saving || lockedEnv || lockedSelf;
+            const seenText = u.seenAt ? new Date(u.seenAt).toLocaleString() : accountText('预配置（尚未登录）', 'Pre-configured');
+            const lockNote = lockedEnv
+                ? accountText('环境变量锁定', 'Locked by env')
+                : (lockedSelf ? accountText('当前本人（不可降级）', 'Current user') : '');
+            return `
+                <tr>
+                    <td><code>${navEscape(u.username)}</code></td>
+                    <td>${navEscape(u.displayName || u.username)}</td>
+                    <td style="font-size:12px;opacity:.78">${navEscape(seenText)}</td>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                            <select data-dh-role-user="${navEscape(u.username)}" class="nav-settings-input" style="width:auto;min-width:130px;padding:5px 8px;border-radius:8px;font-size:12.5px" ${disabled ? 'disabled' : ''}>
+                                <option value="super" ${u.isSuper ? 'selected' : ''}>${navEscape(accountText('超级管理员', 'Super admin'))}</option>
+                                <option value="user" ${!u.isSuper ? 'selected' : ''}>${navEscape(accountText('团队管理员', 'Team admin'))}</option>
+                            </select>
+                            ${lockNote ? `<span style="font-size:11.5px;opacity:.72">${navEscape(lockNote)}</span>` : ''}
+                        </div>
+                    </td>
+                </tr>`;
+        }).join('') || `<tr><td colspan="4">${navEscape(accountText('暂无匹配的用户记录', 'No matching users'))}</td></tr>`;
+    }
+
+    async function updateRole(username, targetRole) {
+        const cleanUser = String(username || '').trim().toLowerCase();
+        if (!cleanUser || state.saving) return;
+        const nextStored = new Set(state.stored.map((u) => String(u || '').trim().toLowerCase()).filter(Boolean));
+        if (targetRole === 'super') nextStored.add(cleanUser);
+        else nextStored.delete(cleanUser);
+        state.saving = true;
+        renderRows();
+        if (statusEl) statusEl.textContent = accountText('正在保存权限配置…', 'Saving role configuration…');
+        try {
+            const res = await API.put('/api/auth/admins', { users: [...nextStored] });
+            state.env = Array.isArray(res.env) ? res.env : state.env;
+            state.stored = Array.isArray(res.stored) ? res.stored : [...nextStored];
+            state.users = Array.isArray(res.users) ? res.users : state.users;
+            if (statusEl) statusEl.textContent = accountText(`已更新 ${cleanUser} 为${targetRole === 'super' ? '超级管理员' : '团队管理员'}`, `Updated ${cleanUser} to ${targetRole === 'super' ? 'Super admin' : 'Team admin'}`);
+            window.reloadAuditLogTable?.();
+        } catch (err) {
+            if (statusEl) statusEl.textContent = err.message;
+            await showPlatformNotice({ title: navT('nav.dialog.error'), message: err.message, tone: 'error' });
+        } finally {
+            state.saving = false;
+            renderRows();
+        }
+    }
+
+    searchInput?.addEventListener('input', () => {
+        state.query = searchInput.value || '';
+        renderRows();
+    });
+    tbody?.addEventListener('change', (event) => {
+        const select = event.target.closest('[data-dh-role-user]');
+        if (!select) return;
+        updateRole(select.dataset.dhRoleUser, select.value);
+    });
+    preSaveBtn?.addEventListener('click', () => {
+        const targetUser = (preUserInput?.value || '').trim().toLowerCase();
+        if (!targetUser) return;
+        preUserInput.value = '';
+        updateRole(targetUser, preRoleSelect?.value || 'super');
+    });
+
+    renderRows();
+    window.reloadAuditLogTable();
+}
+
 async function renderAccountSettings(content) {
     if (!isNavSuperAdmin()) {
         content.innerHTML = renderMyAccountCard();
@@ -5393,6 +5511,11 @@ async function renderAccountSettings(content) {
     }
     content.innerHTML = `<div class="nav-settings-empty">${navEscape(navT('nav.acc.empty'))}</div>`;
     try {
+        const adminsProbe = await API.get('/api/auth/admins').catch(() => null);
+        if (adminsProbe && Array.isArray(adminsProbe.users)) {
+            await renderBaseAdminsAccountSettings(content, adminsProbe);
+            return;
+        }
         const [users, teamTools] = await Promise.all([
             API.get('/api/auth/users'),
             API.get('/api/custom-tools/team-tools').catch(() => ({ items: [] }))
