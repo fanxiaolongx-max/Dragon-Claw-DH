@@ -51,10 +51,14 @@ const SCHEMA = (() => {
 })();
 const ALLOWED = new Set(Object.keys(TABLE_NOTES).filter((t) => SCHEMA.has(t)));
 const APP_DB = 'app';
+const PRIORITY_TABLE_ORDER = Object.keys(TABLE_NOTES);
+const PRIORITY_TABLE_RANK = new Map(PRIORITY_TABLE_ORDER.map((name, idx) => [name, idx]));
 
-/** 数据探索页用的表目录：表名、说明、列（标出默认不查的大字段） */
+/** 数据探索页用的表目录：表名、说明、列（标出默认不查的大字段），按常用业务顺序排序 */
 export function tableCatalog() {
-    return [...ALLOWED].sort().map((name) => ({ name, note: TABLE_NOTES[name], columns: SCHEMA.get(name).map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) })) }));
+    return [...ALLOWED]
+        .sort((a, b) => (PRIORITY_TABLE_RANK.get(a) ?? 999) - (PRIORITY_TABLE_RANK.get(b) ?? 999))
+        .map((name) => ({ name, note: TABLE_NOTES[name], columns: SCHEMA.get(name).map((c) => ({ ...c, heavy: HEAVY_COLS.has(c.name) })) }));
 }
 
 // ── 数据探索页（仅管理员）：进入页面时实查库里有哪些表，不再只给写死的那份名单 ──
@@ -279,7 +283,8 @@ export const TOOLS = [
         async run(args) {
             const table = String(args.table || '').replace(/`/g, '').toLowerCase();
             if (!table) {
-                return { ok: true, summary: `${args.database || APP_DB}（应用业务库） · ${ALLOWED.size} 张表`, content: JSON.stringify([...ALLOWED].map((t) => ({ table: t, columns: SCHEMA.get(t).map((c) => c.name), note: TABLE_NOTES[t] }))) };
+                const ordered = [...ALLOWED].sort((a, b) => (PRIORITY_TABLE_RANK.get(a) ?? 999) - (PRIORITY_TABLE_RANK.get(b) ?? 999));
+                return { ok: true, summary: `${args.database || APP_DB}（应用业务库） · ${ordered.length} 张核心表`, content: JSON.stringify(ordered.map((t) => ({ table: t, columns: SCHEMA.get(t).map((c) => c.name), note: TABLE_NOTES[t] }))) };
             }
             if (!ALLOWED.has(table)) return { ok: false, summary: '表不可查', content: `表 ${table} 不在可查询范围内。可查的表：${[...ALLOWED].join('、')}` };
             const purpose = String(TABLE_NOTES[table] || '').split(/[：；。\n]/)[0].trim().slice(0, 24);
@@ -425,6 +430,18 @@ export const TOOLS = [
             const skillId = String(args.id || '').replace(/^@/, '').toLowerCase();
             const visible = await filterSkillsForUser(await listSkills().catch(() => []), ctx?.identity);
             if (!visible.some((s) => s.id === skillId)) {
+                const missing = (ctx?.sharedCapabilities?.skills || []).find((s) => s.id === skillId);
+                if (missing && (missing.canRequest || missing.status === 'pending')) {
+                    ctx.emit?.({ type: 'skill_grant_prompt', skill: missing });
+                    const ownerLabel = missing.ownerName || missing.owner || '管理员';
+                    return {
+                        ok: false,
+                        summary: missing.status === 'pending' ? '等待技能审批' : '需申请技能授权',
+                        content: missing.status === 'pending'
+                            ? `私有技能 @${skillId} 已向归属人「${ownerLabel}」提交使用申请，正在等待审批。请如实告知用户等待审批后重试。`
+                            : `私有技能 @${skillId} 尚未向当前成员开放，已在界面弹出向归属人「${ownerLabel}」申请使用的确认窗口。请告知用户在弹窗确认申请并在审批通过后继续。`
+                    };
+                }
                 return { ok: false, summary: '技能不存在或未开放', content: `没有可用技能 ${args.id}（未全员开放的技能仅超级管理员可用）。可用技能：${visible.map((s) => s.id).join('、') || '暂无'}` };
             }
             if (args.file) {

@@ -638,16 +638,17 @@ test('内置技能里有 NetCare 数据（未开放前普通用户 403，开放�
     assert.match(skill.body, /op_ioc_rectify_check_d_dws/, '专题速查保留');
     assert.doesNotMatch(skill.body, /scope=app|全局设置 › 频道对接/, '没有主线版的应用库写入和配置步骤');
 
-    // 业务数据源启用时：未 @netcare-data 的对话系统提示包含应用库 vs NetCare 二选一 ask_user 规则；显式 @netcare-data 时不再询问
+    // 业务数据源启用时：未 @netcare-data 的对话系统提示包含应用库 vs NetCare + 其他业务表三选一 ask_user 规则；显式 @netcare-data 时不再询问 NetCare
     const { runAgent } = await import('../src/agent/loop.js');
     const llm = { apiBaseUrl: `${ctx.mock.baseUrl}/v1`, apiKey: 'test-key-000', model: 'test-model' };
     const idn = { username: 'alice', displayName: 'alice', isAdmin: true, identified: true };
     ctx.mock.aiRequests.length = 0;
     ctx.mock.aiScript.push({ text: '请先选择数据源。' }, { text: '直接查 NetCare。' });
     await runAgent({ settings: llm, identity: idn, history: [{ role: 'user', content: '查一下最新异常指标' }] });
-    assert.match(ctx.mock.aiRequests.at(-1).messages[0].content, /`ask_user` 弹出二选一卡片/);
+    assert.match(ctx.mock.aiRequests.at(-1).messages[0].content, /NetCare 实时业务库（@netcare-data，在线最新汇总与明细）/);
+    assert.match(ctx.mock.aiRequests.at(-1).messages[0].content, /其他业务表（按常用顺序选择）/);
     await runAgent({ settings: llm, identity: idn, history: [{ role: 'user', content: '@netcare-data 查一下最新异常指标' }] });
-    assert.doesNotMatch(ctx.mock.aiRequests.at(-1).messages[0].content, /`ask_user` 弹出二选一卡片/);
+    assert.doesNotMatch(ctx.mock.aiRequests.at(-1).messages[0].content, /NetCare 实时业务库（@netcare-data，在线最新汇总与明细）/);
 });
 
 test('跟进任务：创建、去重、只看本人、更新、暂停恢复、到期提醒进消息中心、关闭', async () => {
@@ -1309,4 +1310,22 @@ test('基座通知双通道协议（邮件 msg_type=1 & 应用号 msg_type=2）�
     assert.match(dbgJs, /await buildDiagnosticBundle\(\);\s*exportStatusText\.textContent/);
     assert.match(dbgJs, /emailNotifyTemplate/);
     assert.match(dbgJs, /appMsgNotifyTemplate/);
+
+    // 6. 应用库目录按常用顺序优先排列，read_skill 调用未授权共享历史技能时按需发出 skill_grant_prompt
+    const { tableCatalog } = await import('../src/agent/tools.js');
+    const orderedNames = tableCatalog().map((t) => t.name);
+    assert.ok(orderedNames.indexOf('report_snapshots') < orderedNames.indexOf('uiv_categories'));
+    assert.ok(orderedNames.indexOf('sla_snapshots') < orderedNames.indexOf('uiv_categories'));
+    const readSkillTool = toolByName.get('read_skill');
+    const emittedPrompts = [];
+    const reqOut = await readSkillTool.run(
+        { id: 'smart-notify' },
+        {
+            identity: { username: 'bob', isAdmin: false, isSuper: false },
+            sharedCapabilities: { skills: [{ id: 'smart-notify', name: '智能研判与通知下发', owner: 'alice', ownerName: '平台管理员', canRequest: true }] },
+            emit: (ev) => emittedPrompts.push(ev)
+        }
+    );
+    assert.equal(reqOut.ok, false);
+    assert.ok(emittedPrompts.some((e) => e.type === 'skill_grant_prompt' && e.skill?.id === 'smart-notify'));
 });

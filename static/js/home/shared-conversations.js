@@ -466,41 +466,83 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
         } catch { /* ignore */ } finally { state.sessionFetching.delete(sessionId); }
         return null;
     }
+    async function sendSkillRequest(sessionId, skillId) {
+        const sid = sessionId || currentSession();
+        if (!sid || !skillId) return null;
+        const res = await api('POST', `/session/${encodeURIComponent(sid)}/skill-requests`, {
+            skillId,
+            linkBase: location.origin + appBase()
+        });
+        if (res?.share) state.sessionDetails.set(sid, res.share);
+        if (res?.alreadyAvailable) {
+            toast(L('该技能现已可用', 'Skill is already available'));
+            window.DragonClawSkills?.refresh?.();
+        } else if (res?.deduplicated) {
+            toast(L('已存在待审批申请，请等待归属人确认', 'Approval request is already pending'));
+        } else {
+            toast(L('已向技能归属人发送授权申请', 'Sent skill authorization request to owner'));
+        }
+        renderThreadBar();
+        return res;
+    }
+
+    async function promptSkillRequest(skillId, overrideMeta = null) {
+        const sid = currentSession();
+        if (!sid || !isShared(sid) || !skillId) return false;
+        const cleanId = String(skillId).replace(/^@/, '').trim().toLowerCase();
+        const detail = state.sessionDetails.get(sid) || await loadSessionDetails(sid);
+        const found = (detail?.missingCapabilities?.skills || []).find(item => item.id === cleanId);
+        const skill = found ? { ...overrideMeta, ...found } : overrideMeta;
+        if (!skill) return false;
+        const label = skill.name && skill.name !== skill.id ? `@${skill.id}（${skill.name}）` : `@${skill.id}`;
+        const ownerLabel = skill.ownerName || skill.owner || L('平台管理员', 'Owner');
+        if (skill.status === 'pending') {
+            toast(L(`已向 ${ownerLabel} 提交了 ${label} 的使用申请，请等待审批`, `Pending approval for ${label} from ${ownerLabel}`));
+            return false;
+        }
+        if (!skill.canRequest) {
+            toast(L(`${label} 在当前共享对话中暂不可用（${skill.reason || '权限受限'}）`, `${label} is unavailable here`));
+            return false;
+        }
+        const ok = window.AppDialog?.confirm
+            ? await window.AppDialog.confirm(
+                L(`当前共享对话需要使用私有技能 ${label}。是否向技能归属人「${ownerLabel}」发起授权申请？`, `This shared conversation uses private skill ${label}. Send an access request to ${ownerLabel}?`),
+                { title: L('申请使用私有技能', 'Request private skill access'), confirmText: L('发送申请', 'Request access'), cancelText: L('暂不申请', 'Not now') }
+            )
+            : window.confirm(L(`是否向「${ownerLabel}」申请使用 ${label}？`, `Request access to ${label} from ${ownerLabel}?`));
+        if (!ok) return false;
+        try {
+            await sendSkillRequest(sid, skill.id);
+        } catch (error) {
+            toast(error.message);
+        }
+        return false;
+    }
+
+    async function checkSkillBeforeSend(sessionId, text, { keptSkills = [] } = {}) {
+        if (!sessionId || !isShared(sessionId)) return true;
+        const detail = state.sessionDetails.get(sessionId) || await loadSessionDetails(sessionId);
+        const missing = detail?.missingCapabilities?.skills || [];
+        if (!missing.length) return true;
+        const mentioned = new Set((Array.isArray(keptSkills) ? keptSkills : []).map(id => String(id || '').replace(/^@/, '').trim().toLowerCase()).filter(Boolean));
+        for (const m of String(text || '').matchAll(/(?:^|[\s(（[【"'`])@([a-z][a-z0-9_-]{0,63})\b/gi)) {
+            mentioned.add(String(m[1]).toLowerCase());
+        }
+        const hit = missing.find(item => mentioned.has(String(item.id || '').toLowerCase()));
+        if (!hit) return true;
+        return promptSkillRequest(hit.id, hit);
+    }
+
     function renderCapabilitiesBar(thread, sessionId, detail, bar) {
         let capBar = thread.querySelector(':scope > .shc-cap-bar');
-        const skills = detail?.missingCapabilities?.skills || [];
-        const tools = detail?.missingCapabilities?.tools || [];
         const pendingForMe = detail?.pendingSkillRequests || [];
-        if (!skills.length && !tools.length && !pendingForMe.length) { capBar?.remove(); return; }
+        // 历史缺失能力仅在用户主动触发或调用对应技能时弹窗申请，平时不常驻顶栏打扰；仅归属人有待审批申请时显示审批卡
+        if (!pendingForMe.length) { capBar?.remove(); return; }
         ensureStyle();
         if (!capBar) {
             capBar = document.createElement('div');
             capBar.className = 'shc-cap-bar';
             capBar.addEventListener('click', async event => {
-                const reqBtn = event.target.closest('[data-shc-skill-request]');
-                if (reqBtn) {
-                    reqBtn.disabled = true;
-                    try {
-                        const res = await api('POST', `/session/${encodeURIComponent(currentSession())}/skill-requests`, {
-                            skillId: reqBtn.dataset.shcSkillRequest,
-                            linkBase: location.origin + appBase()
-                        });
-                        if (res?.share) state.sessionDetails.set(currentSession(), res.share);
-                        if (res?.alreadyAvailable) {
-                            toast(L('该技能现已可用', 'Skill is already available'));
-                            window.DragonClawSkills?.refresh?.();
-                        } else if (res?.deduplicated) {
-                            toast(L('已存在待审批申请，请等待归属人确认', 'Approval request is already pending'));
-                        } else {
-                            toast(L('已向技能归属人发送授权申请', 'Sent skill authorization request to owner'));
-                        }
-                        renderThreadBar();
-                    } catch (error) {
-                        toast(error.message);
-                        reqBtn.disabled = false;
-                    }
-                    return;
-                }
                 const respBtn = event.target.closest('[data-shc-skill-respond]');
                 if (respBtn) {
                     const card = respBtn.closest('[data-request-id]');
@@ -514,7 +556,7 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
             });
         }
         if (bar.nextElementSibling !== capBar) bar.after(capBar);
-        const capSig = JSON.stringify([sessionId, skills, tools, pendingForMe, en()]);
+        const capSig = JSON.stringify([sessionId, pendingForMe, en()]);
         if (capBar.dataset.sig === capSig) return;
         capBar.dataset.sig = capSig;
         const ownerCards = pendingForMe.map(req => `
@@ -523,18 +565,7 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
                 <button type="button" class="shc-btn primary sm" data-shc-skill-respond="approve">${esc(L('同意并共享', 'Approve'))}</button>
                 <button type="button" class="shc-btn ghost sm" data-shc-skill-respond="reject">${esc(L('拒绝', 'Reject'))}</button>
             </div>`).join('');
-        const skillChips = skills.map(s => {
-            const label = s.name && s.name !== s.id ? `@${s.id}（${s.name}）` : `@${s.id}`;
-            if (s.status === 'pending') {
-                return `<span class="shc-cap-item"><code>${esc(label)}</code><span class="shc-cap-note">${esc(L(`已向 ${s.ownerName || s.owner || '归属人'} 申请，等待审批`, `Pending approval from ${s.ownerName || s.owner || 'owner'}`))}</span></span>`;
-            }
-            if (s.canRequest) {
-                return `<span class="shc-cap-item"><code>${esc(label)}</code><button type="button" class="shc-btn sm" data-shc-skill-request="${esc(s.id)}">${esc(L(`向 ${s.ownerName || s.owner || '归属人'} 申请使用`, `Request from ${s.ownerName || s.owner || 'owner'}`))}</button></span>`;
-            }
-            return `<span class="shc-cap-item"><code>${esc(label)}</code><span class="shc-cap-note">${esc(s.reason || L('当前不可用', 'Unavailable'))}</span></span>`;
-        }).join('');
-        const toolChips = tools.map(t => `<span class="shc-cap-item"><code>${esc(t.name)}</code><span class="shc-cap-note">${esc(t.reason || L('权限受限', 'Restricted'))}</span></span>`).join('');
-        capBar.innerHTML = `<span class="shc-cap-title">${esc(pendingForMe.length && !skills.length && !tools.length ? L('待我审批的技能共享', 'Pending skill approvals') : L('历史能力与权限提示', 'Shared capabilities notice'))}</span>${ownerCards}${skillChips}${toolChips}`;
+        capBar.innerHTML = `<span class="shc-cap-title">${esc(L('待我审批的技能共享', 'Pending skill approvals'))}</span>${ownerCards}`;
     }
     function renderThreadBar() {
         const thread = document.getElementById('dcThread');
@@ -970,6 +1001,7 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
 
     window.HomeSharedConversations = {
         openDialog, renderInto, count, isShared, info, items: listItems, rowIcon, decorateMessage, refresh: () => Promise.all([refreshInbox(), refreshMine()]),
+        promptSkillRequest, checkSkillBeforeSend,
         // 侧栏右键「共享」只给 Dragon Claw 自己的对话：第三方 Agent、频道对话不共享
         available: () => state.available !== false,
         beforeOpen: sessionId => (isShared(sessionId) ? api('POST', `/session/${encodeURIComponent(sessionId)}/sync`).then(() => refreshMine()).catch(() => {}) : Promise.resolve()),

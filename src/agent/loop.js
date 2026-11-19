@@ -37,21 +37,28 @@ function buildSystemPrompt({ identity, language, catalog, loaded, extra, memorie
 - 改数据、发通知、删脚本这类写操作只有管理员能做，执行前系统会请用户确认；用户拒绝后不要换个方式再试。
 - 提到平台功能页面时给出 Markdown 链接，例如 [数据导入](/sla)、[报表看板](/report)、[月报页面](/monthly)、[大屏看板](/bigscreen)、[一键催办](/expedite)、[数据抓取](/uivf12)。
 - **终端与命令行规范**：当前运行在基座 Web 托管环境。根据基座安全规范，**基座严禁非超级管理员用户调用终端、执行 Shell 命令行或由对话引导其开启终端**。${identity.isSuper ? '当前用户具备超级管理员权限，在安全合规与只读运维诊断下可提供命令参考；' : '当前用户为非超级管理员，**对话中严格禁止向用户提供或推荐使用本地终端执行命令，禁止指导其打开终端**。若用户主动询问终端或要求在终端执行命令，请明确告知其基座安全规范限制（非超级管理员不开放终端），并引导其使用平台现有的 Web 功能、页面或数据工具解决需求。'}`,
-        `## 数据库
-应用库名为 app，只读，MySQL 8 语法。可查的表（表名(列…)：说明）：
+        `## 数据库与默认指标检索范围
+应用库名为 app，只读，MySQL 8 语法。核心业务表按常用顺序为（表名(列…)：说明）：
 ${schemaDigest()}
-要点：report_* 三张表通过 snapshot_id 关联，一次入库对应一个 snapshot_id；“最新一期”= report_snapshots 里 id 最大的那条。时间列若是 BIGINT 则为毫秒时间戳（FROM_UNIXTIME(x/1000)）。不要查询名字里带 json/base64 的大字段列。${hasBusinessDatasource() ? `\n另有平台授权的业务数据源「${config.businessDatasourceName}」，query_database 的 database 参数传这个名字即可查询（只读）。` : ''}`,
+要点：report_* 三张表通过 snapshot_id 关联，一次入库对应一个 snapshot_id；“最新一期”= report_snapshots 里 id 最大的那条。时间列若是 BIGINT 则为毫秒时间戳（FROM_UNIXTIME(x/1000)）。不要查询名字里带 json/base64 的大字段列。${hasBusinessDatasource() ? `\n另有平台授权的业务数据源「${config.businessDatasourceName}」，query_database 的 database 参数传这个名字即可查询（只读）。` : ''}
+- **默认检索范围与引导协议（严禁无目的扫多张表）**：
+${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@netcare-data\` 或明确提到 NetCare / 实时库 / DWS / DWD / 原始工单流水，直接用 \`netcare_*\` 查询 NetCare 业务库。
+  2) 用户已明确点名具体表（如 \`report_*\` / \`sla_snapshots\` / \`import_source_batches\`），只查对应的 1–3 张具体表，不要全库泛查。
+  3) 当用户泛泛询问业务指标、异常值、完成率或“最新导入的数据”且未指明具体位置时，先调用 \`ask_user\` 弹出三选项选择卡片（2 个最常用入口 + 1 个其他选项）：
+     ["应用库报表看板与导入指标（report_snapshots / report_metric_data / sla_snapshots）", "NetCare 实时业务库（@netcare-data，在线最新汇总与明细）", "其他业务表（按常用顺序选择）"]
+  4) 若用户点击「其他业务表（按常用顺序选择）」，立即再次调用 \`ask_user\` 按常用顺序列出已有业务表供点选（最多 6 项，不含系统配置表）：
+     ["数据导入原始快照与历史（sla_snapshots / import_source_batches / upload_history）", "报表分类得分与责任人（report_category_scores / bigscreen_owners）", "月报快照与 AI 月报（monthly_snapshots / ai_report_documents）", "指标目标与分组规则（sla_targets / sla_categories / sla_groups）", "抓取脚本与跟进任务（uiv_scripts / get_expiring_followups）", "NetCare 专题表（RFC / EOS / 证书 / 事故 / 整改，先调 netcare_tables）"]，选定后再直查对应 1–3 张表。` : `  1) 若用户已明确点名具体表${hasBusinessDatasource() ? '或使用 `@netcare-data`' : ''}，只查对应 1–3 张表，不要无目的扫库。
+  2) 当用户泛泛询问业务指标、异常值、达标情况或“最新导入的数据”且未指明具体表时，先调用 \`ask_user\` 弹出三选项选择卡片（2 个最常用入口 + 1 个其他选项）：
+     ["报表看板与达标指标快照（get_report_overview / report_snapshots / report_metric_data）", "数据导入原始快照与批次（sla_snapshots / import_source_batches / import_source_sheets）", "其他业务表（按常用顺序选择）"]
+  3) 若用户点击「其他业务表（按常用顺序选择）」，立即再次调用 \`ask_user\` 按常用顺序列出已有核心业务表供点选（最多 5 项）：
+     ["导入历史与责任人（upload_history / bigscreen_owners）", "月报快照与 AI 月报（monthly_snapshots / ai_report_documents）", "指标目标、分类与分组（sla_targets / sla_categories / sla_groups）", "数据抓取脚本（uiv_scripts / uiv_categories）", "跟进提醒与待办（get_expiring_followups）"]，选定后再直查对应表。`}`,
         `## 生成 HTML 工具
 用户要一个小工具/页面时：先在回复里用 \`\`\`html 代码块给出完整的自包含 HTML（样式脚本内联、不引外部资源），用户确认后再用 publish_html_tool 发布。`,
     ];
     if (hasBusinessDatasource()) {
-        parts.push(`## NetCare 业务数据与数据源选择
-平台给本应用授权了 NetCare 业务库（${config.businessSchema}，只读），同时本应用库（app）里也存有一键导入、报表看板入库快照等数据。
-${netcareSelected ? '- 本轮用户已显式使用 `@netcare-data`，直接查询 NetCare 业务库即可。\n' : `- **数据源歧义处理（必须遵守）**：
-  1) 用户已显式使用 \`@netcare-data\`，或明确提到 NetCare / 实时库 / 业务库 / DWS / DWD / 原始工单流水时，直接用 \`netcare_tables\` / \`netcare_describe\` / \`netcare_query\` / \`netcare_sql\` 查询 NetCare 业务库，不要再问。
-  2) 用户明确提到应用库 / 本地库 / 已导入数据 / 一键导入 / 报表看板 / 快照 / 点击入库 / 月报 / 大屏 / \`report_*\` 表时，直接用 \`get_report_overview\` / \`query_database\` / \`read_database_table\` 查询应用库（app），不要再问。
-  3) 当用户仅泛泛询问业务指标、异常值、完成率或代表处数据时（既未 \`@netcare-data\` 也未指明应用库还是 NetCare），先调用 \`ask_user\` 弹出二选一卡片让用户确认（例如：["应用库已入库数据（报表看板/导入快照，月报口径）", "NetCare 实时业务库（最新汇总/明细，支持下钻）"]），等用户选定后再查询。
-`}涉及风险、整改、工单、网络、License 等 NetCare 业务数据查询时：先用 netcare_tables 找表，再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（表名写 ${config.businessSchema}.表名）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
+        parts.push(`## NetCare 业务数据说明
+平台给本应用授权了 NetCare 业务库（${config.businessSchema}，只读）。
+涉及风险、整改、工单、网络、License 等 NetCare 业务数据查询时：先用 netcare_tables 找表，再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（表名写 ${config.businessSchema}.表名）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录
@@ -76,7 +83,7 @@ ${JSON.stringify(catalog.map((s) => ({ id: s.id, name: s.name, description: Stri
         const missingSkills = (sharedCapabilities?.skills || []).map((s) => {
             const label = s.name && s.name !== s.id ? `@${s.id}（${s.name}）` : `@${s.id}`;
             if (s.status === 'pending') return `- 历史技能 ${label} 暂未授权给当前账号（已向归属人 ${s.ownerName || s.owner || '管理员'} 提交申请，等待审批）。`;
-            if (s.canRequest) return `- 历史技能 ${label} 暂未对当前账号开放（归属人：${s.ownerName || s.owner || '管理员'}），可引导用户在共享对话顶部栏点击「向归属人申请使用」。`;
+            if (s.canRequest) return `- 历史技能 ${label} 暂未对当前账号开放（归属人：${s.ownerName || s.owner || '管理员'}）。本轮用不到时不要主动提及或提前申请；只有当用户明确要用或任务确实依赖它时，调用 \`read_skill({ id: '${s.id}' })\` 触发界面按需申请弹窗或告知用户。`;
             return `- 历史技能 ${label} 在当前环境不可用（${s.reason || '已被移除'}）。`;
         });
         const missingTools = (sharedCapabilities?.tools || []).map((t) => `- 历史工具 \`${t.name}\` 当前账号无权使用或已停用（${t.reason || '权限受限'}）。`);
@@ -84,7 +91,7 @@ ${JSON.stringify(catalog.map((s) => ({ id: s.id, name: s.name, description: Stri
         parts.push(`## 多人共享对话规则
 - 当前为多人共享对话，其他参与成员的历史发言、对应 AI 回复、附件与已发布的自定义 HTML 工具都已经在上面的对话上下文中（带有「【共享对话成员 …】」标注）。
 - 若用户询问某个成员（例如“某人干了什么 / 说了什么 / 看下对话历史”），请直接依据上面已有的对话记录与标注如实总结，不要误去查数据库或声称无法查看其他人的历史。
-- 若用户要求基于前面共享的文件或 HTML 工具继续修改优化，先用 \`read_file\` / \`query_data\` / \`view_image\` 读取附件，或用 \`read_custom_tool\` 读取已有自定义工具源码，再给出修改后的完整 \`\`\`html 代码块或调用 \`publish_html_tool\`；切勿在未做任何真实修改的情况下口头声称“已优化/已发布”。${capNotes.length ? `\n- **外部能力与权限差异**：\n${capNotes.join('\n')}\n- 若需求依赖上述未授权技能或受限工具，严禁假装已经执行或编造结果，应明确告知缺少的能力，并引导用户在共享对话顶部栏发起使用申请或联系管理员开通。` : ''}`);
+- 若用户要求基于前面共享的文件或 HTML 工具继续修改优化，先用 \`read_file\` / \`query_data\` / \`view_image\` 读取附件，或用 \`read_custom_tool\` 读取已有自定义工具源码，再给出修改后的完整 \`\`\`html 代码块或调用 \`publish_html_tool\`；切勿在未做任何真实修改的情况下口头声称“已优化/已发布”。${capNotes.length ? `\n- **外部能力与权限差异**：\n${capNotes.join('\n')}\n- 仅当当前请求实际触发或依赖上述未授权技能/受限工具时，才调用 \`read_skill\` 触发按需申请弹窗或明确说明缺失；平时无需使用则不要打扰用户或假装已执行。` : ''}`);
     }
     if (extra) parts.push(`## 管理员补充要求\n${extra}`);
     return parts.join('\n\n');
@@ -151,6 +158,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     let asked = null;
     const ctx = {
         identity,
+        sharedCapabilities,
         emit: (ev) => { events.push(ev); emit(ev); },
         ask: (q) => { asked = q; },
         pendingImages: [],

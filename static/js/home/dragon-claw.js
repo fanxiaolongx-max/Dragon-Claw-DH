@@ -2064,6 +2064,10 @@
         if (state.controller || state.restoring) return;
         if (runSlashCommand(content)) return;
         if (window.HomeAgentDiscussion?.handles(content)) return sendDesktopDiscussion(content);
+        if (state.sessionId && window.HomeSharedConversations?.isShared?.(state.sessionId)) {
+            const keptSkills = window.DragonClawSkills?.selectedIds?.() || [];
+            if (await window.HomeSharedConversations?.checkSkillBeforeSend?.(state.sessionId, content, { keptSkills }) === false) return;
+        }
         try { window.HomeDesktopModels?.validate?.(); } catch(error) { showToast(error.message);return; }
         const connector = window.HomeAgentDiscussion;
         const activeConn = connector?.getSelectedConnector?.();
@@ -2167,6 +2171,7 @@
                         rememberLastChat(event.sessionId, workspacePayload ? { agentSessionId: workspacePayload.agentSessionId, root: workspacePayload.root } : null);
                     }
                     if (event.type === 'skills_changed') { window.dispatchEvent(new CustomEvent('skills:changed', { detail: { ids: event.ids } })); return; }
+                    if (event.type === 'skill_grant_prompt' && event.skill) { window.HomeSharedConversations?.promptSkillRequest?.(event.skill.id, event.skill); return; }
                     if (event.type === 'model_round' && event.round) {
                         (reply.dcLiveRounds ||= []).push(event.round);
                         workspace()?.performance?.(reply, reply.dcLiveRounds, { running: true });
