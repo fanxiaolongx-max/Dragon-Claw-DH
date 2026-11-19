@@ -74,6 +74,10 @@ async function nameOf(user, dir) {
     return d.get(userKey(user))?.name || user;
 }
 
+export async function listKnownUsers() {
+    return [...(await directory()).values()];
+}
+
 export async function accounts(me, query = '') {
     const q = String(query || '').trim().toLowerCase().slice(0, 64);
     const list = [...(await directory()).values()].filter((u) => !same(u.username, me));
@@ -265,6 +269,24 @@ export async function respond({ user, shareId, action }) {
     }
     if (m.status === 'accepted') return { status: 'accepted', sessionId: share.sessionId };
     await saveMember({ ...m, status: action === 'decline' ? 'declined' : 'ignored', respondedAt: Date.now() });
+    if (action === 'decline') {
+        const dir = await directory().catch(() => new Map());
+        const actorName = dir.get(userKey(user))?.name || user;
+        const targets = [...new Set([share.owner, m.invitedBy].filter((u) => u && !same(u, user)))];
+        if (targets.length) {
+            await pushAlert(targets, {
+                type: 'user_action',
+                severity: 'warn',
+                title: `【Dragon Claw】${actorName} 拒绝了共享对话邀请`,
+                message: `${actorName}（${user}）已拒绝加入共享对话「${share.title}」。`,
+                source: 'shared-conversation',
+                actor: user,
+                objectType: 'shared_conversation',
+                objectId: share.id,
+                detail: { shareId: share.id, sessionId: share.sessionId, title: share.title, action: 'decline' },
+            }, { allowDuplicate: true }).catch(() => {});
+        }
+    }
     return { status: action === 'decline' ? 'declined' : 'ignored' };
 }
 
