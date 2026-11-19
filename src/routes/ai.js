@@ -36,6 +36,7 @@ import { formatTestFailure } from '../services/ai-test-diagnostics.js';
 import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
+import { sessionAccess, decorateMessages, claimTurn, releaseTurn, sharedHistory, leave as leaveShare } from '../services/share-service.js';
 import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
 
 export async function aiRoutes(fastify) {
@@ -88,6 +89,8 @@ export async function aiRoutes(fastify) {
         const session = await getSession(String(req.params.sessionId || ''));
         return session && session.owner === ownerOf(req) ? session : null;
     };
+    // 可读写对话内容的人：创建者，或共享对话里已接受邀请的成员（share-service.js）
+    const accessSession = (req) => sessionAccess(String(req.params.sessionId || ''), ownerOf(req));
     const notFound = (reply) => reply.code(404).send({ error: '会话不存在' });
 
     fastify.post('/sessions/:sessionId/archive', async (req, reply) => {
@@ -101,20 +104,25 @@ export async function aiRoutes(fastify) {
     });
 
     fastify.delete('/sessions/:sessionId', async (req, reply) => {
+        // 共享成员从自己的列表里删掉这段对话 = 退出共享；对话本身属于发起者，不删
+        const access = await accessSession(req);
+        if (access?.role === 'member') { await leaveShare({ user: ownerOf(req), sessionId: req.params.sessionId }); return { deleted: true }; }
         if (!await ownSession(req)) return notFound(reply);
         await deleteSession(req.params.sessionId);
         return { deleted: true };
     });
 
     fastify.get('/sessions/:sessionId/messages', async (req, reply) => {
-        if (!await ownSession(req)) return notFound(reply);
-        return { items: await listMessages(req.params.sessionId) };
+        const access = await accessSession(req);
+        if (!access) return notFound(reply);
+        const items = await decorateMessages(await listMessages(req.params.sessionId), { share: access.share, ownerId: access.session.owner, viewer: ownerOf(req) });
+        return { items };
     });
 
     fastify.get('/sessions/:sessionId/export', async (req, reply) => {
-        const session = await ownSession(req);
-        if (!session) return notFound(reply);
-        return { session, messages: await listMessages(req.params.sessionId) };
+        const access = await accessSession(req);
+        if (!access) return notFound(reply);
+        return { session: access.session, messages: await listMessages(req.params.sessionId) };
     });
 
     fastify.post('/chat', async (req, reply) => {
@@ -128,9 +136,23 @@ export async function aiRoutes(fastify) {
         const userText = String(lastUserMsg?.content || body.message || '').trim();
         let sessionId = body.sessionId ? String(body.sessionId) : '';
         let existingSession = null;
+        let sharedTurn = null;
         if (sessionId) {
             existingSession = await getSession(sessionId);
-            if (existingSession && existingSession.owner !== ownerId) return reply.code(404).send({ error: '会话不存在' });
+            if (existingSession && existingSession.owner !== ownerId) {
+                // 共享对话的成员也能接着提问：按本人身份执行，同一时间只让一个人提问
+                const access = await sessionAccess(sessionId, ownerId);
+                if (!access) return reply.code(404).send({ error: '会话不存在' });
+                sharedTurn = access;
+            } else if (existingSession) {
+                const access = await sessionAccess(sessionId, ownerId);
+                if (access?.share?.status === 'active') sharedTurn = access;
+            }
+            if (sharedTurn && persist) {
+                const me = req.userIdentity || resolveRequestIdentity(req);
+                try { await claimTurn(existingSession, ownerId, me.displayName); }
+                catch (busy) { return reply.code(409).send({ code: 'SHARED_TURN_BUSY', error: busy.message }); }
+            }
         }
         // 标题只取用户的话，不带附件清单
         const questionText = userText.split('📎 附件：')[0];
@@ -151,10 +173,10 @@ export async function aiRoutes(fastify) {
             sessionId = created.id;
         }
         // 之前的标题来自开场试探、用户也没改过名：这一句是正经问题就重新起标题
-        const retitle = Boolean(persist && existingSession && !probeOnly && questionText.trim()
+        const retitle = Boolean(persist && existingSession && !sharedTurn && !probeOnly && questionText.trim()
             && existingSession.metadata?.probeTitle && existingSession.metadata.probeTitle === existingSession.title);
         if (persist && sessionId && userText) {
-            await appendMessage(sessionId, 'user', userText);
+            await appendMessage(sessionId, 'user', userText, { author: ownerId });
         }
 
         const sendDone = (payload) => {
@@ -189,8 +211,9 @@ export async function aiRoutes(fastify) {
                 reply.raw.write(`${JSON.stringify({ type: 'delta', delta: fallbackReply })}\n`);
             }
             if (persist && sessionId) {
-                await appendMessage(sessionId, 'model', fallbackReply);
+                await appendMessage(sessionId, 'model', fallbackReply, { author: ownerId });
             }
+            if (sharedTurn) await releaseTurn(sessionId, ownerId).catch(() => {});
             return sendDone({
                 reply: fallbackReply,
                 sessionId,
@@ -200,9 +223,12 @@ export async function aiRoutes(fastify) {
             });
         }
 
-        const history = messages
-            .map((m) => ({ role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') }))
-            .filter((m) => m.content.trim());
+        // 共享对话：历史从库里取（别人刚发的消息页面上不一定已经接上），别人的提问标注账号
+        const history = sharedTurn
+            ? await sharedHistory(sessionId, { ownerId: sharedTurn.session.owner, viewer: ownerId })
+            : messages
+                .map((m) => ({ role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') }))
+                .filter((m) => m.content.trim());
         if (!history.length && userText) history.push({ role: 'user', content: userText });
 
         // 用户点了停止或断开连接：中止模型请求，不再继续跑工具
@@ -239,6 +265,7 @@ export async function aiRoutes(fastify) {
             const roundMetrics = Array.isArray(res.roundMetrics) ? res.roundMetrics : [];
             if (persist && sessionId && (res.text || res.events.length)) {
                 await appendMessage(sessionId, 'model', res.text, {
+                    author: ownerId,
                     modelName: usedModel.model,
                     model_name: usedModel.model,
                     input_tokens: res.usage?.inputTokens || 0,
@@ -280,6 +307,7 @@ export async function aiRoutes(fastify) {
             return reply.code(err.code >= 400 && err.code < 600 ? err.code : 502).send({ error: message });
         } finally {
             req.raw.off('close', onClose);
+            if (sharedTurn) await releaseTurn(sessionId, ownerId).catch(() => {});
         }
     });
 

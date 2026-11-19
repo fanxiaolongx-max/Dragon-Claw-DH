@@ -6,6 +6,7 @@ import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
 import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
+import { rememberUser } from '../services/share-service.js';
 
 const LOGIN_WINDOW_MS = 8 * 3600_000;
 
@@ -34,6 +35,8 @@ export async function authRoutes(fastify) {
     fastify.get('/me', async (req) => {
         const id = resolveRequestIdentity(req);
         // 登录由基座完成，这里把「同一账号 + 客户端 + IP 在 8 小时内首次进入」记为一次登录
+        // 共享对话的账号目录：记下用过本应用的人（底座没有员工通讯录）
+        rememberUser(id).catch(() => {});
         if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
         return publicIdentity(id);
     });

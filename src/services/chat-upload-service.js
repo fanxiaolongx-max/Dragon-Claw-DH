@@ -97,7 +97,7 @@ export async function saveChatUpload({ filename, mimeType = '', buffer, ownerId 
     return { id, path: `uploads/${id}/${name}`, name, size: buffer.length, readable: Boolean(text), note: extracted.note || '' };
 }
 
-/** path 形如 uploads/<id>/<文件名>；只能读自己的附件 */
+/** path 形如 uploads/<id>/<文件名>；只能读自己的附件，或出现在自己参与的共享对话历史里的附件 */
 export async function readChatUpload(filePath, ownerId, { withData = false } = {}) {
     const id = /(?:^|\/)uploads\/([a-z0-9]{8,40})(?:\/|$)/i.exec(String(filePath || ''))?.[1];
     if (!id) return null;
@@ -108,7 +108,11 @@ export async function readChatUpload(filePath, ownerId, { withData = false } = {
         memFilter: (r) => r.id === id,
     });
     const row = rows[0];
-    if (!row || row.owner_id !== ownerId) return null;
+    if (!row) return null;
+    if (row.owner_id !== ownerId) {
+        const { uploadSharedWith } = await import('./share-service.js');
+        if (!await uploadSharedWith(row.id, row.owner_id, ownerId)) return null;
+    }
     return {
         id: row.id,
         name: row.filename,

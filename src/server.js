@@ -16,6 +16,7 @@ import { healthRoutes, healthHandler } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { debugRoutes } from './routes/debug.js';
 import { aiRoutes, aiSettingsRoutes } from './routes/ai.js';
+import { sharedConversationRoutes } from './routes/shared-conversations.js';
 import { uivRoutes, uivAiAdapterRoutes, uivAutoImportRoutes } from './routes/uiv.js';
 import { slaRoutes } from './routes/sla.js';
 import { uploadRoutes } from './routes/upload.js';
@@ -420,6 +421,7 @@ export async function createServer() {
     await app.register(authRoutes, { prefix: '/api/auth' });
     await app.register(debugRoutes, { prefix: '/api/debug' });
     await app.register(aiRoutes, { prefix: '/api/ai' });
+    await app.register(sharedConversationRoutes, { prefix: '/api/shared-conversations' }); // 共享对话：成员直接进入同一段对话
     await app.register(aiSettingsRoutes, { prefix: '/api/ai-settings' });
     await app.register(uivRoutes, { prefix: '/api/uiv' });
     await app.register(uivAiAdapterRoutes, { prefix: '/api/uiv-ai-adapter' });

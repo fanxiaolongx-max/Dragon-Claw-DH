@@ -29,7 +29,8 @@ fi
 # 应用：按基座流程解压并安装（本机连不上内网源时只替换源地址，包名/版本/校验值不变）
 APP="$ROOT/live"; rm -rf "$APP"; mkdir -p "$APP"; (cd "$APP" && unzip -q "$ZIP")
 if [ "${USE_PUBLIC_REGISTRY:-1}" = 1 ]; then
-  sed -i 's#https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/#https://registry.npmjs.org/#g' "$APP/package-lock.json" "$APP/.npmrc"
+  sed -i -e 's#https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/npm-central-repo/#https://registry.npmjs.org/#g' \
+    -e 's#https\?://mirrors.tools.huawei.com/npm/#https://registry.npmjs.org/#g' "$APP/package-lock.json" "$APP/.npmrc"
 fi
 docker run --rm -v "$APP:/app" -w /app $NODE_IMG sh -c 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund 2>&1 | tail -1'
 

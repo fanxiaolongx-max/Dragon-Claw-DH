@@ -1941,8 +1941,11 @@
         }
         msg.el.innerHTML = `<header><span></span><h2>${esc(t('messages'))}</h2><button type="button" class="v2-icon-btn" data-msg-close aria-label="×"><span class="v2-ico" data-icon="close"></span></button></header>
             <div class="v2-msg-toolbar"><div class="v2-seg">${[['all', t('filterAll')], ['unread', t('filterUnread')], ['warn', t('filterWarn')]].map(([id, label]) => `<button type="button" role="tab" data-msg-filter="${id}" aria-selected="${msg.filter === id}">${esc(label)}</button>`).join('')}</div><span></span><button type="button" class="v2-account-btn" data-msg-all>${esc(t('markAllRead'))}</button><button type="button" class="v2-account-btn" data-msg-clear>${esc(t('clearAll'))}</button></div>
+            <div class="v2-msg-shares" hidden></div>
             <div class="v2-msg-list"><div class="v2-discover-empty">…</div></div>`;
         fillIcons(msg.el);
+        // 共享对话邀请：消息中心顶部（shared-conversations.js）
+        window.HomeSharedConversations?.renderInto?.(msg.el.querySelector('.v2-msg-shares'));
         msg.el.classList.add('is-open');
         document.body.classList.add('v2-messages-open');
         loadMessages(autoReadIds);
@@ -1952,6 +1955,7 @@
         document.body.classList.remove('v2-messages-open');
     }
     document.addEventListener('keydown', event => { if (event.key === 'Escape' && msg.el?.classList.contains('is-open') && !openPop) closeMessages(); });
+    window.addEventListener('tools:close-messages', () => closeMessages());
     // Dismiss before navigation handlers run: some menus keep the same home mode,
     // and conversation buttons may stop bubbling at their list container.
     document.addEventListener('click', event => {
@@ -1966,13 +1970,16 @@
     function renderPlatformStatus() {
         const status = window.ToolsPlatform?.status() || {};
         const badge = $('v2AlertCount');
-        if (badge) { badge.hidden = !status.unread; badge.textContent = status.unread > 99 ? '99+' : String(status.unread || 0); }
+        // 消息中心角标 = 未读消息 + 待处理的共享对话邀请（shared-conversations.js）
+        const total = (Number(status.unread) || 0) + (window.HomeSharedConversations?.count?.() || 0);
+        if (badge) { badge.hidden = !total; badge.textContent = total > 99 ? '99+' : String(total); }
         const version = $('v2Version');
         if (version) version.textContent = status.version || '';
         renderUser();
         if (openPop?.pop === userPop) renderUserMenu();
     }
     window.addEventListener('tools:platform-status', renderPlatformStatus);
+    window.addEventListener('tools:shared-inbox', renderPlatformStatus);
 
     window.addEventListener('tools:ops-inbox-total', event => {
         const total = Number(event.detail?.total) || 0;

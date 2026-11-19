@@ -1,10 +1,8 @@
 {
   "zh": [
-    "引导里的工具页面会先停 3 秒，再自动慢速向下滚动，到底后回到开头，高亮框和重点按钮标注跟着移动；滚动鼠标滚轮可以改为手动查看。",
-    "引导第一步可以用鼠标滚轮翻看输入框里的完整问题，发送后滚轮滚动对话区。"
+    "新增「共享对话」：在侧栏对话上右键选择「共享…」，按工号、姓名或拼音搜索同事（也可直接输入工号），可用常用群组与最近共享推荐，并复制共享链接。被邀请的人会经数字人平台收到一条应用消息，打开应用后看到邀请横幅，错过的在消息中心接受、拒绝或忽略。成员直接进入同一段对话，每条消息标注发送人，侧栏最上方有可折叠的「共享对话」分类；新的提问按提问人自己的身份和权限执行，同一时间只能一人提问。"
   ],
   "en": [
-    "Tool pages in the tour pause for 3 seconds, then slowly scroll down and return to the top, with the highlight and key-button markers following along. Use the mouse wheel to scroll them yourself.",
-    "In the first tour step you can use the mouse wheel to read the whole question in the composer, and the conversation after it is sent."
+    "New shared conversations: right-click a conversation and choose “Share…” to find colleagues by employee ID, name or pinyin (or type an ID), use saved groups and recent suggestions, and copy a share link. Invitees get an app message through the digital human platform and a banner when they open the app, or can respond later from the message center. Members work in the very same conversation with each message labelled by sender, listed in a collapsible “Shared” section at the top of the sidebar; each question runs under the asker’s own identity and permissions, one person at a time."
   ]
 }
