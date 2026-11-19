@@ -158,6 +158,20 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
             assert.equal(out.ok, true, `应放行：${sql} → ${out.content}`);
         }
 
+        // read_database_table 支持 order_by 倒序与 offset 分页，未读完时明确给出 hasMore / nextOffset
+        const readTable = TOOLS.find((t) => t.name === 'read_database_table');
+        const page1 = JSON.parse((await readTable.run({ table: 'report_metric_data', order_by: 'id DESC', limit: 1, offset: 0 }, ctx)).content);
+        assert.equal(page1.rows.length, 1);
+        assert.equal(page1.rows[0].metric_label, '按期完成率');
+        assert.equal(page1.hasMore, true);
+        assert.equal(page1.nextOffset, 1);
+        assert.match(page1.note || '', /nextOffset=1/);
+        const page2 = JSON.parse((await readTable.run({ table: 'report_metric_data', order_by: 'id DESC', limit: 1, offset: 1 }, ctx)).content);
+        assert.equal(page2.rows.length, 1);
+        assert.equal(page2.rows[0].metric_label, '整改闭环率');
+        assert.equal(page2.hasMore, false);
+        assert.equal(page2.nextOffset, null);
+
         // ── 3. 技能：未全员开放前仅超级管理员可见/可用；开放后全员可在列表和 @技能 中使用 ──
         const aliceSkills = await (await fetch(`${url}/api/agent-skills`, { headers: as('alice') })).json();
         assert.ok(aliceSkills.items.some((s) => s.id === 'data-check' && s.builtIn));

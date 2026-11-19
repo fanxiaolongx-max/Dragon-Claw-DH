@@ -193,7 +193,9 @@ export async function startMockBaseServer() {
         }
         const cnt = clean.match(/^SELECT\s+COUNT\(\*\)\s+AS\s+(\w+)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+LIMIT\s+\d+)?$/i);
         if (cnt) return [{ [cnt[1]]: getTable(cnt[2]).filter((r) => matchesWhere(r, cnt[3])).length }];
-        const m = clean.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+ORDER\s+BY\s+([\s\S]+?))?$/i);
+        const limOff = clean.match(/\s+LIMIT\s+(\d+)(?:\s+OFFSET\s+(\d+))?\s*$/i);
+        const sqlNoLimit = clean.replace(/\s+LIMIT\s+\d+(?:\s+OFFSET\s+\d+)?\s*$/i, '');
+        const m = sqlNoLimit.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+`?([a-zA-Z0-9_]+)`?(?:\s+WHERE\s+([\s\S]+?))?(?:\s+ORDER\s+BY\s+([\s\S]+?))?$/i);
         if (!m) return [];
         const [, _cols, tbl, whereStr] = m;
         if (_cols.trim() !== '*' && SCHEMA_COLS.has(tbl)) {
@@ -210,8 +212,10 @@ export async function startMockBaseServer() {
             }
         }
         let rows = getTable(tbl).filter((r) => matchesWhere(r, whereStr));
-        if (/ORDER\s+BY\s+.*DESC/i.test(clean)) rows = [...rows].reverse();
-        return rows.slice(0, limit);
+        if (/ORDER\s+BY\s+.*DESC/i.test(sqlNoLimit)) rows = [...rows].reverse();
+        const off = limOff?.[2] ? Number(limOff[2]) : 0;
+        const lim = limOff?.[1] ? Math.min(Number(limOff[1]), limit) : limit;
+        return rows.slice(off, off + lim);
     }
 
     const server = http.createServer(async (req, res) => {

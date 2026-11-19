@@ -20,7 +20,7 @@ const MAX_ROUNDS = 16;
 const MAX_TOOL_RESULT = 30_000;
 const MAX_HISTORY_MSG = 8_000;
 
-function buildSystemPrompt({ identity, language, catalog, loaded, extra, memories, summary, followups = '', isShared = false, availableFiles = [], sharedCapabilities = null }) {
+function buildSystemPrompt({ identity, language, catalog, loaded, extra, memories, summary, followups = '', isShared = false, availableFiles = [], sharedCapabilities = null, netcareSelected = false }) {
     const en = String(language || '').startsWith('en');
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -45,8 +45,13 @@ ${schemaDigest()}
 用户要一个小工具/页面时：先在回复里用 \`\`\`html 代码块给出完整的自包含 HTML（样式脚本内联、不引外部资源），用户确认后再用 publish_html_tool 发布。`,
     ];
     if (hasBusinessDatasource()) {
-        parts.push(`## NetCare 业务数据
-平台给本应用授权了 NetCare 业务库（${config.businessSchema}，只读）。涉及风险、整改、工单、网络、License 等 NetCare 业务数据的问题：先用 netcare_tables 找表，再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（表名写 ${config.businessSchema}.表名）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
+        parts.push(`## NetCare 业务数据与数据源选择
+平台给本应用授权了 NetCare 业务库（${config.businessSchema}，只读），同时本应用库（app）里也存有一键导入、报表看板入库快照等数据。
+${netcareSelected ? '- 本轮用户已显式使用 `@netcare-data`，直接查询 NetCare 业务库即可。\n' : `- **数据源歧义处理（必须遵守）**：
+  1) 用户已显式使用 \`@netcare-data\`，或明确提到 NetCare / 实时库 / 业务库 / DWS / DWD / 原始工单流水时，直接用 \`netcare_tables\` / \`netcare_describe\` / \`netcare_query\` / \`netcare_sql\` 查询 NetCare 业务库，不要再问。
+  2) 用户明确提到应用库 / 本地库 / 已导入数据 / 一键导入 / 报表看板 / 快照 / 点击入库 / 月报 / 大屏 / \`report_*\` 表时，直接用 \`get_report_overview\` / \`query_database\` / \`read_database_table\` 查询应用库（app），不要再问。
+  3) 当用户仅泛泛询问业务指标、异常值、完成率或代表处数据时（既未 \`@netcare-data\` 也未指明应用库还是 NetCare），先调用 \`ask_user\` 弹出二选一卡片让用户确认（例如：["应用库已入库数据（报表看板/导入快照，月报口径）", "NetCare 实时业务库（最新汇总/明细，支持下钻）"]），等用户选定后再查询。
+`}涉及风险、整改、工单、网络、License 等 NetCare 业务数据查询时：先用 netcare_tables 找表，再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（表名写 ${config.businessSchema}.表名）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录
@@ -121,7 +126,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     const followups = identity.identified && allowedFollowups(await enabledTools().catch(() => [])) ? await followupPrompt(identity.username).catch(() => '') : '';
     const demoNote = readOnlyDemo ? '本轮是新手引导的只读演示。基于已入库的报表和催办快照给出简明结果，只准备催办草稿，不创建或发送消息。' : '';
     const availableFiles = [...new Set(history.flatMap((m) => [...String(m?.content || '').matchAll(/uploads\/[a-z0-9]{8,40}\/[^)>\s\]]+/gi)].map((x) => x[0])))].slice(0, 24);
-    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, followups, isShared: Boolean(isShared), sharedCapabilities, availableFiles, extra: [String(settings.systemPrompt || '').trim(), demoNote].filter(Boolean).join('\n\n') });
+    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, followups, isShared: Boolean(isShared), sharedCapabilities, availableFiles, netcareSelected: loaded.some((s) => s.id === 'netcare-data'), extra: [String(settings.systemPrompt || '').trim(), demoNote].filter(Boolean).join('\n\n') });
     const messages = history.map((m, i) => ({
         role: m.role === 'assistant' ? 'assistant' : 'user',
         content: i === history.length - 1 ? String(m.content || '') : clip(String(m.content || ''), MAX_HISTORY_MSG),

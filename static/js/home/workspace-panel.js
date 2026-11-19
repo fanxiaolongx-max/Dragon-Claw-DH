@@ -1049,7 +1049,7 @@
         if (tool === 'send_notification') return Array.isArray(args.to) ? args.to.join(', ') : '';
         if (/^(insert|update|delete)_database_rows?$/.test(tool)) return `${args.table || ''}${args.where ? ` · ${args.where}` : ''}`;
         if (tool === 'read_skill') return args.id ? `@${String(args.id).replace(/^@/, '')}` : '';
-        if (tool === 'database_schema' || tool === 'read_database_table') return `${args.database || ''}${args.table ? ` / ${args.table}` : ''}`;
+        if (tool === 'database_schema' || tool === 'read_database_table') return `${args.database || 'app'}（应用业务库）${args.table ? ` / ${args.table}` : ''}`;
         return args.path || '';
     }
 
@@ -1428,7 +1428,21 @@
             row.classList.add(event.ok ? 'is-ok' : 'is-fail');
             if (!replaying && event.ok && row.dataset.tool?.startsWith('browser_'))
                 window.dispatchEvent(new CustomEvent('dragon-claw:browser-update', { detail: { tool: row.dataset.tool } }));
-            row.querySelector('.dc-tool-state').innerHTML = `${event.ok ? '✓' : '✗'} <span>${escapeHtml(event.summary || '')}</span>${event.durationMs > 1500 ? ` <small>${(event.durationMs / 1000).toFixed(1)}s</small>` : ''}`;
+            let displaySummary = event.summary || '';
+            if (event.ok && /^(?:database_schema|read_database_table)$/.test(row.dataset.tool || '')) {
+                const sepIdx = displaySummary.lastIndexOf(' · ');
+                if (sepIdx > 0) {
+                    const richTarget = displaySummary.slice(0, sepIdx).trim();
+                    const rightMetric = displaySummary.slice(sepIdx + 3).trim();
+                    const argsEl = row.querySelector('.dc-tool-args');
+                    if (argsEl && richTarget) {
+                        argsEl.textContent = richTarget;
+                        argsEl.title = richTarget;
+                    }
+                    if (rightMetric) displaySummary = rightMetric;
+                }
+            }
+            row.querySelector('.dc-tool-state').innerHTML = `${event.ok ? '✓' : '✗'} <span>${escapeHtml(displaySummary)}</span>${event.durationMs > 1500 ? ` <small>${(event.durationMs / 1000).toFixed(1)}s</small>` : ''}`;
             // 命令输出：折叠在工具行下方，需要时展开查看
             if (event.output) row.insertAdjacentHTML('afterend', `<details class="dc-tool-output"><summary>${escapeHtml(tx('toolOutput'))}</summary><pre>${escapeHtml(event.output)}</pre></details>`);
             // 网页截图、看过的图片：工具行下方显示缩略图，点击放大（与对话里的图片同一套预览）

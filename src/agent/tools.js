@@ -155,7 +155,7 @@ function shapeRows(rows, maxRows = 200, maxChars = 24_000) {
 }
 
 // explorer：来自数据探索页（仅管理员），应用库放开到实查出来的全部表（敏感表除外），结果也不为模型上下文截短
-export async function runSelect({ database, sql, limit, explorer = false }) {
+export async function runSelect({ database, sql, limit, offset, explorer = false }) {
     const isApp = !database || database === APP_DB || database === config.appSchema;
     if (!isApp && !hasBusinessDatasource()) return { ok: false, summary: '数据库不存在', content: `没有名为 ${database} 的数据库。可用：${APP_DB}` };
     const guarded = explorer && isApp
@@ -163,16 +163,33 @@ export async function runSelect({ database, sql, limit, explorer = false }) {
         : guardSelect(sql, { appDb: isApp });
     if (guarded.error) return { ok: false, summary: guarded.error.slice(0, 60), content: guarded.error };
     const cap = Math.max(1, Math.min(Number(limit) || 100, 500));
-    const finalSql = /\bLIMIT\s+\d+(\s*,\s*\d+|\s+OFFSET\s+\d+)?\s*$/i.test(guarded.sql) ? guarded.sql : `${guarded.sql} LIMIT ${cap}`;
+    const safeOffset = Math.max(0, Math.floor(Number(offset)) || 0);
+    const hasExplicitLimit = /\bLIMIT\s+\d+(\s*,\s*\d+|\s+OFFSET\s+\d+)?\s*$/i.test(guarded.sql);
+    const probeCap = (!explorer && !hasExplicitLimit) ? cap + 1 : cap;
+    const finalSql = hasExplicitLimit
+        ? guarded.sql
+        : `${guarded.sql} LIMIT ${probeCap}${safeOffset > 0 ? ` OFFSET ${safeOffset}` : ''}`;
     try {
-        const rows = isApp ? await scopedQuery(finalSql, cap) : await businessQuery(finalSql, cap);
-        const shaped = explorer ? shapeRows(rows, 500, 600_000) : shapeRows(rows);
-        const note = shaped.truncated ? `（共 ${shaped.total} 行，只返回前 ${shaped.rows.length} 行；需要更多请加条件或聚合）` : '';
+        const rawRows = isApp ? await scopedQuery(finalSql, probeCap) : await businessQuery(finalSql, probeCap);
+        const hasMoreRows = !explorer && !hasExplicitLimit && rawRows.length > cap;
+        const pageRows = hasMoreRows ? rawRows.slice(0, cap) : rawRows;
+        const shaped = explorer ? shapeRows(pageRows, 500, 600_000) : shapeRows(pageRows);
+        const hasMore = shaped.truncated || hasMoreRows;
+        const nextOffset = (!explorer && hasMore) ? safeOffset + shaped.rows.length : null;
+        const note = !explorer && hasMore
+            ? `（当前仅返回第 ${safeOffset + 1}–${safeOffset + shaped.rows.length} 行，还有更多数据，nextOffset=${nextOffset}；未翻页读完前严禁下“仅此一条/已查全表”结论，查最新请加 ORDER BY id DESC，统计请用聚合或 get_report_overview）`
+            : '';
         return {
             ok: true,
-            summary: `${shaped.total} 行`,
-            content: JSON.stringify({ rowCount: shaped.total, rows: shaped.rows, note: note || undefined, memoryMode: isMemoryMode() ? '当前是本机内存演示模式，SQL 不会真正执行' : undefined }),
-            output: `${finalSql}\n\n→ ${shaped.total} 行${note}`,
+            summary: `${shaped.rows.length} 行${hasMore ? '（未完）' : ''}`,
+            content: JSON.stringify({
+                rowCount: shaped.rows.length,
+                rows: shaped.rows,
+                ...(explorer ? {} : { offset: safeOffset, nextOffset, hasMore }),
+                note: note || undefined,
+                memoryMode: isMemoryMode() ? '当前是本机内存演示模式，SQL 不会真正执行' : undefined,
+            }),
+            output: `${finalSql}\n\n→ ${shaped.rows.length} 行${note}`,
         };
     } catch (error) {
         return { ok: false, summary: '查询失败', content: `查询失败：${error.message}。请检查表名、列名和语法（MySQL 8）后重试。`, output: `${finalSql}\n\n✗ ${error.message}` };
@@ -262,10 +279,11 @@ export const TOOLS = [
         async run(args) {
             const table = String(args.table || '').replace(/`/g, '').toLowerCase();
             if (!table) {
-                return { ok: true, summary: `${ALLOWED.size} 张表`, content: JSON.stringify([...ALLOWED].map((t) => ({ table: t, columns: SCHEMA.get(t).map((c) => c.name), note: TABLE_NOTES[t] }))) };
+                return { ok: true, summary: `${args.database || APP_DB}（应用业务库） · ${ALLOWED.size} 张表`, content: JSON.stringify([...ALLOWED].map((t) => ({ table: t, columns: SCHEMA.get(t).map((c) => c.name), note: TABLE_NOTES[t] }))) };
             }
             if (!ALLOWED.has(table)) return { ok: false, summary: '表不可查', content: `表 ${table} 不在可查询范围内。可查的表：${[...ALLOWED].join('、')}` };
-            return { ok: true, summary: `${SCHEMA.get(table).length} 列`, content: JSON.stringify({ table, note: TABLE_NOTES[table], columns: SCHEMA.get(table) }) };
+            const purpose = String(TABLE_NOTES[table] || '').split(/[：；。\n]/)[0].trim().slice(0, 24);
+            return { ok: true, summary: `${args.database || APP_DB}（应用业务库） / ${table}${purpose ? `（${purpose}）` : ''} · ${SCHEMA.get(table).length} 列`, content: JSON.stringify({ table, note: TABLE_NOTES[table], columns: SCHEMA.get(table) }) };
         },
     },
     {
@@ -284,7 +302,7 @@ export const TOOLS = [
     },
     {
         name: 'read_database_table',
-        description: '按条件读取某张表的若干行（不想写 SQL 时用）。',
+        description: '按条件分页读取某张表的若干行（不想写 SQL 时用）。默认从头读取，查最新记录务必传 order_by（如 "id DESC"）；只要返回 nextOffset 不为 null 就必须继续翻页，禁止仅凭第一页下全表结论。',
         parameters: {
             type: 'object',
             properties: {
@@ -292,8 +310,9 @@ export const TOOLS = [
                 table: { type: 'string', description: '表名' },
                 columns: { type: 'array', items: { type: 'string' }, description: '要取的列，默认取全部非大字段列' },
                 where: { type: 'string', description: 'WHERE 条件（不含 WHERE 关键字），可选' },
-                order_by: { type: 'string', description: '排序，如 id DESC，可选' },
-                limit: { type: 'integer', description: '默认 50' },
+                order_by: { type: 'string', description: '排序，如 id DESC（查最新记录务必指定），可选' },
+                limit: { type: 'integer', description: '默认 50，上限 500' },
+                offset: { type: 'integer', description: '从第几行开始（翻页），默认 0' },
             },
             required: ['table'],
         },
@@ -305,7 +324,12 @@ export const TOOLS = [
             if (wanted && wanted.some((c) => !/^\w+$/.test(c))) return { ok: false, summary: '列名不合法', content: '列名只能是字母、数字、下划线' };
             const cols = wanted ? wanted.map((c) => `\`${c}\``).join(', ') : '*';
             const sql = `SELECT ${cols} FROM \`${table}\`${args.where ? ` WHERE ${args.where}` : ''}${args.order_by ? ` ORDER BY ${args.order_by}` : ''}`;
-            return runSelect({ database: args.database, sql, limit: args.limit || 50 });
+            const res = await runSelect({ database: args.database, sql, limit: args.limit || 50, offset: args.offset });
+            if (res.ok) {
+                const purpose = String(TABLE_NOTES[table] || '').split(/[：；。\n]/)[0].trim().slice(0, 24);
+                res.summary = `${args.database || APP_DB}（应用业务库） / ${table}${purpose ? `（${purpose}）` : ''} · ${res.summary}`;
+            }
+            return res;
         },
     },
     {
