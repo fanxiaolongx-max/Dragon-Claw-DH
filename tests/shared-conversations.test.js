@@ -241,6 +241,27 @@ icon: 🔍
         assert.equal(carolSkillsPublic[0].sharedAccess, true);
         assert.ok(!carolSkillsPublic[0].sharedViaConversation);
         assert.ok((await call('d00000004', 'GET', '/api/ai/skills')).data.items.some((s) => s.id === 'bob-priv-skill'));
+
+        // 对方拒绝共享对话邀请时，发起共享者可在消息中心收到通知
+        const inviteDecline = await call('a00000001', 'POST', `/api/shared-conversations/session/${capSessionId}/invite`, { title: '私有技能协作', usernames: ['d00000004'] });
+        assert.equal(inviteDecline.status, 200);
+        const declined = await call('d00000004', 'POST', `/api/shared-conversations/invites/${inviteDecline.data.share.id}/respond`, { action: 'decline' });
+        assert.equal(declined.status, 200);
+        assert.equal(declined.data.status, 'declined');
+        const aliceDeclineAlerts = await call('a00000001', 'GET', '/api/alert-center/events');
+        assert.ok(aliceDeclineAlerts.data.events.some((e) => e.object_id === inviteDecline.data.share.id && /拒绝了共享对话邀请/.test(e.title)));
+
+        // 非发起者删除共享对话 = 退出共享，不影响发起者；发起者删除原对话 = 关闭共享并从双方列表移除
+        const carolDel = await call('c00000003', 'DELETE', `/api/ai/sessions/${capSessionId}`);
+        assert.equal(carolDel.status, 200);
+        assert.equal((await call('c00000003', 'GET', '/api/shared-conversations/mine')).data.items.some((i) => i.sessionId === capSessionId), false);
+        assert.equal((await call('a00000001', 'GET', `/api/ai/sessions/${capSessionId}/messages`)).status, 200);
+        const invRe = await call('a00000001', 'POST', `/api/shared-conversations/session/${capSessionId}/invite`, { title: '私有技能协作', usernames: ['c00000003'] });
+        assert.equal(invRe.status, 200);
+        await call('c00000003', 'POST', `/api/shared-conversations/invites/${invRe.data.share.id}/respond`, { action: 'accept' });
+        const ownerDel = await call('a00000001', 'DELETE', `/api/ai/sessions/${capSessionId}`);
+        assert.equal(ownerDel.status, 200);
+        assert.equal((await call('c00000003', 'GET', '/api/shared-conversations/mine')).data.items.some((i) => i.sessionId === capSessionId), false);
     } finally {
         await app.close();
         await mock.close?.();

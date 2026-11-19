@@ -105,9 +105,11 @@ export async function aiRoutes(fastify) {
 
     fastify.delete('/sessions/:sessionId', async (req, reply) => {
         // 共享成员从自己的列表里删掉这段对话 = 退出共享；对话本身属于发起者，不删
+        // 发起者删除原对话时同时关闭共享，便于其他打开页签的成员即时收到已停止通知
         const access = await accessSession(req);
         if (access?.role === 'member') { await leaveShare({ user: ownerOf(req), sessionId: req.params.sessionId }); return { deleted: true }; }
         if (!await ownSession(req)) return notFound(reply);
+        if (access?.role === 'owner') await leaveShare({ user: ownerOf(req), sessionId: req.params.sessionId }).catch(() => {});
         await deleteSession(req.params.sessionId);
         return { deleted: true };
     });

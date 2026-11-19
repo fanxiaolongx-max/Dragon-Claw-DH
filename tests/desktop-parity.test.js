@@ -1328,4 +1328,10 @@ test('基座通知双通道协议（邮件 msg_type=1 & 应用号 msg_type=2）�
     );
     assert.equal(reqOut.ok, false);
     assert.ok(emittedPrompts.some((e) => e.type === 'skill_grant_prompt' && e.skill?.id === 'smart-notify'));
+
+    // 7. 前端侧栏删除共享对话时同步清理「共享对话」状态缓存
+    const shcFeJs = fs.readFileSync(path.join(rootDir, 'static/js/home/shared-conversations.js'), 'utf8');
+    const dcFeJs = fs.readFileSync(path.join(rootDir, 'static/js/home/dragon-claw.js'), 'utf8');
+    assert.match(shcFeJs, /function onSessionDeleted\(sessionId\)/);
+    assert.match(dcFeJs, /HomeSharedConversations\?\.onSessionDeleted\?\.\(item\.id\)/);
 });
