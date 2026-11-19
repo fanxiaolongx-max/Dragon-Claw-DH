@@ -35,8 +35,9 @@ export async function authRoutes(fastify) {
     fastify.get('/me', async (req) => {
         const id = resolveRequestIdentity(req);
         // 登录由基座完成，这里把「同一账号 + 客户端 + IP 在 8 小时内首次进入」记为一次登录
-        // 共享对话的账号目录：记下用过本应用的人（底座没有员工通讯录）
-        rememberUser(id).catch(() => {});
+        // 共享对话的账号目录：记下用过本应用的人（底座没有员工通讯录）；每人每小时最多写一次库，这里等它写完，
+        // 刚进来的人马上就能被搜到
+        await rememberUser(id).catch(() => {});
         if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
         return publicIdentity(id);
     });
