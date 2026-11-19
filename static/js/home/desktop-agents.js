@@ -787,6 +787,7 @@
         window.addEventListener('home:conversation-list-changed',()=>render());
         window.addEventListener('tools:languagechange', () => { render(); if (state.active)
             refreshMessages(state.viewEpoch, state.active, true); });
+        window.addEventListener('tools:authchange', reset);
         window.addEventListener('storage', e => { if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(e.key))
             reset(); });
         // 侧栏转圈：不打开「桌面 Agent」分类也每 10 秒读一次会话列表的 busy；只有状态变了才通知（列表本身变了才整表重绘）

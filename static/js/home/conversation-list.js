@@ -285,6 +285,7 @@
     document.addEventListener('pointerdown',event=>{if(menu&&!menu.contains(event.target)&&!event.target.closest('[data-conversation-more]'))close();},true);
     window.addEventListener('scroll',()=>close(),true);
     window.addEventListener('resize',()=>close());window.addEventListener('blur',()=>close());
+    window.addEventListener('tools:authchange',load);
     window.addEventListener('storage',event=>{if(['tools_user','tools_tenant_id','tools_token'].includes(event.key))load();});
     window.addEventListener('tools:languagechange',()=>{close();signal('*');});
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',load,{once:true});else load();

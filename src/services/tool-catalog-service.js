@@ -13,7 +13,7 @@ const GROUPS = [
     { id: 'netcare', label: 'NetCare 数据探查', labelEn: 'NetCare data', note: '只读查询平台授权的业务数据源', kindLabel: '只读',
         tools: ['netcare_tables', 'netcare_describe', 'netcare_query', 'netcare_sql'] },
     { id: 'platform', label: '平台能力', labelEn: 'Platform', note: '技能、自定义工具、抓取脚本', kindLabel: '平台',
-        tools: ['find_platform_tools', 'read_tool_guide', 'read_skill', 'save_skill', 'publish_html_tool', 'list_uiv_scripts', 'read_uiv_script', 'save_uiv_script'] },
+        tools: ['find_platform_tools', 'read_tool_guide', 'read_skill', 'save_skill', 'publish_html_tool', 'read_custom_tool', 'list_uiv_scripts', 'read_uiv_script', 'save_uiv_script'] },
     { id: 'write', label: '写入与通知', labelEn: 'Writes & notifications', note: '仅管理员可用，每次执行前都要在对话里确认', kindLabel: '需确认',
         tools: ['insert_database_row', 'update_database_rows', 'delete_database_rows', 'send_notification', 'move_uiv_script', 'delete_uiv_script'] },
     { id: 'assist', label: '对话辅助', labelEn: 'Conversation helpers', note: '任务清单、提问、记忆', kindLabel: '辅助',

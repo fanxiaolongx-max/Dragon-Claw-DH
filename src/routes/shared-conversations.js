@@ -5,11 +5,12 @@ import { BusinessError } from '../core/errors.js';
 import * as share from '../services/share-service.js';
 
 export async function sharedConversationRoutes(fastify) {
-    const me = (req) => {
+    const resolveMe = (req) => {
         const id = resolveRequestIdentity(req);
         if (!id.identified && !id.isAdmin) throw new BusinessError('未识别到工号，请从数字人平台进入后再使用共享对话', 401);
-        return id.username;
+        return id;
     };
+    const me = (req) => resolveMe(req).username;
     fastify.addHook('onSend', async (_req, reply, payload) => { reply.header('Cache-Control', 'no-store'); return payload; });
 
     fastify.get('/accounts', async (req) => ({ items: await share.accounts(me(req), req.query?.q) }));
@@ -19,12 +20,39 @@ export async function sharedConversationRoutes(fastify) {
     fastify.put('/groups/:id', async (req) => ({ item: await share.saveGroup(me(req), { ...(req.body || {}), id: req.params.id }) }));
     fastify.delete('/groups/:id', async (req) => { await share.deleteGroup(me(req), req.params.id); return { ok: true }; });
 
-    fastify.get('/inbox', async (req) => ({ items: await share.inbox(me(req)) }));
+    fastify.get('/inbox', async (req) => {
+        const id = resolveMe(req);
+        return {
+            items: await share.inbox(id.username),
+            skillRequests: await share.inboxSkillRequests(id),
+        };
+    });
     fastify.post('/invites/:shareId/respond', async (req) => share.respond({ user: me(req), shareId: req.params.shareId, action: String(req.body?.action || '') }));
     fastify.post('/link/:token', async (req) => share.joinByLink({ user: me(req), token: req.params.token }));
 
     fastify.get('/mine', async (req) => ({ items: await share.listMine(me(req)) }));
-    fastify.get('/session/:sessionId', async (req) => ({ share: await share.shareForSession({ user: me(req), sessionId: req.params.sessionId }) }));
+    fastify.get('/session/:sessionId', async (req) => {
+        const id = resolveMe(req);
+        return { share: await share.shareForSession({ user: id.username, sessionId: req.params.sessionId, identity: id }) };
+    });
+    fastify.post('/session/:sessionId/skill-requests', async (req) => {
+        const id = resolveMe(req);
+        return share.requestSkillShare({
+            identity: id,
+            sessionId: req.params.sessionId,
+            skillId: req.body?.skillId,
+            linkBase: req.body?.linkBase,
+        });
+    });
+    fastify.post('/skill-requests/:requestId/respond', async (req) => {
+        const id = resolveMe(req);
+        return share.respondSkillRequest({
+            identity: id,
+            requestId: req.params.requestId,
+            action: String(req.body?.action || ''),
+            note: String(req.body?.note || ''),
+        });
+    });
     fastify.post('/session/:sessionId/prepare', async (req) => {
         const user = me(req);
         await share.ensureShare({ user, sessionId: req.params.sessionId, title: req.body?.title });

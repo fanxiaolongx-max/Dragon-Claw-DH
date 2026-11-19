@@ -6,7 +6,7 @@ import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
 import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, listAppTables, listBusinessTables, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
 import { listSkills, getSkill, saveSkill, skillFilesNote, readSkillFile } from '../services/skill-service.js';
-import { saveCustomTool, listCustomTools } from '../services/custom-tool-service.js';
+import { saveCustomTool, listCustomTools, getCustomTool } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
 import { changeMemory } from '../services/memory-service.js';
 import { listScripts, saveScripts, listCategories, deleteScript, moveScriptCategory, uivScriptOrigin } from '../services/uiv-service.js';
@@ -435,7 +435,7 @@ export const TOOLS = [
         parameters: { type: 'object', properties: { path: { type: 'string', description: '附件路径' }, offset: { type: 'integer', description: '从第几个字符开始，默认 0' }, limit: { type: 'integer', description: '最多读多少字符，默认 20000' } }, required: ['path'] },
         async run(args, ctx) {
             const file = await readChatUpload(String(args.path || ''), ctx.identity.username);
-            if (!file) return { ok: false, summary: '文件不存在', content: '找不到这个附件（只能读取当前用户在对话里上传的文件）。' };
+            if (!file) return { ok: false, summary: '文件不存在', content: '找不到这个附件（仅可读取本人上传或当前共享对话中的附件）。' };
             const offset = Math.max(0, Number(args.offset) || 0);
             const limit = Math.max(1000, Math.min(Number(args.limit) || 20_000, 40_000));
             const slice = file.text.slice(offset, offset + limit);
@@ -445,6 +445,20 @@ export const TOOLS = [
                 summary: `${file.name} · ${file.text.length} 字符`,
                 content: `文件：${file.name}（${file.size} 字节，提取文本 ${file.text.length} 字符，本次 ${offset}–${offset + slice.length}）\n\n${slice || '（没有可读的文字内容）'}${more ? `\n\n…后面还有 ${file.text.length - offset - limit} 字符，用 offset=${offset + limit} 继续读` : ''}`,
             };
+        },
+    },
+    {
+        name: 'read_custom_tool',
+        description: '读取已发布的自定义 HTML 工具的源码与元数据（基于用户已有权访问的 /custom-tools/<slug>/ 工具，含共享对话中别人分享的私有 HTML 工具），便于继续修改优化后重新给出 ```html 或用 publish_html_tool 发布。',
+        parameters: { type: 'object', properties: { slug: { type: 'string', description: '工具标识（链接 /custom-tools/<slug>/ 中的 slug）' } }, required: ['slug'] },
+        async run(args, ctx) {
+            const slug = String(args.slug || '').trim().replace(/^\/?custom-tools\//i, '').replace(/\/.*$/, '');
+            const tool = slug ? await getCustomTool(slug, ctx.identity) : null;
+            if (!tool) return { ok: false, summary: '工具不存在或无权读取', content: `没有找到可访问的自定义工具「${args.slug || ''}」。` };
+            if (tool.builtIn || !tool.html) return { ok: true, summary: tool.name, content: JSON.stringify({ slug: tool.slug, name: tool.name, builtIn: Boolean(tool.builtIn), note: '内置工具由系统前端托管，无需读取源码' }) };
+            const maxChars = 40_000;
+            const html = tool.html.length > maxChars ? `${tool.html.slice(0, maxChars)}\n<!-- …已截断，总长 ${tool.html.length} 字符 -->` : tool.html;
+            return { ok: true, summary: `${tool.name} (${tool.slug})`, content: `# 自定义工具：${tool.name}（slug=${tool.slug}，${tool.html.length} 字符）\n\`\`\`html\n${html}\n\`\`\`` };
         },
     },
     {
@@ -604,7 +618,7 @@ export const TOOLS = [
         parameters: { type: 'object', properties: { path: { type: 'string', description: '附件路径' }, question: { type: 'string', description: '想从图里了解什么（可选）' } }, required: ['path'] },
         async run(args, ctx) {
             const file = await readChatUpload(String(args.path || ''), ctx.identity.username, { withData: true });
-            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（只能读取当前用户在对话里上传的文件）。' };
+            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（仅可读取本人上传或当前共享对话中的附件）。' };
             const mimeType = imageMime(file.name, file.mimeType);
             if (!mimeType) return { ok: false, summary: '不是图片', content: `${file.name} 不是 png / jpg / webp / gif 图片，请用 read_file 或 query_data 读取。` };
             if (file.buffer.length > MAX_IMAGE_BYTES) return { ok: false, summary: '图片太大', content: `图片 ${Math.round(file.buffer.length / 1024)}KB，超过 ${MAX_IMAGE_BYTES / 1024 / 1024}MB，请让用户截一张小一点的图。` };
@@ -633,7 +647,7 @@ export const TOOLS = [
         },
         async run(args, ctx) {
             const file = await readChatUpload(String(args.path || ''), ctx.identity.username, { withData: true });
-            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（只能读取当前用户在对话里上传的文件）。' };
+            if (!file || !file.buffer) return { ok: false, summary: '文件不存在', content: '找不到这个附件（仅可读取本人上传或当前共享对话中的附件）。' };
             try {
                 const sheets = await loadTables(file);
                 const out = runQuery(sheets, args);

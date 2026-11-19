@@ -5,6 +5,7 @@
 import { BusinessError } from '../core/errors.js';
 import { isSameUserId } from '../core/access.js';
 import { kvGet, kvSet, selectTable, updateRows, sqlVal } from '../dao/scoped.js';
+import { grantedSkillIdsForUser } from './share-service.js';
 
 const KEY = 'distribution_shared';
 const KINDS = new Set(['skill', 'cap', 'tool', 'page']);
@@ -195,14 +196,23 @@ export async function canAccessSkill(skillOrId, identity, keys = null) {
     if (!id) return false;
     const set = keys || (await sharedKeys());
     if (set.has(`skill:${id}`)) return true;
-    return isOwnSkill(skillOrId, identity);
+    if (isOwnSkill(skillOrId, identity)) return true;
+    const granted = await grantedSkillIdsForUser(identity).catch(() => new Set());
+    return granted.has(id);
 }
 
 export async function filterSkillsForUser(items, identity) {
-    const keys = await sharedKeys();
-    const marked = items.map((item) => ({ ...item, sharedAccess: keys.has(`skill:${item.id}`) }));
+    const [keys, granted] = await Promise.all([
+        sharedKeys(),
+        isSuperUser(identity) ? Promise.resolve(new Set()) : grantedSkillIdsForUser(identity).catch(() => new Set()),
+    ]);
+    const marked = items.map((item) => {
+        const sharedAccess = keys.has(`skill:${item.id}`);
+        const sharedViaConversation = !sharedAccess && granted.has(String(item.id || '').toLowerCase());
+        return { ...item, sharedAccess, ...(sharedViaConversation ? { sharedViaConversation: true } : {}) };
+    });
     if (isSuperUser(identity)) return marked;
-    return marked.filter((item) => item.sharedAccess || isOwnSkill(item, identity));
+    return marked.filter((item) => item.sharedAccess || item.sharedViaConversation || isOwnSkill(item, identity));
 }
 
 export async function filterCapabilitiesForUser(groups, identity) {

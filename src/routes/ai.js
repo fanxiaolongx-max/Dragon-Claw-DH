@@ -36,7 +36,7 @@ import { formatTestFailure } from '../services/ai-test-diagnostics.js';
 import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
-import { sessionAccess, decorateMessages, claimTurn, releaseTurn, sharedHistory, leave as leaveShare } from '../services/share-service.js';
+import { sessionAccess, decorateMessages, claimTurn, releaseTurn, sharedHistory, sessionCapabilities, leave as leaveShare } from '../services/share-service.js';
 import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
 
 export async function aiRoutes(fastify) {
@@ -246,10 +246,16 @@ export async function aiRoutes(fastify) {
             const context = persist && sessionId
                 ? await prepareContext({ sessionId, history, settings: selected, emit: write })
                 : { history, summary: '' };
+            const turnIdentity = req.userIdentity || resolveRequestIdentity(req);
+            const sharedCapabilities = (sharedTurn && sessionId)
+                ? await sessionCapabilities({ identity: turnIdentity, sessionId }).catch(() => null)
+                : null;
             const res = await runAgent({
                 settings: selected,
                 sessionId: persist ? sessionId : '',
-                identity: req.userIdentity || resolveRequestIdentity(req),
+                isShared: Boolean(sharedTurn),
+                sharedCapabilities,
+                identity: turnIdentity,
                 history: context.history,
                 summary: context.summary,
                 skillIds: Array.isArray(body.skills) ? body.skills : [],

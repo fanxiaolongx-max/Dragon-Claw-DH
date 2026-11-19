@@ -353,6 +353,7 @@
             state.failed = false;
         } catch {
             if (seq !== state.seq) return;
+            if (source !== state.source || account !== identity()) return loadThreads();
             state.failed = !state.threads.length;
         }
         state.loaded = true;
@@ -1145,8 +1146,14 @@
         window.addEventListener('tools:languagechange', applyTexts);
         window.addEventListener('home:conversation-list-changed',()=>renderThreads());
         window.addEventListener('home:desktop-agents-ready', () => setSource(storeGet(SOURCE_KEY) || state.source, { remember:false }));
+        const onAuthChanged = () => {
+            if (state.active && state.identity !== identity()) { state.drafts.clear(); window.DragonClaw?.newChat?.(); }
+            loadChannels();
+            if (CHANNEL_IDS.includes(state.source)) loadThreads();
+        };
+        window.addEventListener('tools:authchange', onAuthChanged);
         window.addEventListener('storage', event => {
-            if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(event.key) && state.active && state.identity !== identity()) { state.drafts.clear(); window.DragonClaw?.newChat?.(); }
+            if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(event.key)) onAuthChanged();
         });
         // 侧栏对话里的频道会话转圈：已连接频道时每 15 秒刷新一次会话列表（busy = Dragon Claw 正在回复）
         setInterval(() => {

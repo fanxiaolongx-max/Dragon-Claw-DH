@@ -2806,6 +2806,7 @@
     async function openSession(item) {
         if (!item || state.controller) return;
         const epoch = ++resumeEpoch;
+        window.DragonHtmlSwarm?.deactivate?.();
         window.HomeAgentDiscussion?.activateSession?.(item.id,{group:item.discussionMode==='group'});
         closeSessionPicker();
         exitExternal();
@@ -3362,6 +3363,7 @@
             chatList.failed = false;
         } catch {
             if (seq !== chatList.seq) return;
+            if (account !== currentUser() + ':' + (localStorage.getItem('tools_tenant_id') || '')) return loadChatList();
             chatList.failed = !chatList.items.length; // 已有列表时刷新失败就保留旧列表
         }
         chatList.loaded = true;
@@ -3559,6 +3561,19 @@
         });
         renderChatList();
         loadChatList();
+        const onAuthChanged = () => {
+            clearTimeout(chatList.timer);
+            chatList.items = [];
+            chatList.cached = [];
+            chatList.serverCount = 0;
+            chatList.cacheIdentity = '';
+            chatList.loaded = false;
+            chatList.failed = false;
+            renderChatList();
+            loadChatList();
+        };
+        window.addEventListener('tools:authchange', onAuthChanged);
+        window.addEventListener('storage', event => { if (['tools_user', 'tools_tenant_id', 'tools_token'].includes(event.key)) onAuthChanged(); });
     }
 
     function newChat({ clearWorkspace = true, root = null } = {}) {
@@ -3566,6 +3581,7 @@
         state.attachments = [];
         renderAttachments();
         window.HomeDesktopModels?.resetDraft?.();
+        window.DragonHtmlSwarm?.deactivate?.();
         window.HomeAgentDiscussion?.activateSession?.(null);
         exitExternal();
         window.HomeWelinkThreads?.setSource?.('mine', {remember:false});

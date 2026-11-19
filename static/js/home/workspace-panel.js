@@ -1134,9 +1134,10 @@
             showFileView(card, 'preview');
         }
         // 异步读取文件内容以更新文件行数与大小元数据；
-        // 如果此文件是 HTML，将完整页面内容同步注入右侧 Dragon 浏览器 AI 指针群进行协同绘制
+        // 仅在当轮实时新生成 HTML（autoOpen && !replaying）时自动注入右侧 Dragon 浏览器 AI 指针群协同绘制；
+        // 正常打开/回放历史对话时不再自动弹出绘制（需要查看时可点击消息下方预览按钮手动触发）。
         loadFile(card).then(data => {
-            if (previewKind === 'html' && data?.content && window.DragonHtmlSwarm) {
+            if (autoOpen && !replaying && previewKind === 'html' && data?.content && window.DragonHtmlSwarm) {
                 window.DragonHtmlSwarm.playFullHtml?.(data.content, { title: baseName(filePath) });
             }
         }).catch(() => {});

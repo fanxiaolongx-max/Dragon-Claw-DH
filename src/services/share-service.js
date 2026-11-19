@@ -7,13 +7,21 @@
 // 接口与主线版 /api/shared-conversations 一致，前端共用同一份 shared-conversations.js。
 import crypto from 'node:crypto';
 import { BusinessError } from '../core/errors.js';
-import { isSameUserId } from '../core/access.js';
+import { isSameUserId, listAdmins } from '../core/access.js';
 import { kvGet, sendBaseNotify } from '../dao/scoped.js';
 import { listRecords, getRecord, putRecord, deleteRecord } from './record-store.js';
 import { getSession, saveSession, listMessages } from './ai-service.js';
+import { listSkills } from './skill-service.js';
+import { pushAlert } from './alert-service.js';
+import { enabledTools } from './tool-catalog-service.js';
 import { pushLog } from '../core/log-ring.js';
 
-const K = { share: 'share', member: 'share_member', group: 'share_group', recent: 'share_recent', user: 'share_user' };
+const K = { share: 'share', member: 'share_member', group: 'share_group', recent: 'share_recent', user: 'share_user', skillGrant: 'share_skill_grant' };
+const SKILL_MENTION_RE = /(?<![A-Za-z0-9_.\/@-])@([a-z][a-z0-9-]{1,40})\b/g;
+const ADMIN_ONLY_TOOLS = new Set([
+    'insert_database_row', 'update_database_rows', 'delete_database_rows', 'send_notification',
+    'move_uiv_script', 'delete_uiv_script', 'sla_update_metric_conditions', 'sla_revert_metric_rule_change',
+]);
 const MAX_MEMBERS = 200;
 const TURN_TTL_MS = 5 * 60_000;
 const fail = (message, code = 400) => { throw new BusinessError(message, code); };
@@ -157,9 +165,18 @@ export async function ensureShare({ user, sessionId, title }) {
     return share;
 }
 
-export async function shareForSession({ user, sessionId }) {
+export async function shareForSession({ user, sessionId, identity = null }) {
     const access = await sessionAccess(sessionId, user);
-    return access?.share ? describe(access.share, user) : null;
+    if (!access?.share) return null;
+    const base = await describe(access.share, user);
+    const idObj = identity || { username: user, isAdmin: false, isSuper: false };
+    const caps = await sessionCapabilities({ identity: idObj, sessionId, _access: access }).catch(() => ({ skills: [], tools: [], aliases: {}, pendingForMe: [] }));
+    return {
+        ...base,
+        missingCapabilities: { skills: caps.skills, tools: caps.tools },
+        skillAliases: caps.aliases,
+        pendingSkillRequests: caps.pendingForMe,
+    };
 }
 
 export async function invite({ user, sessionId, title, usernames = [], groupIds = [], linkBase = '' }) {
@@ -268,7 +285,7 @@ export async function listMine(user) {
     const out = [];
     const seenShares = new Set();
     const collect = async (share, lastReadAt) => {
-        if (!share || seenShares.has(share.id) || !(await getSession(share.sessionId))) return;
+        if (!share || share.status !== 'active' || seenShares.has(share.id) || !(await getSession(share.sessionId))) return;
         seenShares.add(share.id);
         const d = await describe(share, user);
         if (d.isOwner && !d.members.some((m) => !same(m.username, user) && ['accepted', 'pending'].includes(m.status))) return;
@@ -411,33 +428,516 @@ export async function releaseTurn(sessionId, user) {
     await saveSession({ id: sessionId, title: fresh.title, summary: fresh.summary, archived: fresh.archived, pinned: fresh.pinned, metadata: { activeTurn: null } });
 }
 
-/** 给模型的历史：取库里最近的消息（成员之间不一定都在页面上看到了最新的），别人的提问前标注账号 */
+const sharedToolLabel = (dir, author) => {
+    const name = dir.get(userKey(author))?.name || '';
+    return name && !same(name, author) ? `${name} (${author})` : (name || author);
+};
+
+function messageMentions(msg, patterns = []) {
+    const hay = `${String(msg?.content || '')}\n${Array.isArray(msg?.events) ? JSON.stringify(msg.events) : String(msg?.events || '')}`;
+    return patterns.some((p) => hay.includes(p));
+}
+
+function summarizeMessageResources(msg) {
+    const text = String(msg?.content || '');
+    const events = Array.isArray(msg?.events) ? msg.events : [];
+    const attachments = new Set();
+    const tools = new Set();
+    for (const m of text.matchAll(/\(<?(uploads\/[a-z0-9]{8,40}\/[^)>\s]+)>?\)/gi)) attachments.add(m[1]);
+    for (const m of text.matchAll(/\/custom-tools\/([a-z0-9-]+)\//gi)) tools.add(m[1]);
+    for (const ev of events) {
+        if (!ev || typeof ev !== 'object') continue;
+        if (ev.type === 'tool_start' && ev.args) {
+            if (typeof ev.args.path === 'string' && /^uploads\//i.test(ev.args.path)) attachments.add(ev.args.path);
+            if (ev.tool === 'publish_html_tool' && ev.args.slug) tools.add(String(ev.args.slug));
+        }
+        if (ev.type === 'tool_result' && ev.tool === 'publish_html_tool' && ev.ok && ev.summary) {
+            // 保留已发布工具的说明，便于后续成员继续优化
+            const sum = String(ev.summary).trim();
+            if (sum) tools.add(sum);
+        }
+    }
+    const notes = [];
+    if (attachments.size) notes.push(`[本条消息可用附件：${[...attachments].join('、')}]`);
+    if (tools.size) notes.push(`[本条消息关联自定义工具：${[...tools].join('、')}]`);
+    return notes.join('\n');
+}
+
+/** 给模型的历史：取库里最近的消息（成员之间不一定都在页面上看到了最新的），别人发言与回复均标注账号并附共享文件/工具索引 */
 export async function sharedHistory(sessionId, { ownerId, viewer, limit = 30 }) {
     const dir = await directory();
     return (await listMessages(sessionId)).slice(-limit).map((m) => {
         const author = m.author || ownerId;
         const role = m.role === 'user' ? 'user' : 'assistant';
-        const content = String(m.content || '');
-        return { role, content: role === 'user' && !same(author, viewer) ? `【共享对话成员 ${dir.get(userKey(author))?.name || author} 的提问】\n${content}` : content };
+        let content = String(m.content || '')
+            .replace(/\n{0,2}（\s*本轮调用工具\s*\d+\s*次：[^）\n]*）\s*$/u, '')
+            .trimEnd();
+        const extra = summarizeMessageResources(m);
+        if (extra) content = `${content}${content ? '\n' : ''}${extra}`;
+        if (!same(author, viewer)) {
+            const who = sharedToolLabel(dir, author);
+            content = `【共享对话成员 ${who}${role === 'assistant' ? ' 收到的 AI 回复' : ' 的提问'}】\n${content}`;
+        }
+        return { role, content };
     }).filter((m) => m.content.trim());
 }
 
-/** 别人的对话附件：出现在 viewer 能访问的共享对话的消息里时才可读（共享的是上下文，含历史里的附件） */
-export async function uploadSharedWith(uploadId, uploaderId, viewer) {
-    const needle = `uploads/${uploadId}/`;
+async function activeSharesForViewer(viewer, uploaderId) {
     const shares = [];
+    const seenIds = new Set();
     for (const m of await myMemberships(viewer)) {
-        if (m.status === 'accepted') shares.push(await getShare(m.shareId));
+        if (m.status !== 'accepted') continue;
+        const s = await getShare(m.shareId);
+        if (s && s.status === 'active' && !seenIds.has(s.id)) { seenIds.add(s.id); shares.push(s); }
     }
     for (const rec of await listRecords(K.share, { withPayload: true, limit: 1000 })) {
-        if (rec.payload && same(rec.payload.owner, viewer)) shares.push({ ...rec.payload, id: rec.id });
+        if (rec.payload && rec.payload.status === 'active' && same(rec.payload.owner, viewer) && !seenIds.has(rec.id)) {
+            seenIds.add(rec.id);
+            shares.push({ ...rec.payload, id: rec.id });
+        }
     }
+    const matched = [];
     for (const share of shares) {
-        if (!share || share.status !== 'active') continue;
-        if (!same(share.owner, uploaderId) && !(await getMember(share.id, uploaderId))) continue;
-        if ((await listMessages(share.sessionId)).some((m) => String(m.content || '').includes(needle))) return true;
+        if (same(share.owner, uploaderId)) { matched.push(share); continue; }
+        const up = await getMember(share.id, uploaderId);
+        if (up?.status === 'accepted') matched.push(share);
+    }
+    return matched;
+}
+
+/** 别人的对话附件：出现在 viewer 能访问的共享对话的消息正文或工具事件里时才可读（共享的是上下文，含历史里的附件） */
+export async function uploadSharedWith(uploadId, uploaderId, viewer) {
+    const needle = `uploads/${uploadId}/`;
+    const encodedNeedle = `uploads%2F${uploadId}%2F`;
+    for (const share of await activeSharesForViewer(viewer, uploaderId)) {
+        if ((await listMessages(share.sessionId)).some((m) => messageMentions(m, [needle, encodedNeedle]))) return true;
+    }
+    return false;
+}
+
+/** 别人的私有自定义 HTML 工具：出现在 viewer 参与的共享对话里时才可读 */
+export async function customToolSharedWith(slug, ownerId, viewer) {
+    const cleanSlug = String(slug || '').toLowerCase();
+    if (!cleanSlug || !viewer) return false;
+    const patterns = [`/custom-tools/${cleanSlug}/`, `/custom-tools/${cleanSlug}`, `"slug":"${cleanSlug}"`];
+    for (const share of await activeSharesForViewer(viewer, ownerId)) {
+        if ((await listMessages(share.sessionId)).some((m) => messageMentions(m, patterns))) return true;
     }
     return false;
 }
 
 export { same as sameUser };
+
+// ── 共享对话外部能力感知（缺失 Skill / 工具）与私有 Skill 临时授权审批 ──
+function historyCapabilitiesIn(msgs = []) {
+    const skillIds = new Set();
+    const tools = new Set();
+    for (const m of Array.isArray(msgs) ? msgs : []) {
+        const text = String(m?.content || '');
+        if (m?.role === 'user') {
+            for (const hit of text.matchAll(SKILL_MENTION_RE)) skillIds.add(String(hit[1] || '').toLowerCase());
+        }
+        for (const ev of Array.isArray(m?.events) ? m.events : []) {
+            if (!ev || typeof ev !== 'object') continue;
+            if (ev.type === 'skills' && Array.isArray(ev.skills)) {
+                ev.skills.forEach((id) => { const s = String(id || '').toLowerCase(); if (s) skillIds.add(s); });
+            }
+            if ((ev.type === 'tool_start' || ev.type === 'tool_result') && ev.tool) {
+                const t = String(ev.tool).trim();
+                if (t) tools.add(t);
+                if (t === 'read_skill' && ev.args && (ev.args.id || ev.args.skillId)) {
+                    const s = String(ev.args.id || ev.args.skillId).toLowerCase();
+                    if (s) skillIds.add(s);
+                }
+            }
+        }
+    }
+    return { skillIds: [...skillIds], tools: [...tools] };
+}
+
+async function sharedSkillSet() {
+    const raw = await kvGet('distribution_shared', []).catch(() => []);
+    return new Set(Array.isArray(raw) ? raw.map((x) => String(x || '').toLowerCase()) : []);
+}
+
+async function listSkillGrants(shareId = '') {
+    const rows = await listRecords(K.skillGrant, { ...(shareId ? { group: shareId } : {}), withPayload: true, limit: 1000 });
+    return rows.map((r) => (r?.payload ? { ...r.payload, id: r.id } : null)).filter(Boolean);
+}
+
+/** 当前用户通过「已同意的共享对话临时授权」可访问的非全员 Skill ID 集合 */
+export async function grantedSkillIdsForUser(identity) {
+    const username = clean(identity?.username || identity, 80);
+    if (!username) return new Set();
+    const grants = (await listSkillGrants()).filter((g) => g.status === 'approved' && g.skillId && g.shareId);
+    if (!grants.length) return new Set();
+    const activeShares = new Set();
+    for (const m of await myMemberships(username)) {
+        if (m.status !== 'accepted') continue;
+        const s = await getShare(m.shareId);
+        if (s && s.status === 'active') activeShares.add(s.id);
+    }
+    for (const g of grants) {
+        if (activeShares.has(g.shareId)) continue;
+        const s = await getShare(g.shareId);
+        if (s && s.status === 'active' && same(s.owner, username)) activeShares.add(s.id);
+    }
+    const out = new Set();
+    for (const g of grants) {
+        if (activeShares.has(g.shareId)) out.add(String(g.skillId).toLowerCase());
+    }
+    return out;
+}
+
+function canApproveSkillRequest(grant, identity) {
+    if (!grant || !identity?.username) return false;
+    if (identity.isSuper) return true;
+    if (grant.approver && same(grant.approver, identity.username)) return true;
+    if (Array.isArray(grant.approvers) && grant.approvers.some((u) => same(u, identity.username))) return true;
+    return false;
+}
+
+function formatSkillRequest(grant, dir) {
+    return {
+        id: grant.id,
+        shareId: grant.shareId,
+        sessionId: grant.sessionId,
+        title: grant.title,
+        skillId: grant.skillId,
+        skillName: grant.skillName || grant.skillId,
+        isBuiltin: Boolean(grant.isBuiltin),
+        requestedBy: grant.requestedBy,
+        requestedByName: dir.get(userKey(grant.requestedBy))?.name || grant.requestedByName || grant.requestedBy,
+        approver: grant.approver || '',
+        approverName: dir.get(userKey(grant.approver))?.name || grant.approverName || grant.approver || '平台管理员',
+        status: grant.status,
+        note: grant.note || '',
+        createdAt: new Date(grant.createdAt || Date.now()).toISOString(),
+        resolvedAt: grant.resolvedAt ? new Date(grant.resolvedAt).toISOString() : null,
+        resolvedBy: grant.resolvedBy || '',
+    };
+}
+
+/** 识别共享对话中历史调用过、但当前成员缺失或受限的 Skill / 工具 */
+export async function sessionCapabilities({ identity, sessionId, _access = null }) {
+    const username = clean(identity?.username, 80);
+    if (!username || !sessionId) return { skills: [], tools: [], aliases: {}, pendingForMe: [] };
+    const access = _access || await sessionAccess(sessionId, username);
+    if (!access?.share || access.share.status !== 'active') return { skills: [], tools: [], aliases: {}, pendingForMe: [] };
+
+    const share = access.share;
+    const [msgs, allSkills, sharedSet, grantedIds, grants, enabledList, dir] = await Promise.all([
+        listMessages(sessionId),
+        listSkills().catch(() => []),
+        sharedSkillSet(),
+        grantedSkillIdsForUser(identity),
+        listSkillGrants(share.id),
+        enabledTools().catch(() => []),
+        directory(),
+    ]);
+    const hist = historyCapabilitiesIn(msgs);
+    const byId = new Map(allSkills.map((s) => [String(s.id).toLowerCase(), s]));
+    const isSuper = Boolean(identity?.isSuper);
+    const isAdmin = Boolean(identity?.isAdmin || identity?.isSuper);
+
+    const missingSkills = [];
+    for (const rawId of hist.skillIds) {
+        const id = String(rawId || '').toLowerCase();
+        const skill = byId.get(id);
+        const isOwn = Boolean(skill && !skill.builtIn && skill.createdBy && same(skill.createdBy, username));
+        const isVisible = isSuper || sharedSet.has(`skill:${id}`) || isOwn || grantedIds.has(id);
+        if (isVisible) continue;
+        const latestReq = grants
+            .filter((g) => String(g.skillId || '').toLowerCase() === id)
+            .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0] || null;
+        if (!skill) {
+            missingSkills.push({ id, name: id, owner: '', ownerName: '', isBuiltin: false, canRequest: false, status: 'deleted', requestId: '', reason: '该技能已不存在或已从平台移除' });
+            continue;
+        }
+        const owner = skill.builtIn ? '' : (skill.createdBy || share.owner || '');
+        const ownerName = skill.builtIn ? '平台管理员' : (dir.get(userKey(owner))?.name || owner);
+        missingSkills.push({
+            id,
+            name: skill.name || id,
+            owner,
+            ownerName,
+            isBuiltin: Boolean(skill.builtIn),
+            canRequest: Boolean(skill.builtIn || owner),
+            status: latestReq?.status || 'none',
+            requestId: latestReq?.id || '',
+            reason: skill.builtIn ? '内置技能未向当前账号开放，可向管理员申请授权给本共享对话' : '私有技能仅归属人可用，可向归属人申请授权给本共享对话成员',
+        });
+    }
+
+    const enabledNames = new Set(enabledList.map((t) => t.name));
+    const missingTools = [];
+    for (const toolName of hist.tools) {
+        if (!enabledNames.has(toolName)) {
+            missingTools.push({ name: toolName, reason: '该工具当前已在平台停用或未开放' });
+        } else if (ADMIN_ONLY_TOOLS.has(toolName) && !isAdmin) {
+            missingTools.push({ name: toolName, reason: '仅管理员可使用该工具' });
+        }
+    }
+
+    const pendingForMe = grants
+        .filter((g) => g.status === 'pending' && canApproveSkillRequest(g, identity))
+        .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+        .map((g) => formatSkillRequest(g, dir));
+
+    return { skills: missingSkills, tools: missingTools, aliases: {}, pendingForMe };
+}
+
+async function notifySkillApprovers({ targets, title, content, actor, share, requestId, skillId, skillName, linkBase }) {
+    const cleanTargets = [...new Set((targets || []).map((u) => clean(u, 80)).filter(Boolean))];
+    if (!cleanTargets.length) return { inAppAlert: 0, appMsg: 0, email: 0 };
+
+    const inAppAlert = await pushAlert(cleanTargets, {
+        type: 'user_action',
+        severity: 'warn',
+        title,
+        message: content,
+        source: 'shared-conversation',
+        actor,
+        objectType: 'shared_skill_request',
+        objectId: requestId,
+        detail: { shareId: share.id, sessionId: share.sessionId, skillId, skillName },
+    }, { allowDuplicate: true }).catch(() => 0);
+
+    const jump = /^https?:\/\//i.test(String(linkBase || ''))
+        ? `${String(linkBase).replace(/\/+$/, '')}/?share=${encodeURIComponent(share.linkToken)}`
+        : '';
+    let appMsg = 0;
+    let email = 0;
+    for (const target of cleanTargets) {
+        try {
+            const res = await sendBaseNotify({
+                module_type: 'digitalHumanOperations',
+                sub_module_type: 'writeReport',
+                msg_type: '2',
+                app_msg_params: {
+                    title,
+                    content,
+                    to_user_account: target,
+                    type: '1',
+                    ...(jump ? { jump_url: jump } : {}),
+                },
+            });
+            if (res?.code === 0 || res?.data?.success) appMsg += 1;
+        } catch (err) {
+            pushLog({ level: 'WARN', category: 'SHARE', message: `Skill 授权应用消息发送失败（${target}）：${err.message}`, userId: actor });
+        }
+        try {
+            const res = await sendBaseNotify({
+                module_type: 'digitalHumanOperations',
+                sub_module_type: 'writeReport',
+                msg_type: '1',
+                email_params: {
+                    title,
+                    content,
+                    email_to: target,
+                    email_cc: '',
+                },
+            });
+            if (res?.code === 0 || res?.data?.success) email += 1;
+        } catch (err) {
+            pushLog({ level: 'WARN', category: 'SHARE', message: `Skill 授权邮件通知发送失败（${target}）：${err.message}`, userId: actor });
+        }
+    }
+    return { inAppAlert, appMsg, email };
+}
+
+/** 共享对话成员发起私有 Skill 授权申请：多通道通知归属人（站内消息中心 + 应用号消息 + 邮件） */
+export async function requestSkillShare({ identity, sessionId, skillId, linkBase = '' }) {
+    const username = clean(identity?.username, 80);
+    if (!username) fail('未识别当前用户', 401);
+    const cleanSkillId = clean(skillId, 64).toLowerCase();
+    if (!cleanSkillId) fail('缺少技能标识');
+
+    const access = await sessionAccess(sessionId, username);
+    if (!access?.share || access.share.status !== 'active') fail('仅活跃的共享对话可申请技能授权', 404);
+    const share = access.share;
+
+    const [allSkills, sharedSet, grantedIds, grants, dir] = await Promise.all([
+        listSkills(),
+        sharedSkillSet(),
+        grantedSkillIdsForUser(identity),
+        listSkillGrants(share.id),
+        directory(),
+    ]);
+    const skill = allSkills.find((s) => String(s.id).toLowerCase() === cleanSkillId);
+    if (!skill) fail('该技能已不存在或已从平台移除', 404);
+
+    const isOwn = !skill.builtIn && skill.createdBy && same(skill.createdBy, username);
+    if (identity?.isSuper || sharedSet.has(`skill:${cleanSkillId}`) || isOwn || grantedIds.has(cleanSkillId)) {
+        return { alreadyAvailable: true, share: await shareForSession({ user: username, sessionId, identity }) };
+    }
+
+    const existingPending = grants.find((g) => String(g.skillId).toLowerCase() === cleanSkillId && g.status === 'pending');
+    if (existingPending) {
+        return {
+            deduplicated: true,
+            request: formatSkillRequest(existingPending, dir),
+            share: await shareForSession({ user: username, sessionId, identity }),
+        };
+    }
+
+    const admins = await listAdmins().catch(() => ({ env: [], stored: [] }));
+    const adminList = [...new Set([...(admins.env || []), ...(admins.stored || [])].filter(Boolean))];
+    const ownerAccount = skill.builtIn ? '' : (skill.createdBy || share.owner || '');
+    const approvers = skill.builtIn
+        ? (adminList.length ? adminList : [share.owner].filter(Boolean))
+        : [ownerAccount, ...adminList].filter(Boolean);
+    const notifyTargets = skill.builtIn ? approvers : [ownerAccount].filter(Boolean);
+    if (!notifyTargets.length) fail('未找到可审批的技能归属人', 400);
+
+    const requesterName = dir.get(userKey(username))?.name || identity?.displayName || username;
+    const approverName = skill.builtIn ? '平台管理员' : (dir.get(userKey(ownerAccount))?.name || ownerAccount);
+    const rec = {
+        id: `sg_${crypto.randomBytes(9).toString('base64url')}`,
+        shareId: share.id,
+        sessionId: share.sessionId,
+        title: share.title,
+        skillId: cleanSkillId,
+        skillName: skill.name || cleanSkillId,
+        isBuiltin: Boolean(skill.builtIn),
+        requestedBy: username,
+        requestedByName: requesterName,
+        approver: ownerAccount,
+        approverName,
+        approvers: [...new Set(approvers)],
+        status: 'pending',
+        resolvedBy: '',
+        resolvedByName: '',
+        resolvedAt: 0,
+        note: '',
+        linkBase: clean(linkBase, 240),
+        createdAt: Date.now(),
+    };
+    await putRecord(K.skillGrant, {
+        id: rec.id,
+        group: share.id,
+        name: rec.skillName,
+        sortKey: String(rec.createdAt).padStart(15, '0'),
+        payload: rec,
+        updatedBy: username,
+    });
+
+    const title = `【Dragon Claw】${requesterName} 申请在共享对话中使用技能「${rec.skillName}」`;
+    const content = `成员 ${requesterName}（${username}）在共享对话「${share.title}」中申请临时授权使用你的私有技能 @${rec.skillId}（${rec.skillName}）。同意后将授权给当前共享对话的全部成员使用（不开启全员开放）。`;
+    const notificationSummary = await notifySkillApprovers({
+        targets: notifyTargets,
+        title,
+        content,
+        actor: username,
+        share,
+        requestId: rec.id,
+        skillId: rec.skillId,
+        skillName: rec.skillName,
+        linkBase,
+    });
+
+    return {
+        request: formatSkillRequest(rec, dir),
+        share: await shareForSession({ user: username, sessionId, identity }),
+        notificationSummary,
+    };
+}
+
+/** 当前用户待审批的私有 Skill 共享申请 */
+export async function inboxSkillRequests(identity) {
+    const username = clean(identity?.username, 80);
+    if (!username) return [];
+    const [grants, dir] = await Promise.all([listSkillGrants(), directory()]);
+    const out = [];
+    for (const g of grants) {
+        if (g.status !== 'pending' || !canApproveSkillRequest(g, identity)) continue;
+        const share = await getShare(g.shareId);
+        if (!share || share.status !== 'active') continue;
+        out.push(formatSkillRequest(g, dir));
+    }
+    return out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+/** 审批共享对话内的私有 Skill 授权申请；同意后自动开放给本共享对话内所有当前及后续加入成员 */
+export async function respondSkillRequest({ identity, requestId, action, note = '' }) {
+    const username = clean(identity?.username, 80);
+    if (!username) fail('未识别当前用户', 401);
+    if (!['approve', 'reject'].includes(action)) fail('无效的审批操作');
+
+    const stored = await getRecord(K.skillGrant, clean(requestId, 120));
+    const rec = stored?.payload ? { ...stored.payload, id: stored.id } : null;
+    if (!rec) fail('审批申请不存在或已失效', 404);
+    if (!canApproveSkillRequest(rec, identity)) fail('只有技能归属人或超级管理员可以审批此申请', 403);
+    const share = await getShare(rec.shareId);
+    if (!share || share.status !== 'active') fail('对应的共享对话已停止或失效', 409);
+
+    const dir = await directory();
+    const resolverName = dir.get(userKey(username))?.name || identity?.displayName || username;
+    if (rec.status !== 'pending') {
+        const currentMembers = (await members(share.id)).filter((m) => m.status === 'accepted');
+        return { status: rec.status, request: formatSkillRequest(rec, dir), grantedCount: 1 + currentMembers.length };
+    }
+
+    const nextStatus = action === 'approve' ? 'approved' : 'rejected';
+    const updated = {
+        ...rec,
+        status: nextStatus,
+        resolvedBy: username,
+        resolvedByName: resolverName,
+        resolvedAt: Date.now(),
+        note: clean(note, 200),
+    };
+    await putRecord(K.skillGrant, {
+        id: updated.id,
+        group: share.id,
+        name: updated.skillName,
+        sortKey: String(updated.createdAt || Date.now()).padStart(15, '0'),
+        payload: updated,
+        updatedBy: username,
+    });
+
+    const acceptedMembers = (await members(share.id)).filter((m) => m.status === 'accepted');
+    const approved = nextStatus === 'approved';
+    const jump = /^https?:\/\//i.test(String(updated.linkBase || ''))
+        ? `${String(updated.linkBase).replace(/\/+$/, '')}/?share=${encodeURIComponent(share.linkToken)}`
+        : '';
+    const decisionTitle = approved
+        ? `【Dragon Claw】技能「${updated.skillName}」授权申请已通过`
+        : `【Dragon Claw】技能「${updated.skillName}」授权申请未通过`;
+    const decisionMsg = approved
+        ? `${resolverName} 已同意在共享对话「${share.title}」中使用技能 @${updated.skillId}（${updated.skillName}），当前对话成员现可直接使用。`
+        : `${resolverName} 暂未同意在共享对话「${share.title}」中使用技能 @${updated.skillId}（${updated.skillName}）${updated.note ? `：${updated.note}` : ''}。`;
+
+    await pushAlert([updated.requestedBy], {
+        type: 'user_action',
+        severity: approved ? 'info' : 'warn',
+        title: decisionTitle,
+        message: decisionMsg,
+        source: 'shared-conversation',
+        actor: username,
+        objectType: 'shared_skill_request',
+        objectId: updated.id,
+        detail: { shareId: share.id, sessionId: share.sessionId, skillId: updated.skillId, action },
+    }, { allowDuplicate: true }).catch(() => {});
+
+    try {
+        await sendBaseNotify({
+            module_type: 'digitalHumanOperations',
+            sub_module_type: 'writeReport',
+            msg_type: '2',
+            app_msg_params: {
+                title: decisionTitle,
+                content: decisionMsg,
+                to_user_account: updated.requestedBy,
+                type: '1',
+                ...(jump ? { jump_url: jump } : {}),
+            },
+        });
+    } catch { /* 结果通知失败不影响审批结论 */ }
+
+    return {
+        status: nextStatus,
+        request: formatSkillRequest(updated, dir),
+        grantedCount: approved ? (1 + acceptedMembers.length) : 0,
+    };
+}

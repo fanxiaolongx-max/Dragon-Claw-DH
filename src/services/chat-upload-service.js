@@ -109,8 +109,8 @@ export async function readChatUpload(filePath, ownerId, { withData = false } = {
     });
     const row = rows[0];
     if (!row) return null;
-    if (row.owner_id !== ownerId) {
-        const { uploadSharedWith } = await import('./share-service.js');
+    const { sameUser, uploadSharedWith } = await import('./share-service.js');
+    if (!sameUser(row.owner_id, ownerId)) {
         if (!await uploadSharedWith(row.id, row.owner_id, ownerId)) return null;
     }
     return {

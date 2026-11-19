@@ -167,7 +167,12 @@ export async function getCustomTool(slug, identity) {
         return { ...BUILTIN.get(key), sharedAccess: shared, html: '' };
     }
     const row = await getRow(key);
-    if (!row || !canSee(row, identity)) return null;
+    if (!row) return null;
+    if (!canSee(row, identity)) {
+        if (!identity?.username) return null;
+        const { customToolSharedWith } = await import('./share-service.js');
+        if (!await customToolSharedWith(key, row.owner_id, identity.username)) return null;
+    }
     const item = toItem(row);
     return { ...item, sharedAccess: item.visibility === 'public', html: row.html || '' };
 }
@@ -183,7 +188,7 @@ export async function saveCustomTool(input = {}, identity) {
     let slug = slugify(input.slug) || slugify(input.nameEn) || slugify(name);
     if (BUILTIN.has(slug)) slug = '';
     const existing = slug ? await getRow(slug, LIST_COLS) : null;
-    const mine = existing && (identity.isAdmin || existing.owner_id === identity.username);
+    const mine = existing && (identity.isAdmin || isSameUserId(existing.owner_id, identity.username));
     if (existing && !(mine && (input.overwrite === true || slugify(input.slug) === slug))) slug = '';
     if (!slug) slug = `tool-${crypto.randomUUID().slice(0, 8)}`;
 
