@@ -1,10 +1,12 @@
 {
   "zh": [
-    "修复在同一浏览器里切换工号后，左侧对话列表有时一直停在加载状态、需要刷新页面的问题。",
-    "刚进入应用的同事可以马上在共享对话里被搜索到。"
+    "共享对话新增外部技能/工具差异感知与私有 Skill 授权审批：成员可查看缺失的能力提示并向归属人发起申请，审批通过后仅面向当前共享对话成员导入技能并支持消息与横幅通知。",
+    "修复停止共享对话后前端未即时从共享分类移出及重复弹出「发起者已停止共享」提示的问题，并修复 HTML 指针协同预览回放触发与点击响应异常。",
+    "优化技能、插件与工具中心及保险箱体验：全员开放标记与筛选仅对超级管理员展示，修复搜索框圆角聚焦裁剪问题，修复切换账号时保险箱状态未即时刷新的问题。"
   ],
   "en": [
-    "Fixed the conversation list sometimes staying on its loading placeholder after switching employee IDs in the same browser.",
-    "Colleagues who just opened the app can now be found right away when sharing a conversation."
+    "Added shared-conversation Skill/Tool capability awareness and private Skill approval workflow with member-scoped grants, alias handling, banners, and platform notifications.",
+    "Fixed stop-sharing leaving chats under the Shared group or repeatedly popping the stopped toast, and fixed HTML swarm canvas preview triggers and history replay behavior.",
+    "Restricted shared/unshared badges and filters in Skills, Plugins, and Tools hubs to superadmins, fixed rounded search input clipping, and fixed Vault state refresh on account switch."
   ]
 }
