@@ -70,8 +70,10 @@ export async function aiRoutes(fastify) {
         const items = await listSessions({
             ownerId: ownerOf(req),
             archived: false,
+            prefArchived: req.query?.archived,
             query: req.query?.query || '',
             limit: req.query?.limit || 50,
+            offset: req.query?.offset || 0,
         });
         return { items };
     });

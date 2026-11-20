@@ -430,27 +430,61 @@ export async function streamAiChat({ messages, profileId = '', onDelta }) {
     return { text: fullText, model: settings.model };
 }
 
-export async function listSessions({ ownerId = 'default', archived = false, query = '', limit = 50 } = {}) {
+export async function listSessions({ ownerId = 'default', archived = false, prefArchived, query = '', limit = 50, offset = 0 } = {}) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const safeOffset = Math.max(0, Number(offset) || 0);
+    const prefs = await getConversationList(ownerId).catch(() => []);
+    const minePrefs = new Map();
+    for (const p of Array.isArray(prefs) ? prefs : []) {
+        if (String(p?.source || 'mine') === 'mine' && p?.id) minePrefs.set(String(p.id), p);
+    }
     const rows = await selectTable('ai_chat_sessions', {
         whereSql: `\`owner_id\` = ${sqlVal(ownerId)} AND \`archived\` = ${archived ? 1 : 0}`,
         orderBySql: '`pinned` DESC, `updated_at` DESC',
-        limit: Number(limit) || 50,
+        limit: Math.max(safeLimit + safeOffset + minePrefs.size, 500),
         memFilter: (r) => r.owner_id === ownerId && Number(r.archived || 0) === (archived ? 1 : 0),
         memSort: (a, b) => (Number(b.pinned || 0) - Number(a.pinned || 0)) || ((b.updated_at || 0) - (a.updated_at || 0)),
     });
     const q = String(query || '').trim().toLowerCase();
-    const mapped = rows.map((r) => ({
-        id: r.id,
-        owner: r.owner_id,
-        title: r.title,
-        archived: Boolean(r.archived),
-        pinned: Boolean(r.pinned),
-        summary: r.summary || '',
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        ...(parseJsonCol(r.metadata_json, {}) || {}),
-    }));
-    return q ? mapped.filter((s) => `${s.title} ${s.summary}`.toLowerCase().includes(q)) : mapped;
+    const mapped = rows.map((r) => {
+        const pref = minePrefs.get(r.id);
+        return {
+            id: r.id,
+            owner: r.owner_id,
+            title: r.title,
+            archived: Boolean(r.archived),
+            pinned: Boolean(pref ? pref.pinned : r.pinned),
+            summary: r.summary || '',
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            ...(parseJsonCol(r.metadata_json, {}) || {}),
+        };
+    });
+    const activePinRank = (s) => {
+        const pref = minePrefs.get(s.id);
+        const activePin = pref ? (pref.pinned && !pref.archived && !pref.hidden) : s.pinned;
+        if (!activePin) return [0, 0, 0];
+        const ord = Number.isFinite(Number(pref?.order)) ? Number(pref.order) : Number.MAX_SAFE_INTEGER;
+        return [1, -ord, 0];
+    };
+    const filtered = mapped.filter((s) => {
+        const pref = minePrefs.get(s.id);
+        if (prefArchived === '1' || prefArchived === true || prefArchived === 'true') {
+            if (!pref?.archived || pref?.hidden) return false;
+        } else if (prefArchived === '0' || prefArchived === false || prefArchived === 'false') {
+            if (pref?.archived || pref?.hidden) return false;
+        }
+        if (q && !`${s.title} ${pref?.title || ''} ${s.summary}`.toLowerCase().includes(q)) return false;
+        return true;
+    });
+    filtered.sort((a, b) => {
+        const ra = activePinRank(a);
+        const rb = activePinRank(b);
+        if (rb[0] !== ra[0]) return rb[0] - ra[0];
+        if (ra[0] === 1 && rb[1] !== ra[1]) return rb[1] - ra[1];
+        return (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0);
+    });
+    return filtered.slice(safeOffset, safeOffset + safeLimit);
 }
 
 export async function getSession(sessionId) {
@@ -578,9 +612,17 @@ export async function saveConversationList(ownerId, patch) {
     if (typeof patch.group === 'string') allowed.group = patch.group.trim().slice(0, 60);
     if (Number.isFinite(Number(patch.order))) allowed.order = Number(patch.order);
     const item = { ...(list.find(same) || {}), ...allowed, source, id, updatedAt: Date.now() };
-    // 没有任何偏好的条目不留着占位置；最多保留最近改动的 500 条
+    // 没有任何偏好的条目不留着占位置；最多保留最近改动的 500 条（置顶项优先保留，避免被普通偏好挤掉）
     const meaningful = item.pinned || item.archived || item.hidden || item.title || item.group || item.order !== undefined;
-    const next = [...list.filter((x) => !same(x)), ...(meaningful ? [item] : [])].sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0)).slice(0, 500);
+    const next = [...list.filter((x) => !same(x)), ...(meaningful ? [item] : [])]
+        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
+        .slice(0, 500);
     await kvSet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, next);
+    if (source === 'mine' && typeof patch.pinned === 'boolean') {
+        await updateRows('ai_chat_sessions', { pinned: patch.pinned ? 1 : 0 }, {
+            whereSql: `\`id\` = ${sqlVal(id)} AND \`owner_id\` = ${sqlVal(ownerId)}`,
+            memFilter: (r) => r.id === id && r.owner_id === ownerId,
+        }).catch(() => {});
+    }
     return item;
 }
