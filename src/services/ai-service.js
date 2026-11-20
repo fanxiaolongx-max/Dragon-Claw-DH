@@ -492,7 +492,7 @@ export async function listSessions({ ownerId = 'default', archived = false, pref
         const pref = minePrefs.get(s.id);
         const activePin = pref ? (pref.pinned && !pref.archived && !pref.hidden) : s.pinned;
         if (!activePin) return [0, 0, 0];
-        const ord = Number.isFinite(Number(pref?.order)) ? Number(pref.order) : Number.MAX_SAFE_INTEGER;
+        const ord = Number.isFinite(Number(pref?.pin_order)) ? Number(pref.pin_order) : (Number.isFinite(Number(pref?.order)) ? Number(pref.order) : Number.MAX_SAFE_INTEGER);
         return [1, -ord, 0];
     };
     const filtered = mapped.filter((s) => {
@@ -632,17 +632,18 @@ export async function reorderConversationList(ownerId, patch = {}) {
     const orderMap = new Map(order.map((id, index) => [String(id), index]));
     const updated = list.map((item) => {
         if (String(item.source || 'mine') === source && orderMap.has(String(item.id))) {
-            return { ...item, order: orderMap.get(String(item.id)), updatedAt: Date.now() };
+            const idx = orderMap.get(String(item.id));
+            return { ...item, order: idx, pin_order: idx, pinned: true, updatedAt: Date.now() };
         }
         return item;
     });
     for (const [id, idx] of orderMap) {
         if (!updated.some((x) => String(x.source || 'mine') === source && String(x.id) === id)) {
-            updated.push({ source, id, order: idx, pinned: true, updatedAt: Date.now() });
+            updated.push({ source, id, order: idx, pin_order: idx, pinned: true, updatedAt: Date.now() });
         }
     }
     const next = updated
-        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
+        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((x.pin_order ?? x.order ?? 999999) - (y.pin_order ?? y.order ?? 999999)) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
         .slice(0, 500);
     await kvSet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, next);
     return next;
@@ -656,17 +657,39 @@ export async function saveConversationList(ownerId, patch) {
     const list = await getConversationList(ownerId);
     const same = (x) => String(x.source || 'mine') === source && String(x.id) === id;
     const allowed = {};
-    if (typeof patch.pinned === 'boolean') allowed.pinned = patch.pinned;
+    if (typeof patch.pinned === 'boolean') {
+        allowed.pinned = patch.pinned;
+        if (patch.pinned === true) {
+            const existing = list.find(same);
+            if (!existing || (!Number.isFinite(existing.order) && !Number.isFinite(existing.pin_order))) {
+                const minOrder = list
+                    .filter((x) => String(x.source || 'mine') === source && x.pinned && (Number.isFinite(x.pin_order) || Number.isFinite(x.order)))
+                    .reduce((min, x) => Math.min(min, x.pin_order ?? x.order), 0);
+                allowed.order = minOrder - 1;
+                allowed.pin_order = minOrder - 1;
+            }
+        } else {
+            allowed.order = null;
+            allowed.pin_order = null;
+        }
+    }
     if (typeof patch.archived === 'boolean') allowed.archived = patch.archived;
     if (typeof patch.hidden === 'boolean') allowed.hidden = patch.hidden;
     if (typeof patch.title === 'string') allowed.title = patch.title.trim().slice(0, 160);
     if (typeof patch.group === 'string') allowed.group = patch.group.trim().slice(0, 60);
-    if (Number.isFinite(Number(patch.order))) allowed.order = Number(patch.order);
+    if (Number.isFinite(Number(patch.order))) {
+        allowed.order = Number(patch.order);
+        if (!Number.isFinite(Number(patch.pin_order))) allowed.pin_order = Number(patch.order);
+    }
+    if (Number.isFinite(Number(patch.pin_order))) {
+        allowed.pin_order = Number(patch.pin_order);
+        if (!Number.isFinite(Number(allowed.order))) allowed.order = Number(patch.pin_order);
+    }
     const item = { ...(list.find(same) || {}), ...allowed, source, id, updatedAt: Date.now() };
     // 没有任何偏好的条目不留着占位置；最多保留最近改动的 500 条（置顶项优先保留，避免被普通偏好挤掉）
-    const meaningful = item.pinned || item.archived || item.hidden || item.title || item.group || item.order !== undefined;
+    const meaningful = item.pinned || item.archived || item.hidden || item.title || item.group || Number.isFinite(item.order) || Number.isFinite(item.pin_order);
     const next = [...list.filter((x) => !same(x)), ...(meaningful ? [item] : [])]
-        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
+        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((x.pin_order ?? x.order ?? 999999) - (y.pin_order ?? y.order ?? 999999)) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
         .slice(0, 500);
     await kvSet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, next);
     if (source === 'mine' && typeof patch.pinned === 'boolean') {

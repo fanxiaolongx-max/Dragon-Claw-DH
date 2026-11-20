@@ -61,7 +61,8 @@
         return time>=(filter.time==='today'?start.getTime():start.getTime()-(Number(filter.time)-1)*86400000);
     }
     const labels=()=>({pinned:L('置顶','Pinned'),recent:L('最近','Recent'),three:L('3 天前','3+ days ago'),week:L('7 天前','7+ days ago'),month:L('一个月前','A month ago'),unknown:L('时间未知','Date unavailable')});
-    const comparePins=(a,b)=>(Number.isInteger(a.pin_order)?a.pin_order:Number.MAX_SAFE_INTEGER)-(Number.isInteger(b.pin_order)?b.pin_order:Number.MAX_SAFE_INTEGER);
+    const pinOrder=(p)=>(Number.isInteger(p?.pin_order)?p.pin_order:(Number.isInteger(p?.order)?p.order:Number.MAX_SAFE_INTEGER));
+    const comparePins=(a,b)=>pinOrder(a)-pinOrder(b);
     function sections(items,config){
         const archived=views.get(config.source)==='archived',groups=new Map(),names=labels(),query=(config.query||'').toLowerCase();
         const rows=items.map((item,index)=>({item,index,pref:get(config.source,config.id(item))})).filter(({item,pref})=>!pref.hidden&&Boolean(pref.archived)===archived&&(!query||[config.title(item),pref.title].some(t=>String(t||'').toLowerCase().includes(query))));
@@ -215,6 +216,10 @@
                     // Include collapsed batch rows as well, preserving their relative order.
                     const visible=new Set(d.rows);let index=0;
                     const order=[...d.scope.querySelectorAll(':scope > .conversation-list-row')].map(node=>visible.has(node)?finalOrder[index++]:node).map(node=>String(config.id(config.items[Number(node.dataset.conversationIndex)])));
+                    order.forEach((id, idx) => {
+                        const prev = get(config.source, id);
+                        prefs.set(key(config.source, id), { ...prev, source: config.source, id, pinned: true, order: idx, pin_order: idx });
+                    });
                     const data=await request('PUT',{source:config.source,order});
                     if(current===identity())for(const pref of data.items||[])prefs.set(key(pref.source,pref.id),pref);
                 }

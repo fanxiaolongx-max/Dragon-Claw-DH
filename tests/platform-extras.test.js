@@ -199,6 +199,15 @@ test('消息中心、用量、工具开关、技能历史、压缩包工具、�
         assert.equal((await call('alice', 'GET', '/api/ai/conversation-list')).data.items.length, 0);
         assert.equal((await call('bob', 'PUT', '/api/ai/conversation-list', { pinned: true })).status, 400);
 
+        // 置顶拖拽重排测试：按前端拖拽顺序持久化 pin_order 与 order，再次查询时维持拖拽调整后的顺序
+        const reordered = (await call('bob', 'PUT', '/api/ai/conversation-list', { source: 'mine', order: ['s2', 's3', 's1'] })).data.items;
+        assert.equal(reordered.find(x => x.id === 's2').pin_order, 0);
+        assert.equal(reordered.find(x => x.id === 's3').pin_order, 1);
+        assert.equal(reordered.find(x => x.id === 's1').pin_order, 2);
+        const refetched = (await call('bob', 'GET', '/api/ai/conversation-list')).data.items;
+        assert.equal(refetched.find(x => x.id === 's2').order, 0);
+        assert.equal(refetched.find(x => x.id === 's3').order, 1);
+
         // ── 8. /btw 旁路提问（persist:false）：不建会话、不落库 ──
         const sessionsBefore = (await call('bob', 'GET', '/api/ai/sessions')).data.items.length;
         mock.aiScript.push({ text: '顺便回答。' });

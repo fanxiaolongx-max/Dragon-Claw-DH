@@ -3189,6 +3189,10 @@
                 const pinA = Number(Boolean(prefA.pinned));
                 const pinB = Number(Boolean(prefB.pinned));
                 if (pinB !== pinA) return pinB - pinA;
+                if (pinA && pinB) {
+                    const diff = window.HomeConversationList?.comparePins?.(prefA, prefB) || 0;
+                    if (diff !== 0) return diff;
+                }
                 const timeA = parseChatTime(a.item.updatedAt || a.item.updated_at || a.item.lastActiveAt || a.item.created_at || 0).getTime() || 0;
                 const timeB = parseChatTime(b.item.updatedAt || b.item.updated_at || b.item.lastActiveAt || b.item.created_at || 0).getTime() || 0;
                 return timeB - timeA || a.index - b.index;
