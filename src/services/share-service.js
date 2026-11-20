@@ -159,11 +159,9 @@ export async function ensureShare({ user, sessionId, title }) {
     if (!access) fail('对话不存在', 404);
     let share = access.share;
     const t = cleanTitle(title) || cleanTitle(access.session.title) || '共享对话';
-    if (!share) {
+    if (!share || share.status !== 'active') {
+        // Each sharing period has its own members, invitations and link.
         share = await saveShare({ id: `shr_${crypto.randomBytes(9).toString('base64url')}`, sessionId: access.session.id, owner: access.session.owner, title: t, linkToken: crypto.randomBytes(18).toString('base64url'), status: 'active', createdAt: Date.now() });
-    } else if (share.status !== 'active') {
-        if (access.role !== 'owner') fail('发起者已停止共享这个对话', 409);
-        share = await saveShare({ ...share, status: 'active' });
     }
     if (access.role === 'owner' && t !== share.title) share = await saveShare({ ...share, title: t });
     return share;
@@ -171,7 +169,7 @@ export async function ensureShare({ user, sessionId, title }) {
 
 export async function shareForSession({ user, sessionId, identity = null }) {
     const access = await sessionAccess(sessionId, user);
-    if (!access?.share) return null;
+    if (access?.share?.status !== 'active') return null;
     const base = await describe(access.share, user);
     const idObj = identity || { username: user, isAdmin: false, isSuper: false };
     const caps = await sessionCapabilities({ identity: idObj, sessionId, _access: access }).catch(() => ({ skills: [], tools: [], aliases: {}, pendingForMe: [] }));

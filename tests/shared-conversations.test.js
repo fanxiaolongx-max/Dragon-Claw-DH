@@ -147,10 +147,24 @@ test('共享对话：邀请、接受、同一段对话、署名、退出与停�
         assert.equal((await call('b00000002', 'GET', `/api/ai/sessions/${sessionId}/messages`)).status, 404);
         assert.equal((await call('a00000001', 'GET', `/api/ai/sessions/${sessionId}/messages`)).status, 200);
 
+        assert.equal((await call('c00000003', 'POST', `/api/shared-conversations/invites/${invited.data.share.id}/respond`, { action: 'accept' })).data.status, 'accepted');
+
         // 发起者停止共享：链接失效，且双方侧栏共享列表不再保留已停止条目
         assert.deepEqual((await call('a00000001', 'POST', `/api/shared-conversations/session/${sessionId}/leave`, {})).data, { closed: true });
         assert.equal((await call('a00000001', 'GET', '/api/shared-conversations/mine')).data.items.length, 0, 'closed share must be removed from /mine');
         assert.equal((await call('c00000003', 'POST', `/api/shared-conversations/link/${token}`)).status, 409);
+
+        const dialogPath = `/api/shared-conversations/session/${sessionId}`;
+        assert.equal((await call('a00000001', 'GET', dialogPath)).data.share, null);
+        const fresh = (await call('a00000001', 'POST', dialogPath + '/prepare', {})).data.share;
+        assert.notEqual(fresh.id, invited.data.share.id);
+        assert.notEqual(fresh.link, invited.data.share.link);
+        assert.deepEqual(fresh.members.map(m => m.username), ['a00000001']);
+        assert.equal((await call('c00000003', 'POST', `/api/shared-conversations/link/${token}`)).status, 409);
+        assert.equal((await call('c00000003', 'GET', '/api/shared-conversations/inbox')).data.items.length, 0);
+        assert.equal((await call('c00000003', 'GET', `/api/ai/sessions/${sessionId}/messages`)).status, 404);
+        const again = await call('a00000001', 'POST', dialogPath + '/invite', { usernames: ['c00000003'] });
+        assert.equal(again.data.share.members.find(m => m.username === 'c00000003').status, 'pending');
 
         // ── 外部能力感知 + 私有 Skill 审批卡片 + 多渠道通知 + 后续全员开放无冲突 ──
         await call('d00000004', 'GET', '/api/auth/me', undefined, '赵六');
