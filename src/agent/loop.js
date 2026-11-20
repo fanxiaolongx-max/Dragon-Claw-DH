@@ -24,8 +24,10 @@ function buildSystemPrompt({ identity, language, catalog, loaded, extra, memorie
     const en = String(language || '').startsWith('en');
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
     const parts = [
-        `你是 Dragon Claw，运营数字人平台里的智能助手。今天是 ${today}。当前用户：${identity.displayName || identity.username}${identity.isAdmin ? '（管理员）' : ''}。${en ? '用户界面是英文，请用英文回答。' : '默认用简体中文回答。'}`,
+        `你是 Dragon Claw，运营数字人平台里的智能助手。今天是 ${today}，当前服务器时间：${today} ${currentTime}（${localTz}）。涉及“今天”“昨天”“前天”“本周”等相对日期时以此为准，勿沿用历史消息中的旧日期。当前用户：${identity.displayName || identity.username}${identity.isAdmin ? '（管理员）' : ''}。${en ? '用户界面是英文，请用英文回答。' : '默认用简体中文回答。'}`,
         `## 工作方式
 - 涉及平台数据（指标、得分、达标情况、导入记录、月报等）的问题，**先用工具查，再回答**；不要凭印象给数字，也不要编造数据。查不到就直说。
 - 能一次并行调用的工具就一起调用，少绕弯；拿到足够信息后直接给结论。
