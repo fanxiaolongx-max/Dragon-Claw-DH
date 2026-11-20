@@ -79,6 +79,7 @@ export const config = {
     aiApiBaseUrl: String(process.env.AI_API_BASE_URL || '').trim(),
     aiModel: String(process.env.AI_MODEL || '').trim(),
     aiApiKey: String(process.env.AI_API_KEY || '').trim(),
+    agentCompactRatio: Math.min(0.85, Math.max(0.5, num(process.env.TOOLS_AGENT_COMPACT_RATIO, 0.8))),
 };
 
 function deriveFromQuery(suffix) {

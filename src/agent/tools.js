@@ -582,17 +582,22 @@ export const TOOLS = [
     },
     {
         name: 'memory',
-        description: '长期记忆：保存用户明确要求记住、或反复用到的偏好与约定（跨对话有效，已有的记忆列在系统提示里）。action=add 新增、update 修改、delete 删除（按 id）、list 列出。不要保存密码、密钥等凭据，也不要保存一次性的任务细节。',
+        description: '长期记忆：保存用户明确要求记住、或反复用到的偏好与约定（跨对话有效；已按当前主题相关性列在系统提示里，可用 list 查全部）。action=add 新增、update 修改、delete 删除（按 id）、list 列出。推荐填 topic 注明适用范围（例如「月报格式」「报表口径」，所有对话通用则填 "*"）。不要保存密码、密钥等凭据，也不要保存一次性的任务细节。',
         parameters: {
             type: 'object',
-            properties: { action: { type: 'string', enum: ['add', 'update', 'delete', 'list'] }, id: { type: 'integer', description: 'update / delete 时的记忆编号' }, content: { type: 'string', description: 'add / update 时的内容，一句话' } },
+            properties: {
+                action: { type: 'string', enum: ['add', 'update', 'delete', 'list'] },
+                id: { type: 'integer', description: 'update / delete 时的记忆编号' },
+                content: { type: 'string', description: 'add / update 时的内容，一句话（最多 500 字）' },
+                topic: { type: 'string', description: '填用户原话中的适用主题名，例如“松墨样刊”或“SLA 月报”。具体格式放在 content；全局适用填 "*"，本轮例外不写入长期记忆。' },
+            },
             required: ['action'],
         },
         async run(args, ctx) {
             if (!ctx.identity.identified) return { ok: false, summary: '未识别用户', content: '当前访问者没有工号，无法保存个人记忆。' };
             try {
-                const out = await changeMemory(ctx.identity.username, args);
-                const summary = args.action === 'list' ? `${out.items.length} 条记忆` : args.action === 'delete' ? `已删除 #${out.deleted}` : `已记住 #${out.item.id}`;
+                const out = await changeMemory(ctx.identity.username, { ...args, secrets: ctx.secrets || [] });
+                const summary = args.action === 'list' ? `${out.items.length} 条记忆` : args.action === 'delete' ? `已删除 #${out.deleted}` : out.deduplicated ? `已有 #${out.item.id}` : `已记住 #${out.item.id}`;
                 return { ok: true, summary, content: JSON.stringify(out) };
             } catch (error) {
                 return { ok: false, summary: '未保存', content: error.message };

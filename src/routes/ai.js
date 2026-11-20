@@ -22,6 +22,7 @@ import {
 } from '../services/ai-service.js';
 import { runAgent } from '../agent/loop.js';
 import { redactText } from '../agent/redact.js';
+import { lookup as lookupHistoryEvidence } from '../agent/history-evidence.js';
 import {
     handleChatUpload,
     handleChatUploadStart,
@@ -245,9 +246,21 @@ export async function aiRoutes(fastify) {
         try {
             // 新对话：和回答并行地让模型起一个短标题
             const titlePromise = ((createdNow && userText && !probeOnly) || retitle) ? generateTitle({ settings: selected, text: questionText }) : null;
+            const secrets = [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean);
             const context = persist && sessionId
-                ? await prepareContext({ sessionId, history, settings: selected, emit: write })
-                : { history, summary: '' };
+                ? await prepareContext({ sessionId, history, settings: selected, emit: write, secrets })
+                : { history, summary: '', independentTopic: false, scopedToNewTopic: false, returning: false, restoringTopic: false, recallQuery: questionText, sinceSeq: 0 };
+            const historyEvidence = persist && sessionId && !context.independentTopic
+                ? await lookupHistoryEvidence({
+                    sessionId,
+                    question: context.recallQuery || questionText,
+                    returning: Boolean(context.restoringTopic),
+                    sinceSeq: context.sinceSeq,
+                    stored: context.stored,
+                    viewer: ownerId,
+                    secrets,
+                }).catch(() => '')
+                : '';
             const turnIdentity = req.userIdentity || resolveRequestIdentity(req);
             const sharedCapabilities = (sharedTurn && sessionId)
                 ? await sessionCapabilities({ identity: turnIdentity, sessionId }).catch(() => null)
@@ -260,13 +273,15 @@ export async function aiRoutes(fastify) {
                 identity: turnIdentity,
                 history: context.history,
                 summary: context.summary,
+                recallQuery: context.recallQuery || questionText,
+                historyEvidence,
                 skillIds: Array.isArray(body.skills) ? body.skills : [],
                 language: body.uiLanguage || 'zh',
                 emit: write,
                 signal: abort.signal,
                 profiles,
                 autoSwitch: await getAutoSwitch(),
-                secrets: [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean),
+                secrets,
                 readOnlyDemo,
             });
             const usedModel = res.model || selected;
@@ -288,8 +303,8 @@ export async function aiRoutes(fastify) {
             if (titlePromise) {
                 const title = (await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))])) || (retitle ? plainTitle : '');
                 if (title) {
-                    // saveSession 会按传入值覆盖置顶 / 归档，已有会话要带上原状态
-                    await saveSession({ id: sessionId, title, ...(retitle ? { archived: existingSession.archived, pinned: existingSession.pinned, metadata: { probeTitle: '' } } : {}) });
+                    // 只更新标题和试探消息标记，保留会话状态。
+                    await saveSession({ id: sessionId, title, ...(retitle ? { metadata: { probeTitle: '' } } : {}) });
                     write({ type: 'title', title, sessionId });
                 }
             }
@@ -326,7 +341,8 @@ export async function aiRoutes(fastify) {
         const profiles = await listProfiles();
         const settings = profiles.find((p) => p.id === req.body?.modelId) || profiles.find((p) => p.isActive) || profiles[0];
         if (!settings || !hasUsableCredentials(settings)) return reply.code(400).send({ error: '还没有配置模型，无法压缩对话' });
-        return compactSession({ sessionId, settings });
+        const secrets = [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean);
+        return compactSession({ sessionId, settings, secrets });
     });
 
     // 定时任务：只能查看 / 创建 / 取消自己的

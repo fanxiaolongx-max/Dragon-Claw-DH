@@ -474,7 +474,7 @@ export async function getSession(sessionId) {
     };
 }
 
-export async function saveSession({ id, ownerId = 'default', title = '新对话', summary = '', archived = false, pinned = false, metadata = {} }) {
+export async function saveSession({ id, ownerId = 'default', title, summary = '', archived, pinned, metadata = {} }) {
     const sid = String(id || `chat_${crypto.randomUUID().slice(0, 12)}`);
     const existing = await getSession(sid);
     const now = Date.now();
@@ -482,8 +482,8 @@ export async function saveSession({ id, ownerId = 'default', title = '新对话'
         id: sid,
         owner_id: existing?.owner || ownerId,
         title: String(title || existing?.title || '新对话').slice(0, 400),
-        archived: archived ? 1 : 0,
-        pinned: pinned ? 1 : 0,
+        archived: (archived ?? existing?.archived) ? 1 : 0,
+        pinned: (pinned ?? existing?.pinned) ? 1 : 0,
         summary: String(summary || existing?.summary || ''),
         metadata_json: JSON.stringify({ ...(existing?.metadata || {}), ...(metadata || {}) }),
         created_at: existing?.createdAt || now,
@@ -517,13 +517,21 @@ export async function deleteSession(sessionId) {
 }
 
 export async function listMessages(sessionId) {
-    const rows = await selectTable('ai_chat_messages', {
-        whereSql: `\`session_id\` = ${sqlVal(sessionId)}`,
-        orderBySql: '`id` ASC',
-        limit: 500,
-        memFilter: (r) => r.session_id === sessionId,
-        memSort: (a, b) => (a.id || 0) - (b.id || 0),
-    });
+    const rows = [];
+    const pageSize = Math.min(500, Math.max(1, config.maxPageSize));
+    let cursor = null;
+    for (;;) {
+        const page = await selectTable('ai_chat_messages', {
+            whereSql: `\`session_id\` = ${sqlVal(sessionId)}${cursor === null ? '' : ` AND \`id\` > ${sqlVal(cursor)}`}`,
+            orderBySql: '\`id\` ASC',
+            limit: pageSize,
+            memFilter: (r) => r.session_id === sessionId && (cursor === null || Number(r.id) > Number(cursor)),
+            memSort: (a, b) => a.id - b.id,
+        });
+        rows.push(...page);
+        if (page.length < pageSize) break;
+        cursor = page.at(-1).id;
+    }
     return rows.map((r) => ({
         id: r.id,
         session_id: r.session_id,

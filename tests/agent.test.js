@@ -298,7 +298,7 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
             { toolCalls: [
                 { name: 'update_plan', args: { items: [{ content: '取数', status: 'in_progress' }, { content: '计算', status: 'pending' }, { content: '汇报', status: 'pending' }] } },
                 { name: 'calculate', args: { expressions: ['change_percent(80,92)', 'workdays_between("2026-10-01","2026-10-31")', 'constructor(1)'] } },
-                { name: 'memory', args: { action: 'add', content: '回答里的百分比保留两位小数' } },
+                { name: 'memory', args: { action: 'add', content: '回答里的百分比保留两位小数', topic: '*' } },
                 { name: 'memory', args: { action: 'add', content: '我的密码是 hunter2abc' } },
                 { name: 'save_uiv_script', args: { name: '工单列表', url: 'https://example.invalid/api/list', method: 'post', code: 'fetch("https://example.invalid/api/list")' } },
             ] },
