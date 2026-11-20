@@ -504,7 +504,7 @@ export const TOOLS = [
     },
     {
         name: 'publish_html_tool',
-        description: '把一个自包含的单页 HTML 发布为平台里的自定义工具，返回访问链接。只有用户确认要发布时才调用。HTML 必须内联全部样式和脚本；工具在沙箱里运行，不能发起任何网络请求，也拿不到登录信息。需要平台数据时在页面脚本里调用内置的只读接口：await DH.query(sql, limit) 查业务表、await DH.report() 取最新报表概览、await DH.me() 取当前用户。',
+        description: '把一个自包含的单页 HTML 发布为平台里的自定义工具，返回访问链接。只有用户明确要求发布或同意发布时才调用；若用户只要求生成、修改、美化页面或提供 HTML 代码，不要擅自发布，可直接给出 HTML。HTML 必须内联全部样式和脚本；工具在沙箱里运行，不能发起任何网络请求，也拿不到登录信息。需要平台数据时在页面脚本里调用内置的只读接口：await DH.query(sql, limit) 查业务表、await DH.report() 取最新报表概览、await DH.me() 取当前用户。发布后在工具中心可见，执行前会请用户确认。',
         parameters: {
             type: 'object',
             properties: {
@@ -515,6 +515,25 @@ export const TOOLS = [
                 slug: { type: 'string', description: '更新已发布的工具时传它的标识；新建时不传' },
             },
             required: ['name', 'html'],
+        },
+        kind: 'write',
+        async approval(args, ctx) {
+            const name = String(args.name || '').trim().slice(0, 80);
+            if (!name) return { error: '工具名称不能为空' };
+            const html = String(args.html || '').trim();
+            if (!html) return { error: 'HTML 内容不能为空' };
+            const sizeKb = Math.round(Buffer.byteLength(html, 'utf8') / 1024);
+            return {
+                preview: {
+                    title: `发布自定义工具「${name}」`,
+                    impact: args.slug ? '覆盖更新已有工具' : '新增自定义工具',
+                    fields: [
+                        { label: '描述', value: String(args.description || '无').slice(0, 100) },
+                        { label: '大小', value: `${sizeKb} KB` },
+                        { label: '访问权限', value: '发布后可在工具中心查看与管理' },
+                    ],
+                },
+            };
         },
         async run(args, ctx) {
             try {
@@ -528,7 +547,7 @@ export const TOOLS = [
 
     {
         name: 'update_plan',
-        description: '任务清单：需要 3 步以上的任务，先列出步骤，之后每完成一步就更新状态（界面会显示进度）。每次传完整清单；同一时间最多一项 in_progress。简单问答不用。',
+        description: '任务清单：需要 3 步以上的任务，先列出步骤，之后每完成一步就更新状态（界面会显示进度）；全部做完给出最终回答前，务必再调用一次把剩余项都标为 completed。每次传完整清单；同一时间最多一项 in_progress。简单问答不用。',
         parameters: {
             type: 'object',
             properties: { items: { type: 'array', description: '完整清单，最多 20 项', items: { type: 'object', properties: { content: { type: 'string', description: '一句话的步骤' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } }, required: ['content', 'status'] } } },

@@ -134,6 +134,8 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
 .shc-link{display:flex;align-items:center;gap:8px;padding:5px 5px 5px 10px;border:1px solid var(--v2-line,#e7e7ea);border-radius:11px;background:var(--v2-bg,#fff)}
 .shc-link>.shc-ico{color:var(--v2-ink3,#8a9099);display:flex}
 .shc-link input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--v2-ink2,#4b5563);font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis}
+.shc-link.is-error{border-color:color-mix(in srgb,var(--v2-danger,#ef4444) 45%,transparent);background:color-mix(in srgb,var(--v2-danger,#ef4444) 5%,var(--v2-bg,#fff))}
+.shc-link.is-error>.shc-ico,.shc-link.is-error input{color:var(--v2-danger,#ef4444)}
 .shc-hint{margin:7px 2px 0;font-size:11.5px;line-height:1.55;color:var(--v2-ink3,#8a9099)}
 .shc-actions{display:flex;align-items:center;gap:8px;margin-top:12px}
 .shc-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:0 14px;border:1px solid var(--v2-line-strong,#d6d6db);border-radius:9px;background:var(--v2-bg,#fff);color:var(--v2-ink,#1f2328);font:inherit;font-size:13px;cursor:pointer;transition:background .15s,transform .1s,filter .15s,opacity .15s;white-space:nowrap}
@@ -644,6 +646,25 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         }
     }
 
+    function handleSyncClose(sessionId, result) {
+        const firstTime = !state.closedLocally.has(sessionId);
+        state.closedLocally.add(sessionId);
+        state.sessionDetails.delete(sessionId);
+        state.mine = state.mine.filter(item => item.sessionId !== sessionId);
+        state.bySession.delete(sessionId);
+        window.dispatchEvent(new CustomEvent('home:conversation-list-changed', { detail: { source: 'mine' } }));
+        if (result?.revoked) {
+            window.dispatchEvent(new CustomEvent('home:session-revoked', { detail: { sessionId } }));
+        }
+        renderThreadBar();
+        refreshMine();
+        if (firstTime) {
+            toast(result?.revoked
+                ? L('发起者已停止共享，该对话已收回', 'Sharing was stopped by the owner and this conversation has been removed')
+                : L('发起者已停止共享，当前对话已转为各自独立对话', 'Sharing was stopped by the owner'));
+        }
+    }
+
     let lastSession = '';
     async function syncActive(force = false) {
         const sessionId = currentSession();
@@ -657,15 +678,7 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
                 if (await window.DragonClaw?.appendSharedMessages?.(sessionId)) state.pendingAppend = '';
             }
             if (data.result?.closed) {
-                const firstTime = !state.closedLocally.has(sessionId);
-                state.closedLocally.add(sessionId);
-                state.sessionDetails.delete(sessionId);
-                state.mine = state.mine.filter(item => item.sessionId !== sessionId);
-                state.bySession.delete(sessionId);
-                window.dispatchEvent(new CustomEvent('home:conversation-list-changed', { detail: { source: 'mine' } }));
-                renderThreadBar();
-                await refreshMine();
-                if (firstTime) toast(L('发起者已停止共享，当前对话已转为各自独立对话', 'Sharing was stopped by the owner'));
+                handleSyncClose(sessionId, data.result);
                 return;
             }
             if (data.result?.pulled) {
@@ -743,10 +756,15 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         if (accounts.status === 'fulfilled') state.accounts = accounts.value.items || [];
         if (groups.status === 'fulfilled') state.groups = groups.value.items || [];
         if (recent.status === 'fulfilled') state.recent = recent.value;
-        if (prepared.status === 'fulfilled') d.share = prepared.value.share;
-        else {
-            const link = overlay.querySelector('.shc-link input');
-            link.value = prepared.reason?.message || L('无法生成共享链接', 'Could not create a link');
+        if (prepared.status === 'fulfilled') {
+            d.share = prepared.value.share;
+            d.prepareError = '';
+        } else {
+            d.prepareError = prepared.reason?.message || L('无法生成共享链接', 'Could not create a link');
+            const linkBox = overlay.querySelector('.shc-link');
+            const link = linkBox?.querySelector('input');
+            linkBox?.classList.add('is-error');
+            if (link) link.value = d.prepareError;
         }
         if (accounts.status === 'rejected') d.list.innerHTML = `<div class="shc-empty">${esc(accounts.reason?.message || L('账号列表加载失败', 'Could not load accounts'))}</div>`;
         renderDialog(d);
@@ -759,9 +777,11 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         renderSuggest(d);
         renderList(d);
         renderMembers(d);
-        const link = d.overlay.querySelector('.shc-link input');
+        const linkBox = d.overlay.querySelector('.shc-link');
+        const link = linkBox?.querySelector('input');
         const copy = d.overlay.querySelector('[data-shc-copy]');
-        if (d.share?.link) { link.value = new URL(appBase() + d.share.link, location.origin).href; copy.disabled = false; }
+        if (d.share?.link) { linkBox?.classList.remove('is-error'); if (link) link.value = new URL(appBase() + d.share.link, location.origin).href; if (copy) copy.disabled = false; }
+        else if (d.prepareError) { linkBox?.classList.add('is-error'); }
         const leave = d.overlay.querySelector('.shc-leave');
         const joined = d.share?.members?.filter(member => member.username !== me() && ['accepted', 'pending'].includes(member.status)).length;
         leave.innerHTML = d.share && (joined || !d.share.isOwner) ? `<button type="button" class="shc-btn danger sm" data-shc-leave>${esc(d.share.isOwner ? L('停止共享', 'Stop sharing') : L('退出共享', 'Leave'))}</button>` : '';
@@ -771,6 +791,7 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         const button = d.overlay.querySelector('[data-shc-send]');
         const n = d.selected.size;
         button.disabled = !n || d.busy || !d.share;
+        button.title = !d.share && d.prepareError ? d.prepareError : '';
         button.innerHTML = `${esc(d.busy ? L('正在发送…', 'Sending…') : L('发送邀请', 'Send invites'))}${n && !d.busy ? ` <span class="shc-count">${n}</span>` : ''}`;
     }
     function renderChips(d) {
@@ -978,8 +999,8 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
     async function leave(d) {
         const owner = d.share?.isOwner;
         const message = owner
-            ? L('停止共享后，成员保留已同步的内容，但之后双方的新消息不再互相同步。确定停止？', 'Members keep what has been synced, but new messages will no longer sync. Stop sharing?')
-            : L('退出后你保留本地的对话副本，但不再收到其他成员的新消息。确定退出？', 'You keep your copy, but will stop receiving new messages. Leave?');
+            ? L('停止共享后，其他成员列表中的该共享对话将被收回并移除，仅保留你自己的原对话。确定停止？', 'Stopping sharing will revoke and remove this conversation from other members’ lists, keeping only your original conversation. Stop sharing?')
+            : L('退出后该共享对话将从你的列表中移除，你将不再收到新消息。确定退出？', 'This shared conversation will be removed from your list and you will stop receiving new messages. Leave?');
         const ok = window.AppDialog?.confirm ? await window.AppDialog.confirm(message, { title: owner ? L('停止共享', 'Stop sharing') : L('退出共享', 'Leave'), confirmText: owner ? L('停止共享', 'Stop') : L('退出', 'Leave'), tone: 'danger' }) : true;
         if (!ok) return;
         try {

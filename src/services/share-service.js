@@ -339,7 +339,7 @@ export async function markRead({ user, sessionId }) {
     const pulled = msgs.filter((x) => Number(x.created_at) > since && !same(x.author || share.owner, user)).length;
     const base = prev || { shareId: share.id, username: user, name: '', role: 'owner', status: 'accepted', invitedBy: user, via: 'owner', invitedAt: share.createdAt };
     if (pulled || !prev) await saveMember({ ...base, lastReadAt: Date.now() });
-    return { shareId: share.id, pushed: 0, pulled, closed: share.status !== 'active' };
+    return { shareId: share.id, pushed: 0, pulled, closed: share.status !== 'active', revoked: share.status !== 'active' && !same(share.owner, user) };
 }
 
 export async function leave({ user, sessionId }) {

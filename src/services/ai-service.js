@@ -325,16 +325,44 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
         const raw = await resp.text();
         let data;
         try { data = JSON.parse(raw); } catch { data = null; }
-        if (!resp.ok) {
+        if (/<!doctype|<html/i.test(raw)) {
+            const preview = raw.replace(/\s+/g, ' ').slice(0, 220);
             return {
                 ok: false,
                 status: resp.status,
-                error: data?.error?.message || data?.message || `模型接口 HTTP ${resp.status}: ${raw.slice(0, 200)}`,
+                error: `模型接口返回了 HTML 页面（HTTP ${resp.status}），并非标准 API。请检查 API URL 与供应商配置。返回片段：${preview}`,
+                model: settings.model,
+                provider: reqSpec.provider,
+                latencyMs: Date.now() - started,
+                diagnostics: { endpoint: reqSpec.url, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: 'HTML response' },
+            };
+        }
+        if (!resp.ok) {
+            const nested = data?.error && typeof data.error === 'object' ? data.error : null;
+            const message = String(nested?.message || nested?.msg || data?.message || data?.msg || data?.detail || (typeof data?.error === 'string' ? data.error : '') || `模型接口 HTTP ${resp.status}: ${raw.slice(0, 200)}`).trim();
+            const code = String(nested?.code ?? nested?.type ?? data?.code ?? data?.type ?? '').trim();
+            return {
+                ok: false,
+                status: resp.status,
+                error: message,
                 model: settings.model,
                 provider: reqSpec.provider,
                 latencyMs: Date.now() - started,
                 // 测试连接用的诊断信息（返回前由路由脱敏）
-                diagnostics: { endpoint: reqSpec.url, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: String(data?.error?.message || data?.message || ''), providerCode: String(data?.error?.code || data?.code || '') },
+                diagnostics: { endpoint: reqSpec.url, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: message, providerCode: code },
+            };
+        }
+        if (data && (data.error || Number(data.code) >= 400 || Number(data.status) >= 400 || (data.base_resp && Number(data.base_resp?.status_code) > 0))) {
+            const nested = data?.error && typeof data.error === 'object' ? data.error : null;
+            const message = String(nested?.message || nested?.msg || data?.message || data?.msg || data?.base_resp?.status_message || '网关非标准报错').trim();
+            return {
+                ok: false,
+                status: Number(data.code) || Number(data.status) || 502,
+                error: `网关返回错误：${message}`,
+                model: settings.model,
+                provider: reqSpec.provider,
+                latencyMs: Date.now() - started,
+                diagnostics: { endpoint: reqSpec.url, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: message },
             };
         }
         const rawContent = reqSpec.provider === 'anthropic'
@@ -595,6 +623,29 @@ export async function appendMessage(sessionId, role, content, meta = {}) {
 
 export async function getConversationList(ownerId) {
     return (await kvGet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, [])) || [];
+}
+
+export async function reorderConversationList(ownerId, patch = {}) {
+    const source = String(patch?.source || 'mine').slice(0, 60);
+    const order = Array.isArray(patch?.order) ? patch.order : [];
+    const list = await getConversationList(ownerId);
+    const orderMap = new Map(order.map((id, index) => [String(id), index]));
+    const updated = list.map((item) => {
+        if (String(item.source || 'mine') === source && orderMap.has(String(item.id))) {
+            return { ...item, order: orderMap.get(String(item.id)), updatedAt: Date.now() };
+        }
+        return item;
+    });
+    for (const [id, idx] of orderMap) {
+        if (!updated.some((x) => String(x.source || 'mine') === source && String(x.id) === id)) {
+            updated.push({ source, id, order: idx, pinned: true, updatedAt: Date.now() });
+        }
+    }
+    const next = updated
+        .sort((x, y) => (Number(Boolean(y.pinned)) - Number(Boolean(x.pinned))) || ((y.updatedAt || 0) - (x.updatedAt || 0)))
+        .slice(0, 500);
+    await kvSet(`${CONVERSATION_LIST_KEY_PREFIX}${ownerId}`, next);
+    return next;
 }
 
 // 置顶、改名、归档等个人偏好：前端每次只发改动的字段，这里按「来源 + 会话」合并后存回

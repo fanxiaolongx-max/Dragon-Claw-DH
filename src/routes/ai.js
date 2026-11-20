@@ -19,6 +19,7 @@ import {
     listMessages,
     appendMessage,
     getConversationList,
+    reorderConversationList,
     saveConversationList,
 } from '../services/ai-service.js';
 import { runAgent } from '../agent/loop.js';
@@ -62,9 +63,12 @@ export async function aiRoutes(fastify) {
     fastify.get('/conversation-list', async (req) => ({
         items: await getConversationList(ownerOf(req)),
     }));
-    fastify.put('/conversation-list', async (req) => ({
-        item: await saveConversationList(ownerOf(req), req.body || {}),
-    }));
+    fastify.put('/conversation-list', async (req) => {
+        if (req.body?.order !== undefined) {
+            return { items: await reorderConversationList(ownerOf(req), req.body || {}) };
+        }
+        return { item: await saveConversationList(ownerOf(req), req.body || {}) };
+    });
 
     fastify.get('/sessions', async (req) => {
         const items = await listSessions({

@@ -13,7 +13,7 @@ function sanitizeDetail(detail) {
     if (typeof detail === 'string') return detail.slice(0, 1200);
     try {
         const clone = JSON.parse(JSON.stringify(detail, (k, v) => {
-            if (typeof v !== 'number' && !/(?:^|_)(?:input|output|prompt|completion|total|max|cached|context)_?tokens?$/i.test(k) && /cookie|password|passwd|secret|token|apikey|authorization/i.test(k)) {
+            if (typeof v !== 'number' && !/(?:^|_)(?:input|output|prompt|completion|total|max|cached|context|reasoning)_?tokens?$/i.test(k) && /cookie|password|passwd|secret|token|apikey|authorization/i.test(k)) {
                 return v ? '[REDACTED]' : '';
             }
             if (typeof v === 'string' && v.length > 800) {

@@ -262,12 +262,14 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.equal((await fetch(raw, { headers: as('bob') })).status, 200);
         assert.equal((await fetch(raw, { headers: as('alice') })).status, 404);
 
-        // ── 5. HTML 工具：对话里发布；普通用户的只有自己可见；页面在沙箱里 ──
+        // ── 5. HTML 工具：对话里发布（需用户确认）；普通用户的只有自己可见；页面在沙箱里 ──
         mock.aiScript.push(
             { toolCalls: [{ name: 'publish_html_tool', args: { name: '百分比计算器', description: '算占比', icon: '🧮', html: '<!doctype html><html><head><title>t</title></head><body><h1>calc</h1><script>document.title="ok"</script></body></html>' } }] },
             { text: '已发布。' },
         );
-        const pubEvents = await chat('bob', { messages: [{ role: 'user', content: '发布吧' }] });
+        const pubEvents = await chatLive('bob', { messages: [{ role: 'user', content: '发布吧' }] }, async (ev) => {
+            if (ev.type === 'approval') await fetch(`${url}/api/agent-workspace/approvals/${ev.id}`, { method: 'POST', headers: json(as('bob')), body: JSON.stringify({ decision: 'allow' }) });
+        });
         const pub = pubEvents.find((e) => e.type === 'tool_result');
         assert.equal(pub.ok, true);
         assert.doesNotMatch(JSON.stringify(pubEvents.find((e) => e.type === 'tool_start').args), /<script>/, '工具行里不回显整段 HTML');

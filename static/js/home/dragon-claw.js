@@ -3434,6 +3434,17 @@
         if(item)openChatFromList(item);else if(!state.controller)newChat();
     }
 
+    function dropSessionFromList(sessionId) {
+        if (!sessionId) return;
+        ++chatList.seq;
+        chatList.items = chatList.items.filter(row => row.id !== sessionId);
+        chatList.cached = chatList.cached.filter(row => row.id !== sessionId);
+        if (readLastChat()?.sessionId === sessionId) forgetLastChat();
+        if (state.sessionId === sessionId) newChat();
+        else if (state.resume?.sessionId === sessionId) { hideResumeCard(); state.resume = null; }
+        renderChatList();
+    }
+
     async function deleteChatFromList(item) {
         if (!item || chatList.deleting.has(item.id)) return;
         if (item.id === state.sessionId && (state.controller || state.restoring)) return showToast(tx('chatBusy'));
@@ -4193,6 +4204,7 @@
             }
             renderChatList();
         });
+        window.addEventListener('home:session-revoked', event => dropSessionFromList(event.detail?.sessionId));
         window.addEventListener('home:agent-discussion-changed',event=>{
             for(const item of [...chatList.items,...chatList.cached])if(item.id===event.detail?.sessionId)item.discussionMode='group';
             renderChatList();scheduleChatListRefresh();

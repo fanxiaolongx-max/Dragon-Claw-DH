@@ -7,6 +7,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { reasoningDelta, stripReasoningText, createThinkSplitter, settleReasoningOnly, reasoningKey, reasoningHungry, TRUNCATED_FINISH_RE, REASONING_RETRY_TOKENS } from './reasoning.js';
 import { BusinessError } from '../core/errors.js';
 import { buildCompletionRequest } from '../services/ai-service.js';
+import { redactText } from './redact.js';
 
 // 每套模型方案自己决定是否校验 HTTPS 证书（默认不校验，兼容内网自签证书网关）
 const agentOptions = (verify) => ({ connect: { rejectUnauthorized: verify, timeout: 15_000 }, headersTimeout: 120_000, bodyTimeout: 180_000 });
@@ -150,6 +151,72 @@ function toAnthropicMessages(messages) {
     return out;
 }
 
+export function extractStructuredGatewayError(body = '') {
+    const text = String(body || '').trim();
+    if (!text || !/^\s*\{/.test(text)) return {};
+    try {
+        const data = JSON.parse(text);
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+        const nested = data.error && typeof data.error === 'object' ? data.error : null;
+        const message = String(
+            nested?.message || nested?.msg || data.message || data.msg || data.detail
+            || (typeof data.error === 'string' ? data.error : '') || ''
+        ).trim();
+        const code = String(nested?.code ?? nested?.type ?? data.code ?? data.type ?? '').trim();
+        const source = String(data.source || nested?.source || '').trim();
+        return {
+            ...(message ? { providerMessage: message.slice(0, 800) } : {}),
+            ...(code ? { providerCode: code.slice(0, 120) } : {}),
+            ...(source ? { providerSource: source.slice(0, 120) } : {}),
+        };
+    } catch {
+        return {};
+    }
+}
+
+export function assertValidGatewayEnvelope(data, rawText = '', { endpoint = '' } = {}) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+    const hasChoices = Array.isArray(data.choices);
+    const hasStandardPayload = hasChoices || Array.isArray(data.candidates) || Array.isArray(data.content);
+    if (hasStandardPayload) return;
+    if (data.error || Number(data.code) >= 400 || Number(data.status) >= 400 || (data.msg && !data.id) || (data.base_resp && Number(data.base_resp?.status_code) > 0)) {
+        const structured = extractStructuredGatewayError(rawText);
+        const msg = structured.providerMessage || data.msg || data.message || data.base_resp?.status_message || String(rawText || '').slice(0, 200);
+        const err = new BusinessError(`网关非标准报错：${msg}`, 502);
+        err.providerCode = structured.providerCode || data.code;
+        throw err;
+    }
+}
+
+export function parseOpenAiBufferedOrSse(rawText = '', { endpoint = '' } = {}) {
+    const text = String(rawText || '').trim();
+    if (/<!doctype|<html/i.test(text)) {
+        throw new BusinessError(`AI 接口返回了 HTML 页面，不是 JSON。请检查供应商协议或 API URL 是否配置正确。返回片段：${redactText(text.replace(/\s+/g, ' ').slice(0, 220))}`, 502);
+    }
+    const looksLikeSse = /^\s*data:\s*(?:\{|\[DONE\])/m.test(text) && !/^\s*\{/.test(text);
+    if (looksLikeSse) {
+        const events = [];
+        for (const block of text.split(/\r?\n\r?\n/)) {
+            for (const line of block.split(/\r?\n/)) {
+                const t = line.trim();
+                if (!t.startsWith('data:')) continue;
+                const payload = t.slice(5).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try { events.push(JSON.parse(payload)); } catch {}
+            }
+        }
+        return { kind: 'sse', events, rawText: text };
+    }
+    try {
+        const data = JSON.parse(text);
+        assertValidGatewayEnvelope(data, text, { endpoint });
+        return { kind: 'json', data, rawText: text };
+    } catch (err) {
+        if (err instanceof BusinessError) throw err;
+        throw new BusinessError(`AI 接口返回内容不是合法 JSON。返回片段：${redactText(text.replace(/\s+/g, ' ').slice(0, 220))}`, 502);
+    }
+}
+
 async function* sseEvents(body) {
     const decoder = new TextDecoder();
     let buffer = '';
@@ -159,10 +226,37 @@ async function* sseEvents(body) {
         buffer = lines.pop() || '';
         for (const line of lines) {
             const t = line.trim();
-            if (!t.startsWith('data:')) continue;
+            if (!t) continue;
+            if (!t.startsWith('data:')) {
+                if (/^\s*<(?:!doctype|html)/i.test(t)) {
+                    throw new BusinessError(`模型服务返回了 HTML 页面，并非标准 SSE 流。片段：${t.slice(0, 160)}`, 502);
+                }
+                if (t.startsWith('{') && t.endsWith('}')) {
+                    try {
+                        const parsed = JSON.parse(t);
+                        if (parsed.error || Number(parsed.code) >= 400 || Number(parsed.status) >= 400) {
+                            const structured = extractStructuredGatewayError(t);
+                            throw new BusinessError(`模型服务返回错误：${structured.providerMessage || t.slice(0, 200)}`, 502);
+                        }
+                    } catch (e) {
+                        if (e instanceof BusinessError) throw e;
+                    }
+                }
+                continue;
+            }
             const payload = t.slice(5).trim();
             if (!payload || payload === '[DONE]') continue;
-            try { yield JSON.parse(payload); } catch { /* 网关的保活行或半截数据 */ }
+            try {
+                const parsed = JSON.parse(payload);
+                if (parsed.error || Number(parsed.code) >= 400 || Number(parsed.status) >= 400 || (parsed.base_resp && Number(parsed.base_resp?.status_code) > 0)) {
+                    const structured = extractStructuredGatewayError(payload);
+                    throw new BusinessError(`模型服务返回错误：${structured.providerMessage || payload.slice(0, 200)}`, 502);
+                }
+                yield parsed;
+            } catch (err) {
+                if (err instanceof BusinessError) throw err;
+                /* 网关的保活行或半截数据 */
+            }
         }
     }
 }
@@ -177,9 +271,20 @@ function parseArgs(raw) {
     }
 }
 
-function httpError(status, text) {
-    const error = new BusinessError(`模型服务 HTTP ${status}: ${String(text || '').slice(0, 300)}`, 502);
+function httpError(status, text, endpoint = '') {
+    const raw = String(text || '').trim();
+    const redacted = redactText(raw);
+    const preview = redacted.replace(/\s+/g, ' ').slice(0, 300);
+    if (/<!doctype|<html/i.test(raw)) {
+        const error = new BusinessError(`AI 接口返回了 HTML 页面（HTTP ${status}），并非标准 API。请检查 API URL 与模型配置。返回片段：${preview}`, 502);
+        error.httpStatus = status;
+        return error;
+    }
+    const structured = extractStructuredGatewayError(raw);
+    const detail = structured.providerMessage ? redactText(structured.providerMessage) : preview;
+    const error = new BusinessError(`模型服务 HTTP ${status}: ${detail}`, 502);
     error.httpStatus = status;
+    if (structured.providerCode) error.providerCode = structured.providerCode;
     return error;
 }
 
@@ -362,7 +467,7 @@ async function streamModelOnce({
         if (tools.length) body.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
         startedAt = Date.now();
         const resp = await post(spec.url, spec.headers, body, signal, dispatcherFor(settings));
-        if (!resp.ok) throw httpError(resp.status, await resp.text().catch(() => ''));
+        if (!resp.ok) throw httpError(resp.status, await resp.text().catch(() => ''), spec.url);
         const blocks = new Map();
         for await (const ev of sseEvents(resp.body)) {
             if (ev.type === 'message_start') {
@@ -413,7 +518,7 @@ async function streamModelOnce({
         resp = await post(spec.url, spec.headers, body, signal, dispatcherFor(settings));
         used = attempt;
         if (resp.ok) break;
-        lastError = httpError(resp.status, await resp.text().catch(() => ''));
+        lastError = httpError(resp.status, await resp.text().catch(() => ''), spec.url);
         // 只有“请求格式不被接受”才值得换一种格式重试；鉴权、限流、服务端错误或缺少 thought_signature 直接报
         if (![400, 404, 422].includes(resp.status) || /thought_signature/i.test(String(lastError?.message || ''))) break;
     }
