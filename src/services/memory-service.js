@@ -1,6 +1,6 @@
 // 长期记忆：每个用户一份，保存“以后都这样做”的偏好与约定，跨对话有效，并按主题相关性注入提示词。
 import { BusinessError } from '../core/errors.js';
-import { kvGet, kvSet } from '../dao/scoped.js';
+import { kvGet, modifyMemoryList } from '../dao/scoped.js';
 import { redactText } from '../agent/redact.js';
 import { terms, topicScore } from '../agent/topic-context.js';
 
@@ -15,7 +15,7 @@ const CREDENTIAL_RE = /(密码|口令|password|passwd|pwd|api[_\s-]?key|secret|t
 
 export async function listMemories(username) {
     const list = await kvGet(keyOf(username), []);
-    return Array.isArray(list) ? list : [];
+    return Array.isArray(list) ? list : list?.items || [];
 }
 
 function cleanText(value, secrets = []) {
@@ -38,40 +38,82 @@ function cleanTopic(value, secrets = []) {
     return topic;
 }
 
-export async function changeMemory(username, { action, id, content, topic, secrets = [] } = {}) {
-    const list = await listMemories(username);
-    if (action === 'list') return { items: list };
-    if (action === 'add') {
+function nextTrace(previous, source, isUpdate) {
+    const version = (previous?.version || (isUpdate ? 1 : 0)) + 1;
+    const entry = { version };
+    if (source?.sessionId && source?.messageId) {
+        entry.sessionId = source.sessionId;
+        entry.messageId = source.messageId;
+    }
+    return { version, entries: [...(previous?.entries || []), entry].slice(-8) };
+}
+
+function temporaryOnly(text = '') {
+    return /不(?:要|用)?(?:存入|保存|记入|更新|修改)(?:到)?长期记忆/.test(text)
+        || (/(?:仅限|仅|只限|只在|只对)?(?:这期|本期|这次|本次|本轮|这一期).{0,12}(?:不要|不用|不加|例外|临时)|仅(?:本次|这次|本轮)|this (?:time|issue) only/i.test(text)
+            && !/以后|从今|今后|永久|从现在起|from now on/i.test(text));
+}
+
+const publicItem = ({trace, ...item}) => item;
+
+async function describeSource(username, trace, ctx) {
+    const {sessionAccess} = await import('./share-service.js');
+    if (ctx.isShared || (ctx.sessionId && (await sessionAccess(ctx.sessionId, username))?.share?.status === 'active')) {
+        return '请在个人对话查看记忆出处。';
+    }
+    if (!trace?.entries?.length) return '旧记忆未记录来源。';
+    const {listMessages} = await import('./ai-service.js');
+    const versions = [];
+    for (const entry of trace.entries) {
+        let source = '未记录来源';
+        if (entry.sessionId && entry.messageId) {
+            const access = await sessionAccess(entry.sessionId, username);
+            const message = access && (await listMessages(entry.sessionId)).find(row => row.role === 'user'
+                && row.memoryTurn === entry.messageId && String(row.author || '').toLowerCase() === username.toLowerCase());
+            source = message ? {sessionId:entry.sessionId, messageId:message.id, time:message.created_at,
+                quote:redactText(message.content, {secrets:ctx.secrets || []}).slice(0,300)} : '来源已删除或不可访问';
+        }
+        versions.push({version:entry.version, current:entry.version === trace.version, source});
+    }
+    return {version:trace.version, recordedChanges:trace.version - 1, note:'首次创建不计为修改', versions};
+}
+
+export async function changeMemory(username, { action, id, content, topic, secrets = [] } = {}, ctx = {}) {
+    if (action === 'list' || action === 'source') {
+        const list = await listMemories(username);
+        if (action === 'list') return { items:list.map(publicItem) };
+        const target = list.find(item => Number(item.id) === Number(id));
+        if (!target) throw new BusinessError(`没有编号为 ${id} 的记忆`);
+        return {source:await describeSource(username, target.trace, {...ctx,secrets})};
+    }
+    if (['add','update'].includes(action) && temporaryOnly(ctx.currentUserMessage)) return {temporary:true};
+    return modifyMemoryList(keyOf(username), state => {
+        const list = state.items;
+        const target = list.find(item => Number(item.id) === Number(id));
+        if (action === 'delete') {
+            if (!target) throw new BusinessError(`没有编号为 ${id} 的记忆`);
+            state.lastId = Math.max(state.lastId, ...list.map(item=>Number(item.id)));
+            state.items = list.filter(item => item !== target);
+            return {changed:true, result:{deleted:target.id}};
+        }
+        if (action !== 'add' && action !== 'update') throw new BusinessError('未知记忆操作');
+        if (action === 'update' && !target) throw new BusinessError(`没有编号为 ${id} 的记忆`);
         const text = validateContent(content, secrets);
-        const cleanTp = cleanTopic(topic, secrets);
-        const same = list.find((x) => x.content === text && String(x.topic || '') === cleanTp);
-        if (same) return { item: same, deduplicated: true };
-        if (list.length >= MAX_ITEMS) throw new BusinessError(`记忆已满（${MAX_ITEMS} 条），请先合并或删除不再需要的`);
-        const item = {
-            id: list.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1,
-            content: text,
-            ...(cleanTp ? { topic: cleanTp } : {}),
-            updatedAt: Date.now(),
-        };
-        await kvSet(keyOf(username), [...list, item]);
-        return { item };
-    }
-    const target = list.find((x) => Number(x.id) === Number(id));
-    if (!target) throw new BusinessError(`没有编号为 ${id} 的记忆`);
-    if (action === 'update') {
-        const text = validateContent(content, secrets);
-        const cleanTp = topic !== undefined ? cleanTopic(topic, secrets) : String(target.topic || '');
-        Object.assign(target, { content: text, updatedAt: Date.now() });
-        if (cleanTp) target.topic = cleanTp;
-        else delete target.topic;
-        await kvSet(keyOf(username), list);
-        return { item: target };
-    }
-    if (action === 'delete') {
-        await kvSet(keyOf(username), list.filter((x) => x !== target));
-        return { deleted: target.id };
-    }
-    throw new BusinessError('action 只能是 add / update / delete / list');
+        const scope = cleanTopic(topic ?? (action === 'update' ? target.topic : ''), secrets);
+        const same = action === 'update' ? target : list.find(item=>item.content === text && (item.topic || '') === scope);
+        if (same && same.content === text && (same.topic || '') === scope) return {changed:false,result:{item:publicItem(same),deduplicated:true}};
+        let item = target;
+        if (action === 'add') {
+            if (list.length >= MAX_ITEMS) throw new BusinessError(`记忆已满（${MAX_ITEMS} 条），请先合并或删除不再需要的`);
+            state.lastId = Math.max(state.lastId, ...list.map(row => Number(row.id))) + 1;
+            item = {id:state.lastId};
+            list.push(item);
+        }
+        Object.assign(item, {content:text, updatedAt:Date.now(), trace:nextTrace(item.trace,ctx.memorySource,action === 'update')});
+        if (scope) item.topic = scope;
+        else delete item.topic;
+        return {changed:true, result:{item:publicItem(item)}};
+    });
 }
 
 /** 按当前问题主题相关性筛选记忆并格式化进系统提示；没有相关记忆时返回空数组 */

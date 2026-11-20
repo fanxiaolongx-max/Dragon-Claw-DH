@@ -345,10 +345,11 @@ export async function updateRows(table, patch, { whereSql, memFilter }) {
         return memUpdate(table, memFilter || (() => false), patch);
     }
     const stale = await existingChunkRefs(table, keys, whereSql);
-    ({ row: patch } = await chunkRow(table, patch));
+    const prepared = await chunkRow(table, patch);
+    patch = prepared.row;
     const setSql = keys.map((k) => `${ident(k)} = ${sqlVal(patch[k])}`).join(', ');
     const affected = await executeAppSchema(`UPDATE ${ident(table)} SET ${setSql} WHERE ${whereSql}`);
-    await dropChunks(stale);
+    await dropChunks(affected ? stale : prepared.refs);
     return affected;
 }
 
@@ -363,6 +364,31 @@ export async function deleteRows(table, { whereSql, memFilter }) {
     const affected = await executeAppSchema(`DELETE FROM ${ident(table)} WHERE ${whereSql}`);
     await dropChunks(stale);
     return affected;
+}
+
+// Only used on a memory mutation. The database version wins across workers and browser tabs.
+export async function modifyMemoryList(key, change) {
+    if (isMemoryMode()) {
+        if (!memSelect('sys_kv_store', r => r.kv_key === key).length) {
+            memInsert('sys_kv_store', {kv_key:key, kv_value:'[]', updated_at:0});
+        }
+    } else {
+        await executeAppSchema(`INSERT IGNORE INTO \`sys_kv_store\` (\`kv_key\`, \`kv_value\`, \`updated_at\`) VALUES (${sqlVal(key)}, '[]', 0)`);
+    }
+    for (let attempt = 0; attempt < 12; attempt++) {
+        const [row] = await selectTable('sys_kv_store', {whereSql:`\`kv_key\` = ${sqlVal(key)}`, memFilter:r => r.kv_key === key, limit:1});
+        const current = JSON.parse(row.kv_value);
+        const state = Array.isArray(current) ? {items:current, lastId:0} : current;
+        const {result, changed} = change(state);
+        if (!changed) return result;
+        const version = Number(row.updated_at);
+        const affected = await updateRows('sys_kv_store', {kv_value:JSON.stringify(state), updated_at:Math.max(Date.now(), version + 1)}, {
+            whereSql:`\`kv_key\` = ${sqlVal(key)} AND \`updated_at\` = ${sqlVal(version)}`,
+            memFilter:r => r.kv_key === key && Number(r.updated_at) === version,
+        });
+        if (affected) return result;
+    }
+    throw new BusinessError('记忆正在被多处更新，请重试。');
 }
 
 export async function kvGet(key, fallback = null) {

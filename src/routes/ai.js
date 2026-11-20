@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { resolveRequestIdentity } from '../core/identity.js';
 import {
     getPublicSettings,
@@ -178,8 +179,9 @@ export async function aiRoutes(fastify) {
         // 之前的标题来自开场试探、用户也没改过名：这一句是正经问题就重新起标题
         const retitle = Boolean(persist && existingSession && !sharedTurn && !probeOnly && questionText.trim()
             && existingSession.metadata?.probeTitle && existingSession.metadata.probeTitle === existingSession.title);
-        if (persist && sessionId && userText) {
-            await appendMessage(sessionId, 'user', userText, { author: ownerId });
+        const memorySource = persist && sessionId && userText ? { sessionId, messageId: randomUUID() } : null;
+        if (memorySource) {
+            await appendMessage(sessionId, 'user', userText, { author: ownerId, memoryTurn: memorySource.messageId });
         }
 
         const sendDone = (payload) => {
@@ -268,6 +270,7 @@ export async function aiRoutes(fastify) {
             const res = await runAgent({
                 settings: selected,
                 sessionId: persist ? sessionId : '',
+                memorySource,
                 isShared: Boolean(sharedTurn),
                 sharedCapabilities,
                 identity: turnIdentity,

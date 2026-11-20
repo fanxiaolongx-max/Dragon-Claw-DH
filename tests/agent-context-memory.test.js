@@ -147,6 +147,41 @@ test('context-stats & memory-service & history-evidence & agent-loop 集成验�
             const request = streamReqs().at(-1);
             assert.equal(request.messages.find(m => m.role === 'system').content.includes('SM-47'), expected);
         }
+        // 同一账号的两个独立写入，包括首次初始化，均须保留。
+        const writes = await Promise.all(['并行第一条', '并行第二条'].map(content =>
+            changeMemory('parallel-user', { action: 'add', topic: '并发验收', content })));
+        assert.notEqual(writes[0].item.id, writes[1].item.id);
+        assert.deepEqual((await listMemories('parallel-user')).map(row => row.content).sort(), ['并行第一条', '并行第二条'].sort());
+
+        const turnWithMemory = async (text, args) => {
+            mock.aiScript.push({toolCalls: [{name:'memory', args}]}, {text:'完成。'});
+            return chat('alice', {messages:[{role:'user', content:text}]});
+        };
+        const created = await turnWithMemory('请记住研修刊使用 XZ-1。', {action:'add',topic:'研修刊',content:'使用 XZ-1'});
+        const origin = created.find(e => e.type === 'done').sessionId;
+        const {id} = (await listMemories('alice')).find(row => row.topic === '研修刊');
+        await turnWithMemory('这期不用前缀', {action:'update',id,content:'不加前缀'});
+        assert.equal((await listMemories('alice')).find(row => row.id === id).content, '使用 XZ-1');
+        await turnWithMemory('以后研修刊改为 XZ-2。', {action:'update',id,content:'使用 XZ-2'});
+        const inspect = async (user='alice', ctx={}) => (await changeMemory(user,{action:'source', id}, ctx)).source;
+        const sourceEvents = await turnWithMemory('白桦以外，请核对研修刊长期偏好的真实出处。', {action:'source', id});
+        assert.ok(sourceEvents.some(e => e.type === 'tool_result' && e.tool === 'memory' && e.ok));
+        const toolReport = JSON.parse(streamReqs().at(-1).messages.findLast(m => m.role === 'tool').content);
+        assert.equal(toolReport.recordedChanges, 1);
+        assert.equal(toolReport.versions[1].source.quote, '以后研修刊改为 XZ-2。');
+        const report = await inspect();
+        assert.equal(report.recordedChanges, 1);
+        const versions = report.versions;
+        assert.deepEqual(versions.map(entry=>[entry.version,entry.current,entry.source.quote]),[
+            [1,false,'请记住研修刊使用 XZ-1。'],[2,true,'以后研修刊改为 XZ-2。']]);
+        assert.match(await inspect('alice',{isShared:true}), /个人对话/);
+        await assert.rejects(inspect('unrelated-user'), /没有编号/);
+        await (await import('../src/services/ai-service.js')).deleteSession(origin);
+        assert.match((await inspect()).versions[0].source, /来源已删除/);
+        await turnWithMemory('忘掉研修刊这条测试偏好。', {action:'delete', id});
+        assert.ok(!(await selectMemoriesForPrompt('alice','研修刊')).some(row=>row.id===id));
+        await assert.rejects(inspect(), /没有编号/);
+
         // 2. history-evidence：最初值、最近更正、项目隔离、边界与脱敏
         const sid = 'sess-evidence-1';
         await saveSession({ id: sid, ownerId: 'alice', title: '核对' });

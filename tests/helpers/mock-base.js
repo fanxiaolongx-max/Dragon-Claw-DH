@@ -132,6 +132,7 @@ export async function startMockBaseServer() {
             const row = {};
             cols.forEach((c, idx) => { row[c] = vals[idx]; });
             const list = getTable(tbl);
+            if (/^INSERT IGNORE/i.test(clean) && list.some(r => (PRIMARY_KEYS.get(tbl) || [cols[0]]).every(k => String(r[k]) === String(row[k])))) return 0;
             if (dupStr) {
                 // 冲突判定按建表脚本里的主键（支持联合主键）；脚本里没有这张表时退回第一列
                 const keyCols = (PRIMARY_KEYS.get(tbl) || [cols[0]]).filter((k) => cols.includes(k));
