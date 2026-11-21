@@ -193,4 +193,16 @@ test('Skill Hub shared badges & category filter chips for Plugins and Tools in d
         assert.match(homeShellCode, /discover\.cat === 'sharedWithAll'/, 'must handle sharedWithAll filter');
         assert.match(homeShellCode, /discover\.cat === 'unsharedOnly'/, 'must handle unsharedOnly filter');
     });
+
+    await t.test('skill-hub.js defines nonBuiltin translations, swatch styling and filter logic', () => {
+        assert.match(hubCode, /nonBuiltin:\s*'非内置'/, 'zh-CN must include nonBuiltin: 非内置');
+        assert.match(hubCode, /nonBuiltin:\s*'Non-builtin'/, 'en-US must include nonBuiltin: Non-builtin');
+        assert.match(hubCode, /skills:\s*\{[^}]*nonBuiltin:\s*'nonBuiltin'/);
+        assert.match(hubCode, /plugins:\s*\{[^}]*nonBuiltin:\s*'nonBuiltin'/);
+        assert.match(hubCode, /tools:\s*\{[^}]*nonBuiltin:\s*'nonBuiltin'/);
+        assert.match(hubCode, /state\.filterSource === 'nonBuiltin'/);
+
+        const cssCode = fs.readFileSync(path.join(__dirname, '../static/css/home-skill-hub.css'), 'utf8');
+        assert.match(cssCode, /\.v2-hub-legend-swatch:is\(\[data-src="nonBuiltin"\],\s*\.is-non-builtin\)\s*\{\s*--swatch-c:\s*#ec4899;\s*\}/);
+    });
 });
