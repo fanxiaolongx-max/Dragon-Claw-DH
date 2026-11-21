@@ -463,8 +463,12 @@ export const TOOLS = [
             if (!ctx.identity.isAdmin) return { ok: false, summary: '需要管理员权限', content: '保存技能需要管理员权限。请把草稿放在 ```skill 代码块里给用户，让管理员保存。' };
             try {
                 const skill = await saveSkill(String(args.skill_md || ''), { createdBy: ctx.identity.username, source: 'chat', overwrite: args.overwrite === true });
+                const verified = await getSkill(skill.id);
+                if (!verified) {
+                    return { ok: false, isError: true, summary: '验真失败', content: `技能保存后回读校验失败：找不到已保存的技能 @${skill.id}` };
+                }
                 ctx.emit({ type: 'skills_changed', ids: [skill.id] });
-                return { ok: true, summary: `已保存 @${skill.id}`, content: `技能已保存：${skill.name}（@${skill.id}）。用户可以在对话里输入 @${skill.id} 调用。` };
+                return { ok: true, verified: true, summary: `已保存 @${skill.id}`, content: `技能已保存并通过回读验真：${verified.name}（@${verified.id}）。用户可以在对话里输入 @${verified.id} 调用。` };
             } catch (error) {
                 return { ok: false, summary: '保存失败', content: `保存失败：${error.message}` };
             }
@@ -674,7 +678,14 @@ export const TOOLS = [
             const before = new Set((await listScripts()).map((s) => String(s.id)));
             const all = await saveScripts([{ ...(args.id ? { id: String(args.id) } : {}), name: String(args.name).slice(0, 120), category: args.category, url: String(args.url), method: String(args.method || 'GET').toUpperCase(), code: String(args.code || '').slice(0, 60_000), source: 'chat', createdBy: ctx.identity.username }]);
             const saved = args.id ? all.find((s) => String(s.id) === String(args.id)) : all.find((s) => !before.has(String(s.id)));
-            return { ok: true, summary: `已保存「${args.name}」`, content: JSON.stringify({ saved: true, id: saved?.id, name: args.name, linkHint: '可在 [数据抓取](/uivf12) 页面查看和运行' }) };
+            if (!saved) {
+                return { ok: false, isError: true, summary: '保存失败', content: '保存抓取脚本未返回有效记录' };
+            }
+            const readback = (await listScripts()).find((s) => String(s.id) === String(saved.id));
+            if (!readback) {
+                return { ok: false, isError: true, summary: '验真失败', content: `抓取脚本保存后回读校验失败：未查到 ID 为 ${saved.id} 的记录` };
+            }
+            return { ok: true, verified: true, summary: `已保存「${args.name}」`, content: JSON.stringify({ saved: true, verified: true, id: saved.id, name: args.name, linkHint: '可在 [数据抓取](/uivf12) 页面查看和运行' }) };
         },
     },
 
@@ -762,6 +773,9 @@ export const TOOLS = [
         },
         async run(args) {
             const n = await updateRows(String(args.table).toLowerCase(), args.values, { whereSql: args.where });
+            if (n === 0) {
+                return { ok: false, isError: true, summary: '未匹配到任何行', content: `未匹配到符合条件的行（where: ${args.where}），0 行被修改。请核对查询条件或先通过 select_table 确认数据。` };
+            }
             return { ok: true, summary: `已修改 ${n} 行`, content: `已修改 ${args.table} 中 ${n} 行。` };
         },
     },
@@ -780,6 +794,9 @@ export const TOOLS = [
         },
         async run(args) {
             const n = await deleteRows(String(args.table).toLowerCase(), { whereSql: args.where });
+            if (n === 0) {
+                return { ok: false, isError: true, summary: '未匹配到任何行', content: `未匹配到符合条件的行（where: ${args.where}），0 行被删除。请核对查询条件。` };
+            }
             return { ok: true, summary: `已删除 ${n} 行`, content: `已删除 ${args.table} 中 ${n} 行。` };
         },
     },

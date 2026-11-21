@@ -207,6 +207,8 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     const FAKE_TOOL_FOOTER_RE = /\n{0,2}（\s*本轮调用工具\s*\d+\s*次：[^）\n]*）\s*$/u;
     const UNBACKED_OUTPUT_RE = /(?:已|已经)(?:为您|帮您)?(?:完成)?(?:优化|修改|更新|重写|重新生成|生成|保存|发布)[^\n。]{0,60}(?:\.[a-z0-9]{1,8}\b|html|工具|页面|报告|文件)/i;
     const OUTPUT_TASK_INTENT_RE = /(?:优化|修改|改写|重做|保存|生成|更新|发布|调整|美化).*(?:html|工具|页面|颜色|背景|样式|文件)/i;
+    const MUTATION_TOOLS = new Set(['publish_html_tool', 'save_skill', 'save_uiv_script', 'move_uiv_script', 'insert_database_row', 'update_database_rows', 'delete_database_rows', 'write_file', 'edit_file']);
+    const UNFINISHED_TEXT_RE = /(?:未(?:能)?完成|未执行|未能|无法(?:继续|执行|处理|找到)|下一步|还(?:需|需要|未)|剩余(?:步骤|任务)?|暂未|部分完成|请确认|由于.{0,20}(?:受限|失败|错误))/i;
     const roundMetrics = [];
     const recordRound = (result, modelSettings) => {
         const u = result?.usage || {};
@@ -351,17 +353,24 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                 emit({ type: 'status', status: '模型没有给出回答，正在提示它继续…' });
                 continue;
             }
-            const usedRealTool = callLog.some((c) => c.ok && ['publish_html_tool', 'read_custom_tool', 'read_file', 'write_file', 'edit_file'].includes(c.name));
+            const usedMutationTool = callLog.some((c) => c.ok && MUTATION_TOOLS.has(c.name));
+            const hasOutputHtml = /```(?:html|htm)\b[\s\S]*?```/i.test(roundText);
             const claimsPublishedOrEdited = FAKE_TOOL_FOOTER_RE.test(roundText)
-                || (OUTPUT_TASK_INTENT_RE.test(String(lastUser)) && UNBACKED_OUTPUT_RE.test(roundText) && !/```(?:html|htm)\b/i.test(roundText));
-            if (!reviewNudged && !usedRealTool && claimsPublishedOrEdited && !lastRound) {
+                || (OUTPUT_TASK_INTENT_RE.test(String(lastUser)) && UNBACKED_OUTPUT_RE.test(roundText) && !hasOutputHtml);
+            if (!reviewNudged && !usedMutationTool && !hasOutputHtml && claimsPublishedOrEdited && !lastRound) {
                 reviewNudged = true;
-                emit({ type: 'status', status: '检测到尚未给出实际代码或调用发布/读取工具，正在核对并继续…' });
-                messages.push({ role: 'user', content: '（系统核查提示：你刚才只回复了“已完成优化/更新”或伪造工具调用提示，既没有调用 `read_file` / `read_custom_tool` / `publish_html_tool`，也没有给出修改后的 ```html 代码块。如果对话里有附件或自定义工具，请先读取后再修改并输出完整的 ```html 代码块或调用 `publish_html_tool`；如确实缺少内容，请如实说明。）' });
+                const hasRead = callLog.some((c) => c.ok && ['read_file', 'read_custom_tool', 'read_uiv_script', 'read_skill'].includes(c.name));
+                emit({ type: 'status', status: '检测到尚未给出实际代码或调用保存/发布工具，正在核对并继续…' });
+                const nudgeMsg = hasRead
+                    ? '（系统核查提示：你刚才读取了内容，但在回复中只说了“已完成优化/修改/保存”，并没有实际调用 `publish_html_tool` / `save_uiv_script` / `save_skill` 等保存工具，也没有在回复中给出修改后的完整 ```html 代码块！请调用相应保存工具将修改真正写入，或输出完整代码块；如无法修改请如实向用户说明。）'
+                    : '（系统核查提示：你刚才只回复了“已完成优化/更新”或伪造工具调用提示，既没有调用读取工具查看原有内容，也没有调用保存/发布工具，更没有给出修改后的 ```html 代码块。如果对话里有附件或自定义工具，请先读取后再修改并输出完整的 ```html 代码块或调用 `publish_html_tool`；如确实缺少内容，请如实说明。）';
+                messages.push({ role: 'user', content: nudgeMsg });
                 finalText = '';
                 continue;
             }
-            if (finalText.trim() && !asked && latestPlan.length && latestPlan.some((i) => i.status !== 'completed')
+            const isUnfinishedResponse = UNFINISHED_TEXT_RE.test(finalText);
+            const hasQuestionToUser = /(?:请问|是否|要不要|需要我|请确认)[^。！？]*[？?线上\s]*$/.test(finalText.trim());
+            if (finalText.trim() && !asked && !isUnfinishedResponse && !hasQuestionToUser && latestPlan.length && latestPlan.some((i) => i.status !== 'completed')
                 && callLog.length && callLog[callLog.length - 1]?.ok !== false) {
                 latestPlan = latestPlan.map((item) => ({ ...item, status: 'completed' }));
                 ctx.emit({ type: 'plan', items: latestPlan });
