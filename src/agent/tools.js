@@ -551,7 +551,7 @@ export const TOOLS = [
 
     {
         name: 'update_plan',
-        description: '任务清单：需要 3 步以上的任务，先列出步骤，之后每完成一步就更新状态（界面会显示进度）；全部做完给出最终回答前，务必再调用一次把剩余项都标为 completed。每次传完整清单；同一时间最多一项 in_progress。简单问答不用。',
+        description: '任务清单：需要 3 步以上的任务，先列出步骤，之后每完成一步更新对应状态（界面会显示进度）。仅在步骤确实成功完成时才标为 completed；若某步骤失败、报错、权限不足、未执行或向用户请示，务必保持 pending 或 in_progress，切勿虚标为 completed。每次传完整清单；同一时间最多一项 in_progress。简单问答不用。',
         parameters: {
             type: 'object',
             properties: { items: { type: 'array', description: '完整清单，最多 20 项', items: { type: 'object', properties: { content: { type: 'string', description: '一句话的步骤' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } }, required: ['content', 'status'] } } },
@@ -559,14 +559,31 @@ export const TOOLS = [
         },
         silent: true,
         async run(args, ctx) {
+            const lastTool = ctx?.callLog?.length ? ctx.callLog[ctx.callLog.length - 1] : null;
+            const lastFailed = lastTool && (lastTool.ok === false || lastTool.isError === true);
+            let blockedFailureCompletion = false;
             const items = (Array.isArray(args.items) ? args.items : []).slice(0, 20)
-                .map((item) => ({ content: String(item?.content || '').trim().slice(0, 200), status: ['pending', 'in_progress', 'completed'].includes(item?.status) ? item.status : 'pending' }))
+                .map((item, idx) => {
+                    let status = ['pending', 'in_progress', 'completed'].includes(item?.status) ? item.status : 'pending';
+                    if (status === 'completed' && lastFailed) {
+                        const prevItem = ctx?.latestPlan?.[idx];
+                        if (!prevItem || prevItem.status !== 'completed') {
+                            status = 'pending';
+                            blockedFailureCompletion = true;
+                        }
+                    }
+                    return {
+                        content: String(item?.content || '').trim().slice(0, 200),
+                        status,
+                    };
+                })
                 .filter((item) => item.content);
             if (!items.length) return { ok: false, summary: '清单为空', content: 'items 不能为空' };
             if (items.filter((item) => item.status === 'in_progress').length > 1) return { ok: false, summary: '清单状态有误', content: '同一时间最多一项 in_progress，请修正后重新提交完整清单' };
             ctx.emit({ type: 'plan', items });
             const done = items.filter((item) => item.status === 'completed').length;
-            return { ok: true, summary: `任务清单 ${done}/${items.length}`, content: `任务清单已更新（完成 ${done}/${items.length}）。` };
+            const note = blockedFailureCompletion ? `（提示：最近一次工具执行失败「${lastTool?.summary || '报错'}」，相关步骤未成功完成，已自动保持为 pending，请向用户如实说明）` : '';
+            return { ok: true, summary: `任务清单 ${done}/${items.length}`, content: `任务清单已更新（完成 ${done}/${items.length}）。${note}` };
         },
     },
     {

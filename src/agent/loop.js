@@ -174,6 +174,8 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         identity, sessionId, isShared, memorySource, currentUserMessage:lastUser,
         sharedCapabilities,
         secrets,
+        get callLog() { return callLog; },
+        get latestPlan() { return latestPlan; },
         emit: (ev) => {
             if (ev?.type === 'plan' && Array.isArray(ev.items)) latestPlan = ev.items;
             events.push(ev);
@@ -370,9 +372,13 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             }
             const isUnfinishedResponse = UNFINISHED_TEXT_RE.test(finalText);
             const hasQuestionToUser = /(?:请问|是否|要不要|需要我|请确认)[^。！？]*[？?线上\s]*$/.test(finalText.trim());
+            const lastToolFailed = callLog.length && callLog[callLog.length - 1]?.ok === false;
             if (finalText.trim() && !asked && !isUnfinishedResponse && !hasQuestionToUser && latestPlan.length && latestPlan.some((i) => i.status !== 'completed')
-                && callLog.length && callLog[callLog.length - 1]?.ok !== false) {
+                && callLog.length && !lastToolFailed) {
                 latestPlan = latestPlan.map((item) => ({ ...item, status: 'completed' }));
+                ctx.emit({ type: 'plan', items: latestPlan });
+            } else if ((isUnfinishedResponse || hasQuestionToUser || lastToolFailed) && latestPlan.length && latestPlan.every((i) => i.status === 'completed')) {
+                latestPlan = latestPlan.map((item, idx) => idx === latestPlan.length - 1 ? { ...item, status: 'pending' } : item);
                 ctx.emit({ type: 'plan', items: latestPlan });
             }
             break;
