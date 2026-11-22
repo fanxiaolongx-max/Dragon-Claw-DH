@@ -91,24 +91,22 @@ export async function sharedConversationRoutes(fastify) {
             reply.raw.write(`${JSON.stringify({ type: 'idle' })}\n`);
         }
 
-        const unsubscribe = share.subscribeSharedEvents(sessionId, (event) => {
-            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
-                reply.raw.write(`${JSON.stringify(event)}\n`);
-            }
-        });
-
-        const timer = setInterval(() => {
-            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
-                reply.raw.write(`${JSON.stringify({ type: 'ping' })}\n`);
-            } else {
-                clearInterval(timer);
-            }
-        }, 15000);
-
-        req.raw.on('close', () => {
+        let timer = null;
+        let unsubscribe = () => {};
+        const close = () => {
             clearInterval(timer);
             unsubscribe();
-        });
+            if (!reply.raw.writableEnded) reply.raw.end();
+        };
+        const send = (event) => {
+            if (reply.raw.destroyed || reply.raw.writableEnded) return close();
+            reply.raw.write(`${JSON.stringify(event)}\n`);
+            // 被移出共享 / 共享停止：告诉前端别再重连，并立刻断开
+            if (event.type === 'revoked') close();
+        };
+        unsubscribe = share.subscribeSharedEvents(sessionId, send, user);
+        timer = setInterval(() => send({ type: 'ping' }), 15000);
+        req.raw.on('close', close);
         return reply;
     });
     fastify.post('/session/:sessionId/leave', async (req) => share.leave({ user: me(req), sessionId: req.params.sessionId }));

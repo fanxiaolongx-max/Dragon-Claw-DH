@@ -204,9 +204,7 @@ export async function aiRoutes(fastify) {
         }
 
         const sendDone = (payload) => {
-            if (sharedTurn && sessionId) {
-                endLiveStream(sessionId, payload);
-            }
+            if (sharedTurn && sessionId) endLiveStream(sessionId, {}, ownerId);
             if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'done', ...payload })}\n`);
                 reply.raw.end();
@@ -350,17 +348,16 @@ export async function aiRoutes(fastify) {
             });
         } catch (err) {
             if (abort.signal.aborted) {
-                if (sharedTurn && sessionId) endLiveStream(sessionId);
+                if (sharedTurn && sessionId) endLiveStream(sessionId, {}, ownerId);
                 if (stream && !reply.raw.writableEnded) reply.raw.end();
                 return reply;
             }
             const message = err.message || 'AI 对话异常';
-            if (sharedTurn && sessionId) {
-                pushLiveEvent(sessionId, { type: 'error', error: message });
-                endLiveStream(sessionId, { error: message });
-            }
+            // write() 会同时广播给围观者；非流式请求单独推一次，然后再结束这一轮
+            if (stream) write({ type: 'error', error: message });
+            else if (sharedTurn && sessionId) pushLiveEvent(sessionId, { type: 'error', error: message });
+            if (sharedTurn && sessionId) endLiveStream(sessionId, { error: message }, ownerId);
             if (stream) {
-                write({ type: 'error', error: message });
                 reply.raw.end();
                 return reply;
             }

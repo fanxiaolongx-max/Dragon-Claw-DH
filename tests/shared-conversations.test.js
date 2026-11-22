@@ -90,8 +90,8 @@ test('共享对话：邀请、接受、同一段对话、署名、退出与停�
         assert.equal((await call('a00000001', 'GET', '/api/shared-conversations/mine')).data.items[0].ownerName, '张三');
 
         // 同一时间只让一个人提问：别人正在提问时返回 409
-        const { claimTurn } = await import('../src/services/share-service.js');
         const { getSession } = await import('../src/services/ai-service.js');
+        const { claimTurn } = await import('../src/services/share-service.js');
         await claimTurn(await getSession(sessionId), 'a00000001', '张三');
         const busy = await chat('b00000002', sessionId, '同时提问');
         assert.equal(busy.status, 409);
@@ -168,7 +168,7 @@ test('共享对话：邀请、接受、同一段对话、署名、退出与停�
 
         // Carol 从 reader 接收到事件
         let streamText = '';
-        while (!streamText.includes('双路供电')) {
+        while (!streamText.includes('netcare_query')) {
             const { value } = await reader.read();
             streamText += decoder.decode(value);
         }
@@ -189,13 +189,47 @@ test('共享对话：邀请、接受、同一段对话、署名、退出与停�
         assert.equal(catchupEv.text, '第一点：双路供电');
         await catchupReader.cancel();
 
-        // 结束流
-        endLiveStream(sessionId);
+        // 别人的请求收尾不能掐掉正在进行的流；进行中别人也不能抢着提问（即使 metadata 里没有记录）
+        endLiveStream(sessionId, {}, 'c00000003');
+        assert.ok(getLiveStream(sessionId), 'endLiveStream by another user must not end the stream');
+        await assert.rejects(claimTurn({ id: sessionId }, 'c00000003', '王五', '插队'), (err) => err.code === 409 || err.status === 409 || /正在这段共享对话里提问/.test(err.message));
+
+        // 追流补发的过程事件有上限，超长字段会截断
+        for (let i = 0; i < 250; i++) pushLiveEvent(sessionId, { type: 'tool_result', callId: `c${i}`, result: 'x'.repeat(i === 249 ? 9000 : 10) });
+        const capped = getLiveStream(sessionId).events;
+        assert.equal(capped.length, 200);
+        assert.equal(capped.at(-1).callId, 'c249');
+        assert.ok(capped.at(-1).result.length < 5000, 'large live event fields are truncated for catch-up');
+
+        // 结束流：围观者先收到 stream_finish（带完整文本），再收到 turn_ended，且只收到一次
+        endLiveStream(sessionId, {}, 'a00000001');
+        endLiveStream(sessionId, {}, 'a00000001');
         assert.equal(getLiveStream(sessionId), null);
+        let tail = '';
+        while (!tail.includes('turn_ended')) {
+            const { value } = await reader.read();
+            tail += decoder.decode(value);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+        const finishEv = tail.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === 'stream_finish');
+        assert.equal(finishEv.text, '第一点：双路供电');
+        assert.equal((tail.match(/turn_ended/g) || []).length, 1, 'turn_ended is emitted once');
         await reader.cancel();
+
+        // 发起者停止共享时，仍连着 /live 的成员会收到 revoked 并被断开
+        const kickRes = await fetch(`${url}/api/shared-conversations/session/${sessionId}/live`, { headers: { 'x-dh-user': 'c00000003' } });
+        const kickReader = kickRes.body.getReader();
+        await kickReader.read();
 
         // 发起者停止共享：链接失效，且双方侧栏共享列表不再保留已停止条目
         assert.deepEqual((await call('a00000001', 'POST', `/api/shared-conversations/session/${sessionId}/leave`, {})).data, { closed: true });
+        let kickText = '';
+        for (;;) {
+            const { value, done } = await kickReader.read();
+            if (value) kickText += decoder.decode(value);
+            if (done) break;
+        }
+        assert.match(kickText, /"revoked"/);
         assert.equal((await call('a00000001', 'GET', '/api/shared-conversations/mine')).data.items.length, 0, 'closed share must be removed from /mine');
         assert.equal((await call('c00000003', 'POST', `/api/shared-conversations/link/${token}`)).status, 409);
 

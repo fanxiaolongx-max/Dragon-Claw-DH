@@ -349,10 +349,12 @@ export async function leave({ user, sessionId }) {
     const share = access.share;
     if (access.role === 'owner') {
         await saveShare({ ...share, status: 'closed' });
+        kickLiveViewers(sessionId);
         return { closed: true };
     }
     const m = await getMember(share.id, user);
     await saveMember({ ...m, status: 'left', respondedAt: Date.now() });
+    kickLiveViewers(sessionId, user);
     return { left: true };
 }
 
@@ -362,6 +364,7 @@ export async function removeMember({ user, sessionId, target }) {
     if (same(target, user)) fail('不能移除自己，请使用「停止共享」');
     const m = await getMember(access.share.id, target);
     if (m) await saveMember({ ...m, status: 'removed', respondedAt: Date.now() });
+    kickLiveViewers(sessionId, target);
     return describe(access.share, user);
 }
 
@@ -436,59 +439,81 @@ export async function decorateMessages(items, { share, ownerId, viewer }) {
 }
 
 // ── 共享对话实时流广播（多端同步围观正在生成的回答） ──
+// 只存在本进程内存：提问者与围观者需连到同一个应用实例（当前单实例部署）。
+// 多实例时退化为：输入框仍按 metadata.activeTurn 锁定，回答完成后靠 /sync 拉取落库消息。
+const LIVE_MAX_EVENTS = 200;          // 追流时补发的过程事件上限（只留最近的）
+const LIVE_FIELD_MAX = 4000;          // 补发事件里单个字段的最大长度
+const TURN_HEARTBEAT_MS = 60_000;     // 长任务期间每分钟续期一次 activeTurn，免得 5 分钟后被别人插队
 const liveHub = new Map();
 const liveEmitter = new EventEmitter();
 liveEmitter.setMaxListeners(500);
+const emitLive = (sid, event) => liveEmitter.emit(`live:${sid}`, event);
+
+function compactLiveEvent(event) {
+    const out = {};
+    for (const [k, v] of Object.entries(event || {})) {
+        if (typeof v === 'string') out[k] = v.length > LIVE_FIELD_MAX ? `${v.slice(0, LIVE_FIELD_MAX)}…` : v;
+        else if (v && typeof v === 'object') {
+            let json = '';
+            try { json = JSON.stringify(v); } catch { json = ''; }
+            out[k] = json.length > LIVE_FIELD_MAX ? `${json.slice(0, LIVE_FIELD_MAX)}…` : v;
+        } else out[k] = v;
+    }
+    return out;
+}
+
+function touchLive(stream) {
+    const now = Date.now();
+    stream.touchedAt = now;
+    if (now - stream.heartbeatAt < TURN_HEARTBEAT_MS) return;
+    stream.heartbeatAt = now;
+    (async () => {
+        const fresh = await getSession(stream.sessionId);
+        const turn = fresh?.metadata?.activeTurn;
+        if (!turn || !same(turn.by, stream.by) || liveHub.get(stream.sessionId) !== stream) return;
+        await saveSession({ id: stream.sessionId, title: fresh.title, summary: fresh.summary, archived: fresh.archived, pinned: fresh.pinned, metadata: { activeTurn: { ...turn, at: now } } });
+    })().catch(() => {});
+}
 
 export function startLiveStream(sessionId, { by, name, question }) {
     if (!sessionId) return;
     const sid = String(sessionId);
-    const stream = {
-        sessionId: sid,
-        by,
-        name: name || by,
-        question: String(question || '').trim(),
-        startedAt: Date.now(),
-        fullText: '',
-        events: [],
-    };
+    const now = Date.now();
+    const stream = { sessionId: sid, by, name: name || by, question: String(question || '').trim(), startedAt: now, touchedAt: now, heartbeatAt: now, fullText: '', events: [] };
     liveHub.set(sid, stream);
-    liveEmitter.emit(`live:${sid}`, {
-        type: 'stream_start',
-        sessionId: sid,
-        by: stream.by,
-        name: stream.name,
-        question: stream.question,
-    });
+    emitLive(sid, { type: 'stream_start', sessionId: sid, by: stream.by, name: stream.name, question: stream.question });
 }
 
 export function pushLiveDelta(sessionId, delta) {
     if (!sessionId || !delta) return;
     const sid = String(sessionId);
     const stream = liveHub.get(sid);
-    if (stream) stream.fullText += delta;
-    liveEmitter.emit(`live:${sid}`, { type: 'delta', delta });
+    if (!stream) return;
+    stream.fullText += delta;
+    touchLive(stream);
+    emitLive(sid, { type: 'delta', delta });
 }
 
 export function pushLiveEvent(sessionId, event) {
-    if (!sessionId || !event) return;
+    if (!sessionId || !event?.type || ['ping', 'delta', 'done'].includes(event.type)) return;
     const sid = String(sessionId);
     const stream = liveHub.get(sid);
-    if (stream && !['ping', 'delta'].includes(event.type)) {
-        stream.events.push(event);
-    }
-    liveEmitter.emit(`live:${sid}`, event);
+    if (!stream) return;
+    stream.events.push(compactLiveEvent(event));
+    if (stream.events.length > LIVE_MAX_EVENTS) stream.events.splice(0, stream.events.length - LIVE_MAX_EVENTS);
+    touchLive(stream);
+    emitLive(sid, event);
 }
 
-export function endLiveStream(sessionId, result = {}) {
+/** 结束这一轮实时流；给了 by 时只结束这个人发起的那一轮（别人的请求收尾不能把正在进行的流掐掉） */
+export function endLiveStream(sessionId, { error = '' } = {}, by = null) {
     if (!sessionId) return;
     const sid = String(sessionId);
     const stream = liveHub.get(sid);
-    if (stream) {
-        liveEmitter.emit(`live:${sid}`, { type: 'stream_finish', ...result, text: stream.fullText });
-        liveHub.delete(sid);
-    }
-    liveEmitter.emit(`live:${sid}`, { type: 'turn_ended', sessionId: sid });
+    if (!stream || (by && !same(stream.by, by))) return;
+    liveHub.delete(sid);
+    emitLive(sid, { type: 'stream_finish', ...(error ? { error } : {}), text: stream.fullText });
+    emitLive(sid, { type: 'turn_ended', sessionId: sid });
 }
 
 export function getLiveStream(sessionId) {
@@ -496,22 +521,32 @@ export function getLiveStream(sessionId) {
     const sid = String(sessionId);
     const stream = liveHub.get(sid);
     if (!stream) return null;
-    if (Date.now() - stream.startedAt > TURN_TTL_MS) {
+    // 按最后一次输出判断失联，长任务只要还在出事件就一直有效
+    if (Date.now() - stream.touchedAt > TURN_TTL_MS) {
         liveHub.delete(sid);
+        emitLive(sid, { type: 'turn_ended', sessionId: sid, stale: true });
         return null;
     }
     return stream;
 }
 
-export function subscribeSharedEvents(sessionId, listener) {
+/** 订阅一段共享对话的实时事件；成员被移除、退出或共享被停止时收到 { type: 'revoked' } */
+export function subscribeSharedEvents(sessionId, listener, user = null) {
     if (!sessionId) return () => {};
-    const channel = `live:${sessionId}`;
-    liveEmitter.on(channel, listener);
-    return () => liveEmitter.off(channel, listener);
+    const sid = String(sessionId);
+    const onKick = (target) => { if (!target || (user && same(target, user))) listener({ type: 'revoked' }); };
+    liveEmitter.on(`live:${sid}`, listener);
+    liveEmitter.on(`kick:${sid}`, onKick);
+    return () => { liveEmitter.off(`live:${sid}`, listener); liveEmitter.off(`kick:${sid}`, onKick); };
 }
+const kickLiveViewers = (sessionId, target = null) => liveEmitter.emit(`kick:${String(sessionId)}`, target);
 
-/** 共享对话同一时间只让一个人提问：记在会话 metadata 里（多实例也能看到），5 分钟没结束视为已失效 */
+/** 共享对话同一时间只让一个人提问：记在会话 metadata 里（多实例也能看到），5 分钟没有任何进展视为已失效 */
 export async function claimTurn(session, user, name, question = '') {
+    const live = getLiveStream(session.id);
+    if (live && !same(live.by, user)) {
+        fail(`${live.name || live.by} 正在这段共享对话里提问，请等这一轮回答完成后再发送`, 409);
+    }
     const fresh = await getSession(session.id);
     const turn = fresh?.metadata?.activeTurn;
     if (turn && !same(turn.by, user) && Date.now() - Number(turn.at || 0) < TURN_TTL_MS) {
@@ -520,7 +555,7 @@ export async function claimTurn(session, user, name, question = '') {
     await saveSession({ id: session.id, title: fresh.title, summary: fresh.summary, archived: fresh.archived, pinned: fresh.pinned, metadata: { activeTurn: { by: user, name: name || user, at: Date.now(), question: clean(question, 400) } } });
 }
 export async function releaseTurn(sessionId, user) {
-    endLiveStream(sessionId);
+    endLiveStream(sessionId, {}, user);
     const fresh = await getSession(sessionId);
     const turn = fresh?.metadata?.activeTurn;
     if (!turn || !same(turn.by, user)) return;

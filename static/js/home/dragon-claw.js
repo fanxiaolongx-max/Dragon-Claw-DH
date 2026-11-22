@@ -135,6 +135,8 @@
     const MODEL_STORAGE_KEY = 'dragon_claw_model';
     const LAST_CHAT_KEY = 'dragon_claw_last_chat'; // 本浏览器里当前用户最近一次对话的 sessionId（服务端会话不分用户，不能从列表里猜）
 
+    // 共享对话：正在围观的别人那一轮（见「共享对话实时流多端同步」）
+    let sharedLiveState = null;
     const state = {
         messages: [],
         attachments: [], // 输入框上方待发送的附件：{ id, name, size, status: uploading | ready | error, path }
@@ -1467,7 +1469,7 @@
         const readyAttachments = !external.active && state.attachments.some(item => item.status === 'ready');
         el.send.disabled = (state.restoring && !isSideCommand(el.input.value)) || (!generating && !el.input.value.trim() && !readyAttachments)
             || (external.active && (!external.composer?.canSend || external.sending))
-            || Boolean(sharedLiveState?.busy);
+            || (!generating && Boolean(sharedLiveState?.busy));
     }
 
     function applyPlaceholder() {
@@ -2636,16 +2638,26 @@
     }
 
     // 共享对话里其他成员的新消息：直接接在当前对话末尾（正在回复或恢复中时稍后再接）
-    async function appendSharedMessages(sessionId) {
+    // 串行执行：一轮结束时 stream_finish / turn_ended / 轮询可能同时触发，并发拉取会把同一批消息插两遍
+    let sharedAppendChain = Promise.resolve(false);
+    function appendSharedMessages(sessionId) {
+        const run = sharedAppendChain.then(() => appendSharedMessagesNow(sessionId), () => appendSharedMessagesNow(sessionId));
+        sharedAppendChain = run.catch(() => false);
+        return run;
+    }
+
+    async function appendSharedMessagesNow(sessionId) {
         if (external.active || state.sessionId !== sessionId || state.controller || state.restoring) return false;
+        // 别人这一轮还在实时生成：先不插落库消息（会插到实时气泡后面、顺序错乱），等这一轮结束统一替换
+        if (sharedLiveState?.busy && sharedLiveState.sessionId === sessionId) return false;
         let page;
         try { page = await fetchHistoryPage(sessionId); } catch { return false; }
         if (external.active || state.sessionId !== sessionId || state.controller || state.restoring) return false;
+        if (sharedLiveState?.busy && sharedLiveState.sessionId === sessionId) return false;
         const rendered = new Set([...el.thread.querySelectorAll('[data-msg-id]')].map(node => node.dataset.msgId));
         const fresh = page.items.filter(item => !rendered.has(String(item.id)) && (item.events || []).some(event => event?.type === 'shared_author'));
         if (!fresh.length) return true;
-        const liveBubble = el.thread.querySelector('[data-shc-live-ai]');
-        if (liveBubble) liveBubble.remove();
+        el.thread.querySelectorAll('[data-shc-live]').forEach(node => node.remove());
         const nearBottom = el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight < 160;
         batchMessages(() => fresh.forEach(item => {
             addHistoryMessage(item.role, String(item.content), item.events, item);
@@ -2656,7 +2668,8 @@
     }
 
     // ── 共享对话实时流多端同步（被共享者围观他人提问与流式回答） ──
-    let sharedLiveState = null;
+    // 围观时插入的提问/回答气泡都带 data-shc-live，这一轮结束后由 appendSharedMessages 用落库消息整体替换，避免重复上屏
+    // （sharedLiveState 声明在文件顶部，初始化期间 updateSendButton 就会读它）
 
     function isSameUser(a, b) {
         const clean = u => {
@@ -2677,119 +2690,115 @@
                 el.form.prepend(bar);
             }
             bar.innerHTML = `<span class="shc-live" aria-hidden="true"></span><span><b>${escapeHtml(name)}</b> 正在提问，AI 正在回答，多端实时同步中...</span>`;
-            if (sharedLiveState) sharedLiveState.busy = true;
-            else sharedLiveState = { busy: true, author: turnInfo.by, authorName: name };
+            if (sharedLiveState) Object.assign(sharedLiveState, { busy: true, author: turnInfo.by, authorName: name });
+            else sharedLiveState = { sessionId: state.sessionId, busy: true, author: turnInfo.by, authorName: name, at: Date.now() };
         } else {
             bar?.remove();
-            if (sharedLiveState) sharedLiveState.busy = false;
         }
         applyPlaceholder();
         updateSendButton();
     }
 
+    function resetSharedLive() {
+        if (sharedLiveState?.renderer) sharedLiveState.renderer.finish();
+        sharedLiveState = null;
+        updateSharedTurnNotice({ busy: false });
+    }
+
+    // 提问者的问题还没上屏（不是最后一条消息）就补一条带署名的提问
+    function ensureLiveQuestion(question, author, authorName) {
+        const text = String(question || '').trim();
+        if (!text || el.thread.querySelector('[data-shc-live="user"]')) return;
+        const last = [...el.thread.querySelectorAll('.dc-msg')].filter(node => !node.matches('[data-shc-live="ai"]')).at(-1);
+        if (last?.classList.contains('dc-msg--user') && last.querySelector('.dc-msg-body')?.textContent?.trim() === text) return;
+        const liveAi = el.thread.querySelector('[data-shc-live="ai"]');
+        const msg = addMessage('user', text, liveAi ? { before: liveAi } : {});
+        msg.dataset.shcLive = 'user';
+        window.HomeSharedConversations?.decorateMessage?.(msg, [{ type: 'shared_author', author, name: authorName }]);
+    }
+
+    // 围观端只展示过程（思考、工具、状态）；审批按钮等只给提问者本人
+    const LIVE_ACTIVITY_TYPES = new Set(['thinking', 'tool_start', 'tool_result', 'compaction']);
+    function feedLiveActivity(activity, event) {
+        if (!activity || !event) return;
+        if (event.type === 'status') activity.status(event.status);
+        else if (LIVE_ACTIVITY_TYPES.has(event.type)) activity.event(event);
+    }
+
+    function startLiveAnswer({ author, authorName, text = '', events = [] }) {
+        // 追流（重连 / 中途加入）总是从头重建回答气泡，免得已生成的文字被追加两遍
+        el.thread.querySelector('[data-shc-live="ai"]')?.remove();
+        const liveMsg = addMessage('ai', '');
+        liveMsg.dataset.shcLive = 'ai';
+        window.HomeSharedConversations?.decorateMessage?.(liveMsg, [{ type: 'shared_author', author, name: authorName }]);
+        const activity = showThinking(liveMsg);
+        const renderer = createRenderer(liveMsg, activity);
+        sharedLiveState = { sessionId: state.sessionId, author, authorName, busy: true, liveMsg, activity, renderer, at: Date.now() };
+        for (const ev of events || []) feedLiveActivity(activity, ev);
+        if (text) renderer.append(text);
+    }
+
+    async function finishLiveAnswer(sessionId, { text, error } = {}) {
+        const s = sharedLiveState;
+        sharedLiveState = null;
+        updateSharedTurnNotice({ busy: false });
+        if (s?.renderer) s.renderer.finish(text ?? s.renderer.current?.());
+        else s?.activity?.finish();
+        s?.liveMsg?.classList.remove('is-streaming');
+        const replaced = await appendSharedMessages(sessionId);
+        if (error) {
+            const target = (!replaced && s?.liveMsg?.isConnected) ? s.liveMsg : [...el.thread.querySelectorAll('.dc-msg--ai')].at(-1);
+            target?.querySelector('.dc-msg-body')?.insertAdjacentHTML('beforeend', `<p class="dc-shared-live-error">⚠️ ${escapeHtml(error)}</p>`);
+        }
+    }
+
     function handleSharedLiveEvent(event) {
         if (!event || state.controller) return;
+        // 正在渲染这段对话的历史：先不画实时气泡（历史渲染完会强制重连拿追流内容）
+        if (state.restoring && !['turn_ended', 'turn_idle', 'idle', 'stream_finish'].includes(event.type)) return;
         const sessionId = state.sessionId;
         if (!sessionId || !window.HomeSharedConversations?.isShared?.(sessionId)) return;
+        if (sharedLiveState && sharedLiveState.sessionId !== sessionId) resetSharedLive();
+        if (event.by && isSameUser(event.by, currentUser())) return;
 
-        const myUser = currentUser();
-        if (event.by && isSameUser(event.by, myUser)) return;
-
-        if (event.type === 'stream_start' || event.type === 'catchup') {
-            const author = event.by;
-            const authorName = event.name || author;
-            const question = event.question;
-
-            // 1. 如果提问者的问题还没上屏，补充上屏
-            if (question) {
-                const userMessages = [...el.thread.querySelectorAll('.dc-msg--user')];
-                const lastUserBody = userMessages.at(-1)?.querySelector('.dc-msg-body')?.textContent?.trim();
-                if (lastUserBody !== question.trim()) {
-                    const uMsg = addMessage('user', question);
-                    window.HomeSharedConversations?.decorateMessage?.(uMsg, [{ type: 'shared_author', author, name: authorName }]);
-                }
+        switch (event.type) {
+            case 'stream_start':
+            case 'catchup': {
+                const author = event.by;
+                const authorName = event.name || author;
+                updateSharedTurnNotice({ by: author, name: authorName, busy: true });
+                const fresh = event.type === 'stream_start' || !sharedLiveState?.renderer || event.text || event.events?.length;
+                if (fresh) startLiveAnswer({ author, authorName, text: event.text, events: event.events });
+                ensureLiveQuestion(event.question, author, authorName);
+                scrollThread(true);
+                return;
             }
-
-            // 2. 创建或更新实时流气泡
-            let liveMsg = el.thread.querySelector('[data-shc-live-ai]');
-            if (!liveMsg) {
-                liveMsg = addMessage('ai', '');
-                liveMsg.dataset.shcLiveAi = 'true';
-                liveMsg.classList.add('is-streaming');
-                window.HomeSharedConversations?.decorateMessage?.(liveMsg, [{ type: 'shared_author', author, name: authorName }]);
-                const liveActivity = createActivity(liveMsg);
-                const liveRenderer = createRenderer(liveMsg, liveActivity);
-                sharedLiveState = {
-                    sessionId,
-                    author,
-                    authorName,
-                    busy: true,
-                    liveMsg,
-                    activity: liveActivity,
-                    renderer: liveRenderer,
-                };
-            } else if (sharedLiveState) {
-                sharedLiveState.busy = true;
-            }
-
-            updateSharedTurnNotice({ by: author, name: authorName, busy: true });
-
-            if (event.text && sharedLiveState?.renderer) {
-                sharedLiveState.renderer.append(event.text);
-            }
-            if (Array.isArray(event.events) && sharedLiveState?.activity) {
-                for (const ev of event.events) sharedLiveState.activity.event(ev);
-            }
-            scrollThread(true);
-            return;
-        }
-
-        if (event.type === 'delta') {
-            if (sharedLiveState?.renderer) {
-                sharedLiveState.renderer.append(event.delta);
-                sharedLiveState.activity?.writing();
-            }
-            return;
-        }
-
-        if (event.type === 'status' || event.type === 'tool_start' || event.type === 'tool_result' || event.type === 'reasoning') {
-            if (sharedLiveState?.activity) {
-                sharedLiveState.activity.event(event);
-            }
-            return;
-        }
-
-        if (event.type === 'stream_finish' || event.type === 'turn_ended' || event.type === 'done') {
-            if (sharedLiveState) {
-                const s = sharedLiveState;
-                sharedLiveState = null;
-                const finalText = s.renderer?.finish(event.text || s.renderer.current()) || '';
-                s.activity?.finish();
-                s.liveMsg?.classList.remove('is-streaming');
-                if (s.liveMsg) delete s.liveMsg.dataset.shcLiveAi;
-                if (finalText) state.messages.push({ role: 'model', content: finalText });
-            }
-            updateSharedTurnNotice({ busy: false });
-            setTimeout(() => { appendSharedMessages(sessionId); }, 300);
-            return;
-        }
-
-        if (event.type === 'error') {
-            if (sharedLiveState) {
-                const s = sharedLiveState;
-                sharedLiveState = null;
-                s.renderer?.finish();
-                s.activity?.finish();
-                s.liveMsg?.querySelector('.dc-msg-body')?.insertAdjacentHTML('beforeend', `<p style="color:var(--v2-danger,#f04438);margin-top:6px">⚠️ ${escapeHtml(event.error || '回答中断')}</p>`);
-                s.liveMsg?.classList.remove('is-streaming');
-                if (s.liveMsg) delete s.liveMsg.dataset.shcLiveAi;
-            }
-            updateSharedTurnNotice({ busy: false });
-            return;
-        }
-
-        if (event.type === 'idle') {
-            updateSharedTurnNotice({ busy: false });
+            case 'turn_busy':
+                // /sync 轮询发现有人在提问（/live 没连上时的兜底）：只锁输入框、补上提问
+                updateSharedTurnNotice({ by: event.by, name: event.name || event.by, busy: true });
+                ensureLiveQuestion(event.question, event.by, event.name || event.by);
+                return;
+            case 'delta':
+                sharedLiveState?.renderer?.append(event.delta);
+                return;
+            case 'error':
+                if (sharedLiveState) sharedLiveState.error = event.error || '回答中断';
+                return;
+            case 'stream_finish':
+                if (sharedLiveState) finishLiveAnswer(sessionId, { text: event.text, error: event.error || sharedLiveState.error });
+                return;
+            case 'turn_idle':
+                // 轮询结果早于这一轮开始（请求发出后才收到 stream_start）：过时信息，忽略
+                if (event.since && sharedLiveState && sharedLiveState.at > event.since) return;
+                if (sharedLiveState) finishLiveAnswer(sessionId, { error: sharedLiveState.error });
+                return;
+            case 'turn_ended':
+            case 'idle':
+                // 没收到 stream_finish（断线、提问者失联、服务重启）：同样收尾并用落库消息对齐
+                if (sharedLiveState) finishLiveAnswer(sessionId, { error: sharedLiveState.error });
+                return;
+            default:
+                feedLiveActivity(sharedLiveState?.activity, event);
         }
     }
 
@@ -3103,8 +3112,7 @@
     async function openSession(item) {
         if (!item || state.controller) return;
         const epoch = ++resumeEpoch;
-        updateSharedTurnNotice({ busy: false });
-        if (sharedLiveState) sharedLiveState = null;
+        resetSharedLive();
         window.DragonHtmlSwarm?.deactivate?.();
         window.HomeAgentDiscussion?.activateSession?.(item.id,{group:item.discussionMode==='group'});
         closeSessionPicker();
@@ -3132,6 +3140,8 @@
             const local = readLastChat();
             const agent = item.agent || (local?.sessionId === item.id ? local.agent : null);
             await resumeChat({ sessionId: item.id, discussionMode:item.discussionMode, items, cursor: page.cursor, hasMore: page.hasMore, total: page.total, time: formatChatTime(items[items.length - 1].created_at), agent }, epoch);
+            // 历史渲染完再接共享对话的实时流：追流内容要接在这段对话的末尾
+            if (epoch === resumeEpoch && state.sessionId === item.id) window.HomeSharedConversations?.connectLive?.(item.id, true);
         } catch {
             if (epoch !== resumeEpoch) return;
             finishHistoryLoading(false);
@@ -3914,8 +3924,7 @@
         finishHistoryLoading(false);
         state.restoring = false;
         el.input.disabled = false;
-        updateSharedTurnNotice({ busy: false });
-        if (sharedLiveState) sharedLiveState = null;
+        resetSharedLive();
         state.controller?.abort();
         if (root) {
             // 先重置会话再选目录：resetSession 会让进行中的选择失效，顺序反过来目录就选不上
