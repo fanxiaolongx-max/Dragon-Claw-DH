@@ -733,6 +733,11 @@ test('消息中心 AI 摘要：警告级消息后台生成一句话摘要，所�
     await pushAlert(['dave', 'erin'], { severity: 'error', title: '模型故障：主模型连续失败', message: 'HTTP 502，token=sk-abcdefghijklmnop1234 已切换备用方案', detail: { profile: 'main' } });
     await pushAlert(['dave'], { severity: 'info', title: '定时任务已完成：日报', message: '已生成' });
     await drainAlertAnalysis();
+    const warnings = (await call('dave', 'GET', '/api/alert-center/events?warnings=1&limit=1')).data.events;
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].severity, 'error');
+    const older = (await call('dave', 'GET', '/api/alert-center/events?warnings=1&limit=1&before=' + warnings[0].id)).data.events;
+    assert.equal(older[0].severity, 'warn');
     const prompts = mock.aiRequests.slice(before).filter((r) => !r.stream);
     assert.equal(prompts.length, 1, '只分析警告及以上的消息');
     assert.doesNotMatch(JSON.stringify(prompts[0].messages), /sk-abcdefghijklmnop1234/, '口令先脱敏再交给模型');

@@ -106,8 +106,13 @@ export async function pushAdminAlert(input) {
     }
 }
 
-export async function listAlerts(user, { status = '', type = '', limit = 120 } = {}) {
+export async function listAlerts(user, { status = '', type = '', before, warningsOnly, limit = 120 } = {}) {
     let items = await loadForUser(user);
+    if (before) {
+        const index = items.findIndex(item => item.id === before);
+        items = index < 0 ? [] : items.slice(index + 1);
+    }
+    if (warningsOnly) items = items.filter(item => ['warn', 'error', 'critical'].includes(item.severity));
     if (status === 'unread') items = items.filter((x) => x.status === 'unread');
     if (TYPES.has(type)) items = items.filter((x) => x.event_type === type);
     return { events: items.slice(0, Math.min(Math.max(Number(limit) || 120, 1), MAX_ITEMS)) };

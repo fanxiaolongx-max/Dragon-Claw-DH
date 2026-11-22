@@ -10,7 +10,7 @@ export async function alertCenterRoutes(fastify) {
     const me = (req) => req.userIdentity.username;
     fastify.addHook('onSend', async (_req, reply, payload) => { reply.header('Cache-Control', 'no-store'); return payload; });
     fastify.get('/summary', async (req) => alertSummary(me(req)));
-    fastify.get('/events', async (req) => listAlerts(me(req), { status: String(req.query?.status || ''), type: String(req.query?.type || ''), limit: req.query?.limit }));
+    fastify.get('/events', async (req) => listAlerts(me(req), { status: String(req.query?.status || ''), type: String(req.query?.type || ''), before: req.query?.before, warningsOnly: req.query?.warnings === '1', limit: req.query?.limit }));
     fastify.put('/events/read', async (req) => markAlertsRead(me(req), Array.isArray(req.body?.ids) ? req.body.ids : []));
     fastify.put('/events/read-all', async (req) => markAlertsRead(me(req)));
     fastify.put('/events/archive-all', async (req) => removeAlerts(me(req)));

@@ -497,7 +497,9 @@
         toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'dc-ghost-btn'; toggle.id = 'dcTerminalToggle';
         toggle.setAttribute('aria-pressed', 'false');
-        toggle.textContent = L('终端', 'Terminal');
+        toggle.innerHTML = `<svg class="dc-btn-ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="m4.5 6 2.5 2-2.5 2M9 10.5h3"/></svg><span class="dc-btn-label">${esc(L('终端', 'Terminal'))}</span>`;
+        toggle.title = L('终端', 'Terminal');
+        toggle.setAttribute('aria-label', L('终端', 'Terminal'));
         toggle.hidden = !isSuperAdmin(); // 基座版规范：非超管用户不显示也不允许用户开启终端
         browserToggle.after(toggle);
 
@@ -597,7 +599,15 @@
         window.addEventListener('dragon-claw:command', event => onCommand(event.detail));
         new MutationObserver(() => { for (const tab of tabs.values()) if (tab.term) tab.term.options.theme = theme(); })
             .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-        window.addEventListener('tools:languagechange', () => { toggle.textContent = L('终端', 'Terminal'); renderMenu(); renderTabs(); });
+        window.addEventListener('tools:languagechange', () => {
+            const termLabel = toggle.querySelector('.dc-btn-label');
+            if (termLabel) termLabel.textContent = L('终端', 'Terminal');
+            else toggle.textContent = L('终端', 'Terminal');
+            toggle.title = L('终端', 'Terminal');
+            toggle.setAttribute('aria-label', L('终端', 'Terminal'));
+            renderMenu();
+            renderTabs();
+        });
         window.matchMedia('(max-width: 860px)').addEventListener('change', event => { if (event.matches) close(); });
         // 首页其他模式（工具页、频道）遮住对话时一并收起
         for (const name of ['home:hub', 'home:tool-frame']) window.addEventListener(name, event => { if (event.detail?.open) close(); });

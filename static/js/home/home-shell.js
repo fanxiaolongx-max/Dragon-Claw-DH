@@ -1748,7 +1748,8 @@
     });
 
     // ── 消息中心：主区整页显示平台告警（沿用 /api/alert-center） ──
-    const msg = { el: null, filter: 'all', events: [], error: '', expanded: new Set() };
+    const MSG_PAGE_SIZE = 20;
+    const msg = { cursors: [''], hasMore: false, seq: 0, loading: false, el: null, filter: 'all', events: [], error: '', expanded: new Set() };
     const expediteBanner = { el: null, items: [], hiddenInSession: false, loading: false, lastUnread: -1 };
     const isExpediteAlert = event => Boolean(event && (event.object_type === 'expedite_notify' || event.source === 'expedite'));
     function msgHeaders(json) { return { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(typeof getAuthHeaderForNav === 'function' ? getAuthHeaderForNav() : {}) }; }
@@ -1851,22 +1852,40 @@
             expediteBanner.loading = false;
         }
     }
-    async function loadMessages(autoReadIds = null) {
+    async function loadMessages(autoReadIds = null, cursors = ['']) {
+        const seq = ++msg.seq;
+        msg.cursors = cursors;
         msg.error = '';
-        const params = new URLSearchParams({ limit: '120' });
+        msg.loading = true;
+        msg.hasMore = false;
+        msg.events = [];
+        renderMessages();
+        const params = new URLSearchParams({ limit: String(MSG_PAGE_SIZE + 1) });
+        if (cursors.at(-1)) params.set('before', cursors.at(-1));
         if (msg.filter === 'unread') params.set('status', 'unread');
+        if (msg.filter === 'warn') params.set('warnings', '1');
         try {
             const res = await fetch(`/api/alert-center/events?${params}`, { headers: msgHeaders(), cache: 'no-store' });
-            const data = await res.json().catch(() => ({}));
+            const data = await res.json();
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-            msg.events = (data.events || []).filter(event => msg.filter !== 'warn' || ['warn', 'error', 'critical'].includes(event.severity));
+            if (seq !== msg.seq) return;
+            const events = data.events || [];
             if (Array.isArray(autoReadIds) && autoReadIds.length) {
+                // 从催办横幅进入时，定位到第一条相关消息所在页。
+                if (events.length > MSG_PAGE_SIZE && !events.slice(0, MSG_PAGE_SIZE).some(event => autoReadIds.includes(event.id))) {
+                    return loadMessages(autoReadIds, [...cursors, events[MSG_PAGE_SIZE - 1].id]);
+                }
                 await markExpediteAlertsRead(autoReadIds);
-                msg.events.forEach(event => {
-                    if (autoReadIds.includes(event.id)) event.status = 'read';
-                });
+                if (seq !== msg.seq) return;
+                for (const event of events) if (autoReadIds.includes(event.id)) event.status = 'read';
             }
-        } catch (error) { msg.error = error.message; msg.events = []; }
+            msg.events = events.slice(0, MSG_PAGE_SIZE);
+            msg.hasMore = events.length > MSG_PAGE_SIZE;
+        } catch (error) {
+            if (seq !== msg.seq) return;
+            msg.error = error.message;
+        }
+        msg.loading = false;
         renderMessages();
     }
     function renderMessages() {
@@ -1881,7 +1900,7 @@
             void key;
         }
         const severityIcon = level => (['warn', 'error', 'critical'].includes(level) ? 'alert' : 'info');
-        const list = msg.error ? `<div class="v2-discover-empty">${esc(t('loadFailed', { e: msg.error }))}</div>`
+        const list = msg.loading ? '<div class="v2-discover-empty">…</div>' : msg.error ? `<div class="v2-discover-empty">${esc(t('loadFailed', { e: msg.error }))}</div>`
             : !msg.events.length ? `<div class="v2-discover-empty">${esc(t('noMessages'))}</div>`
                 : groups.map(group => `<section><h3>${esc(`${group.day} ${group.first}`)}</h3>${group.items.map(event => {
                     const href = /^https?:\/\//.test(event.source || '') ? event.source : '';
@@ -1893,7 +1912,16 @@
                         ${href ? `<a class="v2-account-btn" href="${esc(href)}" data-msg-read>${esc(t('view'))}</a>` : event.status === 'unread' ? `<button type="button" class="v2-account-btn" data-msg-read>${esc(t('markRead'))}</button>` : ''}
                     </article>`;
                 }).join('')}</section>`).join('');
-        msg.el.querySelector('.v2-msg-list').innerHTML = list;
+        const listEl = msg.el.querySelector('.v2-msg-list');
+        listEl.innerHTML = list;
+        listEl.scrollTop = 0;
+        const pager = msg.el.querySelector('[data-msg-pages]');
+        const en = lang() === 'en-US';
+        pager.hidden = msg.loading || !(msg.error || msg.hasMore || msg.cursors.length > 1);
+        pager.innerHTML = pager.hidden ? '' : `
+            <button class="v2-account-btn" data-msg-prev ${msg.cursors.length <= 1 ? 'disabled' : ''}>${en ? 'Previous' : '上一页'}</button>
+            <span aria-live="polite">${en ? 'Page ' + msg.cursors.length : '第 ' + msg.cursors.length + ' 页'}</span>
+            ${msg.error ? `<button class="v2-account-btn" data-msg-retry>${en ? 'Retry' : '重试'}</button>` : `<button class="v2-account-btn" data-msg-next ${msg.hasMore ? '' : 'disabled'}>${en ? 'Next' : '下一页'}</button>`}`;
         msg.el.querySelectorAll('[data-msg-filter]').forEach(btn => btn.setAttribute('aria-selected', String(btn.dataset.msgFilter === msg.filter)));
         fillIcons(msg.el);
     }
@@ -1906,6 +1934,11 @@
             msg.el.setAttribute('aria-label', t('messages'));
             document.body.appendChild(msg.el);
             msg.el.addEventListener('click', async event => {
+                if (!msg.loading) {
+                    if (event.target.closest('[data-msg-prev]') && msg.cursors.length > 1) return loadMessages(null, msg.cursors.slice(0, -1));
+                    if (event.target.closest('[data-msg-next]') && msg.hasMore) return loadMessages(null, [...msg.cursors, msg.events.at(-1).id]);
+                    if (event.target.closest('[data-msg-retry]')) return loadMessages(null, msg.cursors);
+                }
                 const filter = event.target.closest('[data-msg-filter]');
                 if (filter) { msg.filter = filter.dataset.msgFilter; loadMessages(); return; }
                 if (event.target.closest('[data-msg-close]')) return closeMessages();
@@ -1945,7 +1978,8 @@
         msg.el.innerHTML = `<header><span></span><h2>${esc(t('messages'))}</h2><button type="button" class="v2-icon-btn" data-msg-close aria-label="×"><span class="v2-ico" data-icon="close"></span></button></header>
             <div class="v2-msg-toolbar"><div class="v2-seg">${[['all', t('filterAll')], ['unread', t('filterUnread')], ['warn', t('filterWarn')]].map(([id, label]) => `<button type="button" role="tab" data-msg-filter="${id}" aria-selected="${msg.filter === id}">${esc(label)}</button>`).join('')}</div><span></span><button type="button" class="v2-account-btn" data-msg-all>${esc(t('markAllRead'))}</button><button type="button" class="v2-account-btn" data-msg-clear>${esc(t('clearAll'))}</button></div>
             <div class="v2-msg-shares" hidden></div>
-            <div class="v2-msg-list"><div class="v2-discover-empty">…</div></div>`;
+            <div class="v2-msg-list"><div class="v2-discover-empty">…</div></div>
+            <div class="v2-msg-pages" data-msg-pages hidden></div>`;
         fillIcons(msg.el);
         // 共享对话邀请：消息中心顶部（shared-conversations.js）
         window.HomeSharedConversations?.renderInto?.(msg.el.querySelector('.v2-msg-shares'));
