@@ -1,14 +1,8 @@
 {
   "zh": [
-    "新增极窄与重叠碰撞自适应降级机制：当右侧工作区或浏览器侧边栏过宽导致中间对话顶栏被极度挤压、或标题与功能按钮发生重叠碰撞时，操作区自动丝滑收拢为优雅的「更多操作（···）」毛玻璃下拉菜单，完整保留工作区、浏览器、终端、日志快照与状态指示，彻底杜绝文字与图标重叠。",
-    "对话顶栏功能区（工作区、浏览器、终端、导出日志、新对话、浏览工具）全面升级矢量图标与平滑过渡动画；在右侧工作区、内置浏览器、终端侧边栏展开或窄屏挤压时，自适应收拢为优雅美观的纯图标模式，彻底杜绝换行折叠与遮挡对话内容。",
-    "共享对话新增外部技能/工具差异感知与私有 Skill 授权审批：成员可查看缺失的能力提示并向归属人发起申请，审批通过后仅面向当前共享对话成员导入技能并支持消息与横幅通知。",
-    "优化技能、插件与工具中心及保险箱体验：全员开放标记与筛选仅对超级管理员展示，修复搜索框圆角聚焦裁剪问题，修复切换账号时保险箱状态未即时刷新的问题。"
+    "修复对话顶栏「···」更多操作菜单：窗口或侧栏收窄后再拉宽时，按钮现在会自动恢复显示（之前会一直收在「···」里直到刷新）；收起时机改为按标题保底宽度判断，标题不再被挤得过窄；管理员的「终端」入口也会出现在「···」菜单中。"
   ],
   "en": [
-    "Introduced ultra-narrow and collision degradation dropdown: when sidebars heavily squeeze the center chat column or when the title collides with buttons, actions automatically collapse into an elegant More Actions (···) glassmorphism menu with zero text overlap.",
-    "Refined chat action buttons (workspace, browser, terminal, export log, new chat, browse tools) with vector icons and smooth transition animations; auto-collapsing to compact icon mode without multi-line wrapping when squeezed by sidebars or narrow viewports.",
-    "Added shared-conversation Skill/Tool capability awareness and private Skill approval workflow with member-scoped grants, alias handling, banners, and platform notifications.",
-    "Restricted shared/unshared badges and filters in Skills, Plugins, and Tools hubs to superadmins, fixed rounded search input clipping, and fixed Vault state refresh on account switch."
+    "Fixed the chat header \"···\" more-actions menu: buttons now come back automatically when the window or sidebar is widened again (previously they stayed collapsed until reload); collapsing is based on a minimum title width so the title is no longer squeezed too far; the Terminal entry for admins now appears in the menu."
   ]
 }
