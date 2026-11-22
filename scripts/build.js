@@ -124,6 +124,11 @@ for (const must of ['app.json', 'run.js', 'package.json', 'package-lock.json', '
 }
 const bad = names.filter((n) => n.includes('\\') || /(^|\/)\.env(\.|$)/.test(n) || n.startsWith('node_modules/') || n.startsWith('scripts/'));
 if (bad.length) { console.error(`❌ 构建中止：包内出现禁止入包的路径：${bad.slice(0, 5).join(', ')}`); process.exit(1); }
+const nonAscii = names.filter((n) => /[^\x00-\x7F]/.test(n));
+if (nonAscii.length) {
+    console.error(`❌ 构建中止：包内包含非 ASCII 路径，会导致平台解压失败 (Malformed input or input contains unmappable characters)：\n${nonAscii.map((n) => `  - ${n}`).join('\n')}`);
+    process.exit(1);
+}
 if (zipBuffer.length > MAX_ZIP_MB * 1024 * 1024) {
     console.error(`❌ 构建中止：ZIP ${(zipBuffer.length / 1048576).toFixed(1)}MB 超过上限 ${MAX_ZIP_MB}MB（可用 DH_MAX_ZIP_MB 调整）`);
     process.exit(1);

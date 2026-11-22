@@ -494,7 +494,9 @@ const YUXIANG_TOTALS = [
 const YUXIANG_MAP_TAG = /\[Map:\s*(.+?)\]/;
 
 async function openYuxiangTemplate() {
-    const templatePath = path.join(TEMPLATES_DIR, '每月赛马-分网络.xlsx');
+    const primaryPath = path.join(TEMPLATES_DIR, 'monthly-network-race.xlsx');
+    const legacyPath = path.join(TEMPLATES_DIR, '每月赛马-分网络.xlsx');
+    const templatePath = fs.existsSync(primaryPath) ? primaryPath : legacyPath;
     if (!fs.existsSync(templatePath)) throw new BusinessError('未找到内置赛马表模板', 500);
     const { default: ExcelJS } = await optionalDep('exceljs', '于祥赛马表 Excel 预览与导出');
     const workbook = new ExcelJS.Workbook();
