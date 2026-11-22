@@ -149,6 +149,51 @@ test('共享对话：邀请、接受、同一段对话、署名、退出与停�
 
         assert.equal((await call('c00000003', 'POST', `/api/shared-conversations/invites/${invited.data.share.id}/respond`, { action: 'accept' })).data.status, 'accepted');
 
+        // 实时流多端同步验证：Carol 监听该共享对话的 /live 流
+        const liveRes = await fetch(`${url}/api/shared-conversations/session/${sessionId}/live`, {
+            headers: { 'x-dh-user': 'c00000003' },
+        });
+        assert.equal(liveRes.status, 200);
+        const reader = liveRes.body.getReader();
+        const decoder = new TextDecoder();
+        let chunk = await reader.read();
+        let firstEv = JSON.parse(decoder.decode(chunk.value).trim().split('\n')[0]);
+        assert.equal(firstEv.type, 'idle');
+
+        // 张三发起提问并在该会话中流式输出
+        const { startLiveStream, pushLiveDelta, pushLiveEvent, endLiveStream, getLiveStream } = await import('../src/services/share-service.js');
+        startLiveStream(sessionId, { by: 'a00000001', name: '张三', question: '请分析机房风险' });
+        pushLiveDelta(sessionId, '第一点：双路供电');
+        pushLiveEvent(sessionId, { type: 'tool_start', tool: 'netcare_query' });
+
+        // Carol 从 reader 接收到事件
+        let streamText = '';
+        while (!streamText.includes('双路供电')) {
+            const { value } = await reader.read();
+            streamText += decoder.decode(value);
+        }
+        assert.ok(streamText.includes('stream_start'));
+        assert.ok(streamText.includes('双路供电'));
+        assert.ok(streamText.includes('netcare_query'));
+
+        // 中途新接入者（如新打开该对话的成员）接收 catchup 事件，带已生成的前置文本
+        const catchupRes = await fetch(`${url}/api/shared-conversations/session/${sessionId}/live`, {
+            headers: { 'x-dh-user': 'c00000003' },
+        });
+        const catchupReader = catchupRes.body.getReader();
+        const catchupChunk = await catchupReader.read();
+        const catchupEv = JSON.parse(decoder.decode(catchupChunk.value).trim().split('\n')[0]);
+        assert.equal(catchupEv.type, 'catchup');
+        assert.equal(catchupEv.by, 'a00000001');
+        assert.equal(catchupEv.question, '请分析机房风险');
+        assert.equal(catchupEv.text, '第一点：双路供电');
+        await catchupReader.cancel();
+
+        // 结束流
+        endLiveStream(sessionId);
+        assert.equal(getLiveStream(sessionId), null);
+        await reader.cancel();
+
         // 发起者停止共享：链接失效，且双方侧栏共享列表不再保留已停止条目
         assert.deepEqual((await call('a00000001', 'POST', `/api/shared-conversations/session/${sessionId}/leave`, {})).data, { closed: true });
         assert.equal((await call('a00000001', 'GET', '/api/shared-conversations/mine')).data.items.length, 0, 'closed share must be removed from /mine');

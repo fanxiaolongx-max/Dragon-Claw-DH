@@ -6,6 +6,7 @@
 // - 邀请时经基座通知接口给对方发一条应用消息（带跳转链接），失败不影响邀请本身。
 // 接口与主线版 /api/shared-conversations 一致，前端共用同一份 shared-conversations.js。
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { BusinessError } from '../core/errors.js';
 import { isSameUserId, listAdmins } from '../core/access.js';
 import { kvGet, sendBaseNotify } from '../dao/scoped.js';
@@ -337,7 +338,9 @@ export async function markRead({ user, sessionId }) {
     const pulled = msgs.filter((x) => Number(x.created_at) > since && !same(x.author || share.owner, user)).length;
     const base = prev || { shareId: share.id, username: user, name: '', role: 'owner', status: 'accepted', invitedBy: user, via: 'owner', invitedAt: share.createdAt };
     if (pulled || !prev) await saveMember({ ...base, lastReadAt: Date.now() });
-    return { shareId: share.id, pushed: 0, pulled, closed: share.status !== 'active', revoked: share.status !== 'active' && !same(share.owner, user) };
+    const live = getLiveStream(sessionId);
+    const activeTurn = live ? { by: live.by, name: live.name, question: live.question } : null;
+    return { shareId: share.id, pushed: 0, pulled, closed: share.status !== 'active', revoked: share.status !== 'active' && !same(share.owner, user), activeTurn };
 }
 
 export async function leave({ user, sessionId }) {
@@ -432,16 +435,92 @@ export async function decorateMessages(items, { share, ownerId, viewer }) {
     });
 }
 
+// ── 共享对话实时流广播（多端同步围观正在生成的回答） ──
+const liveHub = new Map();
+const liveEmitter = new EventEmitter();
+liveEmitter.setMaxListeners(500);
+
+export function startLiveStream(sessionId, { by, name, question }) {
+    if (!sessionId) return;
+    const sid = String(sessionId);
+    const stream = {
+        sessionId: sid,
+        by,
+        name: name || by,
+        question: String(question || '').trim(),
+        startedAt: Date.now(),
+        fullText: '',
+        events: [],
+    };
+    liveHub.set(sid, stream);
+    liveEmitter.emit(`live:${sid}`, {
+        type: 'stream_start',
+        sessionId: sid,
+        by: stream.by,
+        name: stream.name,
+        question: stream.question,
+    });
+}
+
+export function pushLiveDelta(sessionId, delta) {
+    if (!sessionId || !delta) return;
+    const sid = String(sessionId);
+    const stream = liveHub.get(sid);
+    if (stream) stream.fullText += delta;
+    liveEmitter.emit(`live:${sid}`, { type: 'delta', delta });
+}
+
+export function pushLiveEvent(sessionId, event) {
+    if (!sessionId || !event) return;
+    const sid = String(sessionId);
+    const stream = liveHub.get(sid);
+    if (stream && !['ping', 'delta'].includes(event.type)) {
+        stream.events.push(event);
+    }
+    liveEmitter.emit(`live:${sid}`, event);
+}
+
+export function endLiveStream(sessionId, result = {}) {
+    if (!sessionId) return;
+    const sid = String(sessionId);
+    const stream = liveHub.get(sid);
+    if (stream) {
+        liveEmitter.emit(`live:${sid}`, { type: 'stream_finish', ...result, text: stream.fullText });
+        liveHub.delete(sid);
+    }
+    liveEmitter.emit(`live:${sid}`, { type: 'turn_ended', sessionId: sid });
+}
+
+export function getLiveStream(sessionId) {
+    if (!sessionId) return null;
+    const sid = String(sessionId);
+    const stream = liveHub.get(sid);
+    if (!stream) return null;
+    if (Date.now() - stream.startedAt > TURN_TTL_MS) {
+        liveHub.delete(sid);
+        return null;
+    }
+    return stream;
+}
+
+export function subscribeSharedEvents(sessionId, listener) {
+    if (!sessionId) return () => {};
+    const channel = `live:${sessionId}`;
+    liveEmitter.on(channel, listener);
+    return () => liveEmitter.off(channel, listener);
+}
+
 /** 共享对话同一时间只让一个人提问：记在会话 metadata 里（多实例也能看到），5 分钟没结束视为已失效 */
-export async function claimTurn(session, user, name) {
+export async function claimTurn(session, user, name, question = '') {
     const fresh = await getSession(session.id);
     const turn = fresh?.metadata?.activeTurn;
     if (turn && !same(turn.by, user) && Date.now() - Number(turn.at || 0) < TURN_TTL_MS) {
         fail(`${turn.name || turn.by} 正在这段共享对话里提问，请等这一轮回答完成后再发送`, 409);
     }
-    await saveSession({ id: session.id, title: fresh.title, summary: fresh.summary, archived: fresh.archived, pinned: fresh.pinned, metadata: { activeTurn: { by: user, name: name || user, at: Date.now() } } });
+    await saveSession({ id: session.id, title: fresh.title, summary: fresh.summary, archived: fresh.archived, pinned: fresh.pinned, metadata: { activeTurn: { by: user, name: name || user, at: Date.now(), question: clean(question, 400) } } });
 }
 export async function releaseTurn(sessionId, user) {
+    endLiveStream(sessionId);
     const fresh = await getSession(sessionId);
     const turn = fresh?.metadata?.activeTurn;
     if (!turn || !same(turn.by, user)) return;

@@ -173,6 +173,9 @@ html[data-theme="dark"] .shc-avatar{color:hsl(var(--shc-h) 70% 82%);background:h
 .dc-msg--user .dc-msg-author{justify-content:flex-end}
 .dc-msg-author b{font-weight:600;color:var(--v2-ink2,#4b5563)}
 .dc-msg-author .shc-avatar{width:18px;height:18px;font-size:9px}
+.dc-shared-busy-bar{display:flex;align-items:center;gap:8px;padding:7px 12px;margin:4px 0 8px;background:color-mix(in srgb,var(--v2-accent,#10a37f) 8%,var(--v2-bg,#fff));border:1px solid color-mix(in srgb,var(--v2-accent,#10a37f) 25%,transparent);border-radius:10px;font-size:12.5px;color:var(--v2-ink,#1f2328);animation:shcIn .2s ease}
+.dc-shared-busy-bar .shc-live{width:7px;height:7px;border-radius:50%;background:var(--v2-accent,#10a37f);box-shadow:0 0 0 0 color-mix(in srgb,var(--v2-accent,#10a37f) 50%,transparent);animation:shcLive 1.4s ease-in-out infinite;flex:none}
+.dc-msg[data-shc-live-ai] .dc-msg-author b::after{content:' · 实时同步中';font-weight:400;color:var(--v2-accent,#10a37f);font-size:11px}
 .shc-thread-bar{position:relative;display:flex;align-items:center;gap:8px;width:fit-content;max-width:calc(100% - 24px);margin:0 auto 6px;padding:5px 6px 5px 10px;border:1px solid var(--v2-line,#e7e7ea);border-radius:999px;background:color-mix(in srgb,var(--v2-bg,#fff) 88%,transparent);backdrop-filter:blur(8px);font-size:12px;color:var(--v2-ink2,#4b5563);animation:shcIn .25s ease}
 .shc-thread-bar .shc-stack{display:flex}
 .shc-thread-bar .shc-stack .shc-avatar{width:20px;height:20px;font-size:9px;margin-left:-5px;box-shadow:0 0 0 2px var(--v2-bg,#fff)}
@@ -655,6 +658,7 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
     }
 
     function handleSyncClose(sessionId, result) {
+        if (liveSessionId === sessionId) disconnectLive();
         const firstTime = !state.closedLocally.has(sessionId);
         state.closedLocally.add(sessionId);
         state.sessionDetails.delete(sessionId);
@@ -673,10 +677,74 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         }
     }
 
+    // ── 共享对话多端实时流监听（被共享者实时同步看回答） ──
+    let liveAbort = null;
+    let liveSessionId = '';
+
+    function connectLive(sessionId) {
+        if (!sessionId || !isShared(sessionId)) {
+            disconnectLive();
+            return;
+        }
+        if (liveSessionId === sessionId && liveAbort) return;
+        disconnectLive();
+        liveSessionId = sessionId;
+        const controller = new AbortController();
+        liveAbort = controller;
+
+        const token = localStorage.getItem('tools_token') || sessionStorage.getItem('tools_token');
+        fetch(`${API}/session/${encodeURIComponent(sessionId)}/live`, {
+            headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                Accept: 'application/x-ndjson',
+            },
+            signal: controller.signal,
+        }).then(async res => {
+            if (!res.ok || !res.body) return;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+                const lines = buffer.split(/\r?\n/);
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    const raw = line.trim();
+                    if (!raw) continue;
+                    try {
+                        const event = JSON.parse(raw);
+                        if (event.type === 'ping') continue;
+                        window.DragonClaw?.handleSharedLiveEvent?.(event);
+                    } catch {}
+                }
+                if (done) break;
+            }
+        }).catch(err => {
+            if (controller.signal.aborted) return;
+            setTimeout(() => {
+                if (currentSession() === sessionId && !liveAbort) connectLive(sessionId);
+            }, 3000);
+        });
+    }
+
+    function disconnectLive() {
+        if (liveAbort) {
+            try { liveAbort.abort(); } catch {}
+            liveAbort = null;
+        }
+        liveSessionId = '';
+    }
+
     let lastSession = '';
     async function syncActive(force = false) {
         const sessionId = currentSession();
-        if (sessionId !== lastSession) { lastSession = sessionId; renderThreadBar(); }
+        if (sessionId !== lastSession) {
+            lastSession = sessionId;
+            renderThreadBar();
+            if (sessionId && isShared(sessionId)) connectLive(sessionId);
+            else disconnectLive();
+        }
         if (!sessionId || !isShared(sessionId) || state.syncing || (document.hidden && !force)) return;
         state.syncing = true;
         try {
@@ -686,14 +754,26 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
                 if (await window.DragonClaw?.appendSharedMessages?.(sessionId)) state.pendingAppend = '';
             }
             if (data.result?.closed) {
+                disconnectLive();
                 handleSyncClose(sessionId, data.result);
                 return;
+            }
+            if (data.result?.activeTurn && !same(data.result.activeTurn.by, me())) {
+                window.DragonClaw?.handleSharedLiveEvent?.({
+                    type: 'catchup',
+                    by: data.result.activeTurn.by,
+                    name: data.result.activeTurn.name,
+                    question: data.result.activeTurn.question,
+                });
             }
             if (data.result?.pulled) {
                 refreshMine();
                 loadSessionDetails(sessionId, true);
             } else if (!state.sessionDetails.has(sessionId)) {
                 loadSessionDetails(sessionId);
+            }
+            if (!liveAbort && isShared(sessionId)) {
+                connectLive(sessionId);
             }
         } catch { /* 下次再试 */ } finally { state.syncing = false; }
     }
@@ -1103,7 +1183,16 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         promptSkillRequest, checkSkillBeforeSend, onSessionDeleted,
         // 侧栏右键「共享」只给 Dragon Claw 自己的对话：第三方 Agent、频道对话不共享
         available: () => state.available !== false,
-        beforeOpen: sessionId => (isShared(sessionId) ? api('POST', `/session/${encodeURIComponent(sessionId)}/sync`).then(() => refreshMine()).catch(() => {}) : Promise.resolve()),
+        beforeOpen: sessionId => {
+            if (isShared(sessionId)) {
+                connectLive(sessionId);
+                return api('POST', `/session/${encodeURIComponent(sessionId)}/sync`).then(() => refreshMine()).catch(() => {});
+            }
+            disconnectLive();
+            return Promise.resolve();
+        },
+        connectLive,
+        disconnectLive,
         sync: syncActive
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

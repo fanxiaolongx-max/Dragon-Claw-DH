@@ -63,6 +63,54 @@ export async function sharedConversationRoutes(fastify) {
         usernames: req.body?.usernames, groupIds: req.body?.groupIds, linkBase: req.body?.linkBase,
     }));
     fastify.post('/session/:sessionId/sync', async (req) => ({ result: await share.markRead({ user: me(req), sessionId: req.params.sessionId }) }));
+    fastify.get('/session/:sessionId/live', async (req, reply) => {
+        const sessionId = req.params.sessionId;
+        const user = me(req);
+        const access = await share.sessionAccess(sessionId, user);
+        if (!access) return reply.code(404).send({ error: '会话不存在或无权访问' });
+
+        reply.raw.writeHead(200, {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-store, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        });
+
+        const current = share.getLiveStream(sessionId);
+        if (current) {
+            reply.raw.write(`${JSON.stringify({
+                type: 'catchup',
+                by: current.by,
+                name: current.name,
+                question: current.question,
+                text: current.fullText,
+                events: current.events,
+                startedAt: current.startedAt,
+            })}\n`);
+        } else {
+            reply.raw.write(`${JSON.stringify({ type: 'idle' })}\n`);
+        }
+
+        const unsubscribe = share.subscribeSharedEvents(sessionId, (event) => {
+            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+                reply.raw.write(`${JSON.stringify(event)}\n`);
+            }
+        });
+
+        const timer = setInterval(() => {
+            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+                reply.raw.write(`${JSON.stringify({ type: 'ping' })}\n`);
+            } else {
+                clearInterval(timer);
+            }
+        }, 15000);
+
+        req.raw.on('close', () => {
+            clearInterval(timer);
+            unsubscribe();
+        });
+        return reply;
+    });
     fastify.post('/session/:sessionId/leave', async (req) => share.leave({ user: me(req), sessionId: req.params.sessionId }));
     fastify.post('/session/:sessionId/remove', async (req) => ({ share: await share.removeMember({ user: me(req), sessionId: req.params.sessionId, target: String(req.body?.username || '') }) }));
 }

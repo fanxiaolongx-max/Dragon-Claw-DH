@@ -1348,10 +1348,18 @@
         el.send.title = generating ? tx('stop') : tx('send');
         const readyAttachments = !external.active && state.attachments.some(item => item.status === 'ready');
         el.send.disabled = (state.restoring && !isSideCommand(el.input.value)) || (!generating && !el.input.value.trim() && !readyAttachments)
-            || (external.active && (!external.composer?.canSend || external.sending));
+            || (external.active && (!external.composer?.canSend || external.sending))
+            || Boolean(sharedLiveState?.busy);
     }
 
     function applyPlaceholder() {
+        if (sharedLiveState?.busy) {
+            const author = sharedLiveState.authorName || sharedLiveState.author || '';
+            const text = `${author ? `${author} ` : ''}正在提问，AI 正在回答中，请稍候...`;
+            el.input.placeholder = text;
+            el.input.setAttribute('aria-label', text);
+            return;
+        }
         const text = (external.active && external.composer?.placeholder) || tx('placeholder');
         el.input.placeholder = text;
         el.input.setAttribute('aria-label', text);
@@ -2518,6 +2526,8 @@
         const rendered = new Set([...el.thread.querySelectorAll('[data-msg-id]')].map(node => node.dataset.msgId));
         const fresh = page.items.filter(item => !rendered.has(String(item.id)) && (item.events || []).some(event => event?.type === 'shared_author'));
         if (!fresh.length) return true;
+        const liveBubble = el.thread.querySelector('[data-shc-live-ai]');
+        if (liveBubble) liveBubble.remove();
         const nearBottom = el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight < 160;
         batchMessages(() => fresh.forEach(item => {
             addHistoryMessage(item.role, String(item.content), item.events, item);
@@ -2525,6 +2535,144 @@
         }));
         if (nearBottom) scrollThread(true);
         return true;
+    }
+
+    // ── 共享对话实时流多端同步（被共享者围观他人提问与流式回答） ──
+    let sharedLiveState = null;
+
+    function isSameUser(a, b) {
+        const clean = u => {
+            const s = String(u || '').trim().toLowerCase();
+            const m = /^[a-z]?(wx\d{4,}|\d{4,})$/.exec(s);
+            return m ? m[1] : s;
+        };
+        return clean(a) === clean(b);
+    }
+
+    function updateSharedTurnNotice(turnInfo) {
+        let bar = el.form.querySelector('.dc-shared-busy-bar');
+        if (turnInfo?.busy) {
+            const name = turnInfo.name || turnInfo.by || '其他成员';
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.className = 'dc-shared-busy-bar';
+                el.form.prepend(bar);
+            }
+            bar.innerHTML = `<span class="shc-live" aria-hidden="true"></span><span><b>${escapeHtml(name)}</b> 正在提问，AI 正在回答，多端实时同步中...</span>`;
+            if (sharedLiveState) sharedLiveState.busy = true;
+            else sharedLiveState = { busy: true, author: turnInfo.by, authorName: name };
+        } else {
+            bar?.remove();
+            if (sharedLiveState) sharedLiveState.busy = false;
+        }
+        applyPlaceholder();
+        updateSendButton();
+    }
+
+    function handleSharedLiveEvent(event) {
+        if (!event || state.controller) return;
+        const sessionId = state.sessionId;
+        if (!sessionId || !window.HomeSharedConversations?.isShared?.(sessionId)) return;
+
+        const myUser = currentUser();
+        if (event.by && isSameUser(event.by, myUser)) return;
+
+        if (event.type === 'stream_start' || event.type === 'catchup') {
+            const author = event.by;
+            const authorName = event.name || author;
+            const question = event.question;
+
+            // 1. 如果提问者的问题还没上屏，补充上屏
+            if (question) {
+                const userMessages = [...el.thread.querySelectorAll('.dc-msg--user')];
+                const lastUserBody = userMessages.at(-1)?.querySelector('.dc-msg-body')?.textContent?.trim();
+                if (lastUserBody !== question.trim()) {
+                    const uMsg = addMessage('user', question);
+                    window.HomeSharedConversations?.decorateMessage?.(uMsg, [{ type: 'shared_author', author, name: authorName }]);
+                }
+            }
+
+            // 2. 创建或更新实时流气泡
+            let liveMsg = el.thread.querySelector('[data-shc-live-ai]');
+            if (!liveMsg) {
+                liveMsg = addMessage('ai', '');
+                liveMsg.dataset.shcLiveAi = 'true';
+                liveMsg.classList.add('is-streaming');
+                window.HomeSharedConversations?.decorateMessage?.(liveMsg, [{ type: 'shared_author', author, name: authorName }]);
+                const liveActivity = createActivity(liveMsg);
+                const liveRenderer = createRenderer(liveMsg, liveActivity);
+                sharedLiveState = {
+                    sessionId,
+                    author,
+                    authorName,
+                    busy: true,
+                    liveMsg,
+                    activity: liveActivity,
+                    renderer: liveRenderer,
+                };
+            } else if (sharedLiveState) {
+                sharedLiveState.busy = true;
+            }
+
+            updateSharedTurnNotice({ by: author, name: authorName, busy: true });
+
+            if (event.text && sharedLiveState?.renderer) {
+                sharedLiveState.renderer.append(event.text);
+            }
+            if (Array.isArray(event.events) && sharedLiveState?.activity) {
+                for (const ev of event.events) sharedLiveState.activity.event(ev);
+            }
+            scrollThread(true);
+            return;
+        }
+
+        if (event.type === 'delta') {
+            if (sharedLiveState?.renderer) {
+                sharedLiveState.renderer.append(event.delta);
+                sharedLiveState.activity?.writing();
+            }
+            return;
+        }
+
+        if (event.type === 'status' || event.type === 'tool_start' || event.type === 'tool_result' || event.type === 'reasoning') {
+            if (sharedLiveState?.activity) {
+                sharedLiveState.activity.event(event);
+            }
+            return;
+        }
+
+        if (event.type === 'stream_finish' || event.type === 'turn_ended' || event.type === 'done') {
+            if (sharedLiveState) {
+                const s = sharedLiveState;
+                sharedLiveState = null;
+                const finalText = s.renderer?.finish(event.text || s.renderer.current()) || '';
+                s.activity?.finish();
+                s.liveMsg?.classList.remove('is-streaming');
+                if (s.liveMsg) delete s.liveMsg.dataset.shcLiveAi;
+                if (finalText) state.messages.push({ role: 'model', content: finalText });
+            }
+            updateSharedTurnNotice({ busy: false });
+            setTimeout(() => { appendSharedMessages(sessionId); }, 300);
+            return;
+        }
+
+        if (event.type === 'error') {
+            if (sharedLiveState) {
+                const s = sharedLiveState;
+                sharedLiveState = null;
+                s.renderer?.finish();
+                s.activity?.finish();
+                s.liveMsg?.querySelector('.dc-msg-body')?.insertAdjacentHTML('beforeend', `<p style="color:var(--v2-danger,#f04438);margin-top:6px">⚠️ ${escapeHtml(event.error || '回答中断')}</p>`);
+                s.liveMsg?.classList.remove('is-streaming');
+                if (s.liveMsg) delete s.liveMsg.dataset.shcLiveAi;
+            }
+            updateSharedTurnNotice({ busy: false });
+            return;
+        }
+
+        if (event.type === 'idle') {
+            updateSharedTurnNotice({ busy: false });
+        }
     }
 
     // 上一轮因服务重启或崩溃中断（没有结束记录）：在最后一条回答下面提供「继续执行」，接着保存的步骤往下做
@@ -2837,6 +2985,8 @@
     async function openSession(item) {
         if (!item || state.controller) return;
         const epoch = ++resumeEpoch;
+        updateSharedTurnNotice({ busy: false });
+        if (sharedLiveState) sharedLiveState = null;
         window.DragonHtmlSwarm?.deactivate?.();
         window.HomeAgentDiscussion?.activateSession?.(item.id,{group:item.discussionMode==='group'});
         closeSessionPicker();
@@ -3646,6 +3796,8 @@
         finishHistoryLoading(false);
         state.restoring = false;
         el.input.disabled = false;
+        updateSharedTurnNotice({ busy: false });
+        if (sharedLiveState) sharedLiveState = null;
         state.controller?.abort();
         if (root) {
             // 先重置会话再选目录：resetSession 会让进行中的选择失效，顺序反过来目录就选不上
@@ -4259,7 +4411,7 @@
         });
         window.addEventListener('home:resume-agent-discussion',event=>{if(!state.controller&&!state.restoring&&event.detail?.sessionId===state.sessionId)sendDesktopDiscussion('',event.detail);});
         watchSchedules();
-        window.DragonClaw = { dismissPanel, panelDismissed, refreshModelPicker: renderModelPicker, startWithSkill, typeTourExample, showTourLanding, startTourDemo, enterExternal, exitExternal, newChat, openSchedules: openSchedulePanel, openChat: openChatFromList, appendSharedMessages, openLatest:openLatestChat, currentSessionId:()=>state.sessionId, lang, isExternal: () => external.active };
+        window.DragonClaw = { dismissPanel, panelDismissed, refreshModelPicker: renderModelPicker, startWithSkill, typeTourExample, showTourLanding, startTourDemo, enterExternal, exitExternal, newChat, openSchedules: openSchedulePanel, openChat: openChatFromList, appendSharedMessages, handleSharedLiveEvent, openLatest:openLatestChat, currentSessionId:()=>state.sessionId, lang, isExternal: () => external.active };
         // 其他页面或新标签打开的 /?skill=<id>：直接进入该技能的新对话
         const linkedSkill = new URLSearchParams(location.search).get('skill');
         if (linkedSkill) {

@@ -39,7 +39,19 @@ import { formatTestFailure } from '../services/ai-test-diagnostics.js';
 import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
 import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
-import { sessionAccess, decorateMessages, claimTurn, releaseTurn, sharedHistory, sessionCapabilities, leave as leaveShare } from '../services/share-service.js';
+import {
+    sessionAccess,
+    decorateMessages,
+    claimTurn,
+    releaseTurn,
+    sharedHistory,
+    sessionCapabilities,
+    leave as leaveShare,
+    startLiveStream,
+    pushLiveDelta,
+    pushLiveEvent,
+    endLiveStream,
+} from '../services/share-service.js';
 import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
 
 export async function aiRoutes(fastify) {
@@ -144,6 +156,10 @@ export async function aiRoutes(fastify) {
 
         const lastUserMsg = [...messages].reverse().find((m) => m?.role === 'user');
         const userText = String(lastUserMsg?.content || body.message || '').trim();
+        // 标题只取用户的话，不带附件清单
+        const questionText = userText.split('📎 附件：')[0];
+        const plainTitle = questionText.replace(/\s+/g, ' ').trim().slice(0, 40);
+        const probeOnly = isTrivialProbe(questionText);
         let sessionId = body.sessionId ? String(body.sessionId) : '';
         let existingSession = null;
         let sharedTurn = null;
@@ -160,14 +176,11 @@ export async function aiRoutes(fastify) {
             }
             if (sharedTurn && persist) {
                 const me = req.userIdentity || resolveRequestIdentity(req);
-                try { await claimTurn(existingSession, ownerId, me.displayName); }
+                try { await claimTurn(existingSession, ownerId, me.displayName, questionText); }
                 catch (busy) { return reply.code(409).send({ code: 'SHARED_TURN_BUSY', error: busy.message }); }
+                startLiveStream(sessionId, { by: ownerId, name: me.displayName || ownerId, question: questionText });
             }
         }
-        // 标题只取用户的话，不带附件清单
-        const questionText = userText.split('📎 附件：')[0];
-        const plainTitle = questionText.replace(/\s+/g, ' ').trim().slice(0, 40);
-        const probeOnly = isTrivialProbe(questionText);
         // 新手引导里自动发出的示例提问：只在新对话里生效，按只读演示跑
         const readOnlyDemo = body.tourReportExample === true && !sessionId;
 
@@ -191,6 +204,9 @@ export async function aiRoutes(fastify) {
         }
 
         const sendDone = (payload) => {
+            if (sharedTurn && sessionId) {
+                endLiveStream(sessionId, payload);
+            }
             if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'done', ...payload })}\n`);
                 reply.raw.end();
@@ -221,6 +237,9 @@ export async function aiRoutes(fastify) {
             if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'delta', delta: fallbackReply })}\n`);
             }
+            if (sharedTurn && sessionId) {
+                pushLiveDelta(sessionId, fallbackReply);
+            }
             if (persist && sessionId) {
                 await appendMessage(sessionId, 'model', fallbackReply, { author: ownerId });
             }
@@ -248,6 +267,10 @@ export async function aiRoutes(fastify) {
         req.raw.on('close', onClose);
         const write = (event) => {
             if (stream && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`${JSON.stringify(event)}\n`);
+            if (sharedTurn && sessionId) {
+                if (event.type === 'delta') pushLiveDelta(sessionId, event.delta);
+                else pushLiveEvent(sessionId, event);
+            }
         };
         if (stream && sessionId) write({ type: 'start', sessionId });
 
@@ -327,10 +350,15 @@ export async function aiRoutes(fastify) {
             });
         } catch (err) {
             if (abort.signal.aborted) {
+                if (sharedTurn && sessionId) endLiveStream(sessionId);
                 if (stream && !reply.raw.writableEnded) reply.raw.end();
                 return reply;
             }
             const message = err.message || 'AI 对话异常';
+            if (sharedTurn && sessionId) {
+                pushLiveEvent(sessionId, { type: 'error', error: message });
+                endLiveStream(sessionId, { error: message });
+            }
             if (stream) {
                 write({ type: 'error', error: message });
                 reply.raw.end();
