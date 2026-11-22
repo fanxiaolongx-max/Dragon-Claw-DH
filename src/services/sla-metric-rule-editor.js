@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { BusinessError } from '../core/errors.js';
 import { kvGet, kvSet } from '../dao/scoped.js';
-import { getPrefsObject, upsertPrefItem, getLatestSnapshot } from './sla-service.js';
+import { getPrefsObject, upsertPrefItem, getLatestSnapshot, getTargets } from './sla-service.js';
 
 // 与前端同一份匹配逻辑（含 [旧名]|[新名] 别名），保证预估的命中行数和页面一致
 const extraction = createRequire(import.meta.url)('../../static/js/shared/metric-extraction.js');
@@ -218,6 +218,197 @@ async function plan({ replacements = [], prefKeys = [], metricLabels = [], field
     return { latestImportAt: timestamp, changes, warnings };
 }
 
+const loadPrefs = () => getPrefsObject();
+const targetKeys = async () => new Set(Object.keys((await getTargets()) || {}));
+
+// ── 整条指标规则：读取、增 / 改 / 删（sla_read_metric_rules / sla_edit_metric_rules）──
+// 与条件值修改共用改动记录和回退：每条记录保存改前 / 改后的完整指标对象；写入和回退都先核对当前对象
+// 仍与记录里的“改前”一致，之后被别人改过的不覆盖、列为冲突。指标 ID 不能改（预警目标、历史快照靠它关联）。
+const METRIC_TYPES = ['extract', 'extract_multi', 'count', 'ratio'];
+const LOCKED_FIELDS = new Set(['id', 'sourceSecId']);
+const MAX_METRIC_EDITS = 50;
+
+const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+function canonical(value) {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+    if (value && typeof value === 'object') return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+    return JSON.stringify(value === undefined ? null : value);
+}
+const sameMetric = (a, b) => canonical(a ?? null) === canonical(b ?? null);
+
+function metricTables(prefs) {
+    return Object.entries(prefs || {}).filter(([key, payload]) => String(key).startsWith('sla_prefs_') && payload && typeof payload === 'object')
+        .map(([prefKey, payload]) => ({ prefKey, sectionId: sectionIdOf(prefKey), table: tableTitleOf(prefKey, payload), metrics: Array.isArray(payload.customMetrics) ? payload.customMetrics : [] }));
+}
+
+function sectionRows(metric, sectionId, sections) {
+    if (!sections) return null;
+    if (metric.scope === 'all') return [...sections.values()].filter((s) => !s.archiveSupplementary).flatMap((s) => s.rows);
+    return sections.get(metric.sourceSecId || sectionId)?.rows || null;
+}
+
+/** 按最近一次导入估算这条指标会算出什么值、命中几行（只看主指标） */
+function evaluateMetric(metric, sectionId, sections) {
+    if (!metric) return null;
+    const rows = sectionRows(metric, sectionId, sections);
+    if (!rows) return { value: null, matchedRows: null };
+    try {
+        const result = extraction.evaluate(rows, { ...metric, type: metric.type || 'extract' });
+        return { value: result.value, matchedRows: result.matchedCount };
+    } catch (error) {
+        return { value: null, matchedRows: null, error: error.message };
+    }
+}
+
+/** 读整条规则：不传参数列出所有表和指标；传 prefKey / metricId / query 返回完整定义 */
+async function readMetrics({ prefKey = '', metricId = '', query = '', limit = 20 } = {}) {
+    const tables = metricTables(await loadPrefs());
+    const q = String(query || '').trim().toLowerCase();
+    if (!prefKey && !metricId && !q) {
+        return { tables: tables.map((t) => ({ prefKey: t.prefKey, table: t.table, metrics: t.metrics.map((m) => ({ id: m?.id || '', label: m?.label || '', type: m?.type || 'extract', subMetrics: Array.isArray(m?.subMetrics) ? m.subMetrics.length : 0 })) })) };
+    }
+    const { sections, timestamp } = await latestSections();
+    const items = [];
+    for (const t of tables) {
+        if (prefKey && t.prefKey !== prefKey) continue;
+        for (const m of t.metrics) {
+            if (!m || typeof m !== 'object') continue;
+            if (metricId && m.id !== metricId) continue;
+            if (q && ![t.table, m.label, m.colX, m.valY, m.colZ, ...(m.subMetrics || []).map((s) => s?.category)].some((v) => String(v ?? '').toLowerCase().includes(q))) continue;
+            items.push({ prefKey: t.prefKey, table: t.table, metric: m, latest: evaluateMetric(m, t.sectionId, sections) });
+        }
+    }
+    const max = Math.max(1, Math.min(Number(limit) || 20, 100));
+    return { latestImportAt: timestamp, total: items.length, items: items.slice(0, max), truncated: items.length > max };
+}
+
+function validateMetric(metric, where) {
+    if (!metric || typeof metric !== 'object' || Array.isArray(metric)) fail(`${where}：指标必须是对象`);
+    if (!String(metric.label || '').trim()) fail(`${where}：label（指标名）不能为空`);
+    if (metric.type !== undefined && !METRIC_TYPES.includes(metric.type)) fail(`${where}：type 只能是 ${METRIC_TYPES.join(' / ')}`);
+    for (const key of Object.keys(metric)) if (key.startsWith('_')) fail(`${where}：不能写内部字段 ${key}`);
+    const checkConditions = (rule, label) => {
+        if (rule.conditions === undefined) return;
+        if (!Array.isArray(rule.conditions) || rule.conditions.some((c) => !c || typeof c !== 'object' || !String(c.column || '').trim())) fail(`${label}：conditions 必须是 [{ column, value }] 数组`);
+    };
+    checkConditions(metric, where);
+    if (metric.subMetrics !== undefined) {
+        if (!Array.isArray(metric.subMetrics)) fail(`${where}：subMetrics 必须是数组`);
+        metric.subMetrics.forEach((sub, i) => {
+            if (!sub || typeof sub !== 'object') fail(`${where}：子指标 ${i + 1} 必须是对象`);
+            if (sub.type !== undefined && !METRIC_TYPES.includes(sub.type)) fail(`${where}：子指标 ${i + 1} 的 type 不合法`);
+            checkConditions(sub, `${where} / 子指标 ${i + 1}`);
+        });
+    }
+    return metric;
+}
+
+function fieldDiff(before, after) {
+    if (!before) return '新增';
+    if (!after) return '删除';
+    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => canonical(before[k]) !== canonical(after[k]));
+    return keys.length ? `改 ${keys.join('、')}` : '无变化';
+}
+
+const short = (value) => { const text = typeof value === 'string' ? value : JSON.stringify(value); return text === undefined ? '（无）' : text.length > 160 ? `${text.slice(0, 160)}…` : text; };
+
+/**
+ * 算出一组整条规则改动（不写库）。edits 每项：
+ *   { op: 'update', prefKey, metricId, set: { 字段: 新值 }, unset: ['字段'] }
+ *   { op: 'add', prefKey, metric: { label, type, colX, valY, colZ, ... } }   不传 id 时自动生成
+ *   { op: 'remove', prefKey, metricId }
+ */
+async function planMetricEdits({ edits = [] } = {}) {
+    if (!Array.isArray(edits) || !edits.length) fail('edits 不能为空');
+    if (edits.length > MAX_METRIC_EDITS) fail(`一次最多改 ${MAX_METRIC_EDITS} 条规则`);
+    const prefs = await loadPrefs();
+    const work = clone(prefs);
+    const { sections, timestamp } = await latestSections();
+    const targets = await targetKeys().catch(() => new Set());
+    const changes = [], warnings = [];
+    for (const [i, edit] of edits.entries()) {
+        const label = `第 ${i + 1} 项`;
+        const prefKey = String(edit?.prefKey || '');
+        const payload = work[prefKey];
+        if (!prefKey.startsWith('sla_prefs_') || !payload || typeof payload !== 'object') fail(`${label}：没有这张表 ${prefKey || '（未填 prefKey）'}，先用 sla_read_metric_rules 查`);
+        if (!Array.isArray(payload.customMetrics)) payload.customMetrics = [];
+        const metrics = payload.customMetrics;
+        const sectionId = sectionIdOf(prefKey), table = tableTitleOf(prefKey, payload);
+        let before = null, after = null, position = metrics.length, metricId = String(edit.metricId || '');
+        if (edit.op === 'add') {
+            const metric = clone(edit.metric);
+            validateMetric(metric, label);
+            metric.id = String(metric.id || `m_${Date.now()}${i}`);
+            if (metrics.some((m) => m?.id === metric.id)) fail(`${label}：指标 ID ${metric.id} 已存在`);
+            metric.type = metric.type || 'extract';
+            metric.scope = metric.scope || 'current';
+            metric.sourceSecId = sectionId;
+            metric.conditions = metric.conditions || [];
+            metricId = metric.id;
+            after = metric;
+            metrics.push(metric);
+        } else if (edit.op === 'update' || edit.op === 'remove') {
+            position = metrics.findIndex((m) => m && m.id === metricId);
+            if (!metricId || position < 0) fail(`${label}：表 ${table} 里没有指标 ${metricId || '（未填 metricId）'}`);
+            before = clone(metrics[position]);
+            if (edit.op === 'remove') {
+                metrics.splice(position, 1);
+                if (targets.has(`${sectionId}_${metricId}`)) warnings.push(`${table} / ${before.label}：这条指标配了预警目标，删除后目标会失效（页面下次保存规则时会清掉）`);
+            } else {
+                const set = edit.set && typeof edit.set === 'object' && !Array.isArray(edit.set) ? edit.set : {};
+                const unset = Array.isArray(edit.unset) ? edit.unset.map(String) : [];
+                for (const key of [...Object.keys(set), ...unset]) if (LOCKED_FIELDS.has(key)) fail(`${label}：${key} 不能改（预警目标和历史快照靠它关联）`);
+                if (!Object.keys(set).length && !unset.length) fail(`${label}：update 需要 set 或 unset`);
+                after = { ...clone(before), ...clone(set) };
+                for (const key of unset) delete after[key];
+                validateMetric(after, label);
+                metrics[position] = after;
+            }
+        } else {
+            fail(`${label}：op 只能是 add / update / remove`);
+        }
+        const name = (after || before).label || metricId;
+        const evalBefore = evaluateMetric(before, sectionId, sections);
+        const evalAfter = evaluateMetric(after, sectionId, sections);
+        if (after && evalAfter && evalAfter.matchedRows === 0) warnings.push(`${table} / ${name}：改后在最近一次导入里一行都匹配不到`);
+        const change = {
+            kind: 'metric', prefKey, metricId, position, where: `${table} / ${name}`,
+            before, after,
+            from: before ? `${short(before.label)}（${fieldDiff(before, after)}）` : '（无）',
+            to: after ? short(Object.fromEntries(Object.entries(after).filter(([k]) => !before || canonical(before[k]) !== canonical(after[k])))) : '（已删除）',
+            valueBefore: evalBefore?.value ?? null, valueAfter: evalAfter?.value ?? null,
+            matchedRowsBefore: evalBefore?.matchedRows ?? null, matchedRowsAfter: evalAfter?.matchedRows ?? null,
+        };
+        if (before && after && sameMetric(before, after)) { warnings.push(`${change.where}：没有变化，已跳过`); continue; }
+        changes.push(change);
+    }
+    return { latestImportAt: timestamp, changes, warnings };
+}
+
+/** 把一条整条规则改动写进 prefs（内存里）：当前对象必须与记录的“改前”一致 */
+function applyMetricItem(prefs, item) {
+    const payload = prefs[item.prefKey];
+    if (!payload || typeof payload !== 'object') return { reason: '这张表已不存在' };
+    if (!Array.isArray(payload.customMetrics)) payload.customMetrics = [];
+    const metrics = payload.customMetrics;
+    const index = metrics.findIndex((m) => m && m.id === item.metricId);
+    const current = index >= 0 ? metrics[index] : null;
+    if (!sameMetric(current, item.before)) return { reason: current ? '这条规则之后又被改过' : '这条规则已不存在', current: current ? current.label : undefined };
+    if (!item.after) metrics.splice(index, 1);
+    else if (index >= 0) metrics[index] = clone(item.after);
+    else metrics.splice(Math.min(Math.max(0, Number(item.position) || 0), metrics.length), 0, clone(item.after));
+    return null;
+}
+
+const swapMetricItem = (item) => ({ ...item, before: item.after, after: item.before, from: item.to, to: item.from, valueBefore: item.valueAfter, valueAfter: item.valueBefore });
+
+async function applyMetricEdits(args = {}, { actor = '', source = 'dragon-claw' } = {}) {
+    const planned = await planMetricEdits(args);
+    if (!planned.changes.length) return { ...planned, id: null, applied: [], conflicts: [] };
+    const result = await write(planned.changes, { actor, source, summary: args.summary || `修改 ${planned.changes.length} 条指标规则` });
+    return { ...planned, ...result };
+}
+
 async function history() {
     const list = await kvGet(HISTORY_KEY, []);
     return Array.isArray(list) ? list : [];
@@ -228,6 +419,13 @@ async function write(items, { actor = '', source = 'dragon-claw', summary = '', 
     const prefs = await getPrefsObject();
     const applied = [], conflicts = [], touched = new Set();
     for (const item of items) {
+        if (item.kind === 'metric') {
+            const conflict = applyMetricItem(prefs, item);
+            if (conflict) { conflicts.push({ ...item, ...conflict }); continue; }
+            applied.push(item);
+            touched.add(item.prefKey);
+            continue;
+        }
         const target = prefs[item.prefKey] ? resolve(prefs[item.prefKey], item) : null;
         if (!target) { conflicts.push({ ...item, reason: '规则已不存在或位置变了' }); continue; }
         const current = target.get();
@@ -268,8 +466,9 @@ async function revert(changeId, { actor = '', source = 'dragon-claw' } = {}) {
     const record = (await history()).find((entry) => entry.id === String(changeId));
     if (!record) fail('没有这条改动记录', 'SLA_RULE_CHANGE_NOT_FOUND', 404);
     if (record.revertedBy) fail(`这次改动已经回退过（回退记录 ${record.revertedBy}），要恢复可以回退那条回退记录`, 'SLA_RULE_CHANGE_REVERTED', 409);
-    const items = record.changes.map((change) => ({ ...change, from: change.to, to: change.from }));
+    // 倒序回退：同一条规则连改几次时，要从最后一次往前撤
+    const items = record.changes.map((change) => (change.kind === 'metric' ? swapMetricItem(change) : { ...change, from: change.to, to: change.from })).reverse();
     return write(items, { actor, source, summary: `回退：${record.summary}`, revertOf: record.id });
 }
 
-export { find, plan, apply, listChanges, revert, sectionIdOf, listLocations };
+export { find, plan, apply, listChanges, revert, sectionIdOf, listLocations, readMetrics, planMetricEdits, applyMetricEdits };

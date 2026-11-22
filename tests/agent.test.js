@@ -314,7 +314,7 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         const res5 = Object.fromEntries(ev5.filter((e) => e.type === 'tool_result').map((e) => [e.tool + ':' + e.summary, e.ok]));
         assert.equal(res5['memory:已记住 #1'], true);
         assert.equal(res5['memory:未保存'], false, '凭据不能进记忆');
-        assert.equal(res5['save_uiv_script:需要管理员权限'], false);
+        assert.equal(res5['save_uiv_script:保存抓取脚本需要管理员权限'], false, '非管理员在确认前就被拒绝');
         const q = ev5.find((e) => e.type === 'question');
         assert.deepEqual(q.options, ['按网络', '按责任人']);
         assert.equal(ev5.find((e) => e.type === 'done').reply, '按哪个口径统计？');
@@ -335,7 +335,11 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
             { toolCalls: [{ name: 'list_uiv_scripts', args: { keyword: '工单' } }] },
             { text: '已保存。' },
         );
-        const ev6 = await chat('alice', { messages: [{ role: 'user', content: '保存这个脚本' }] });
+        // 保存脚本要先在确认卡里点允许
+        const ev6 = await chatLive('alice', { messages: [{ role: 'user', content: '保存这个脚本' }] }, async (ev) => {
+            if (ev.type === 'approval') await fetch(`${url}/api/agent-workspace/approvals/${ev.id}`, { method: 'POST', headers: json(as('alice')), body: JSON.stringify({ decision: 'allow' }) });
+        });
+        assert.match(ev6.find((e) => e.type === 'approval')?.preview?.title || '', /新建抓取脚本「工单列表」/);
         assert.deepEqual(ev6.filter((e) => e.type === 'tool_result').map((e) => e.ok), [true, true]);
         assert.match(streamReqs()[2].messages.filter((m) => m.role === 'tool').at(-1).content, /"name":"工单列表"/);
         // 数据抓取页面默认全员开放，开放时脚本对全员可见（与主线版一致）；这里先收回页面，单看插件分发

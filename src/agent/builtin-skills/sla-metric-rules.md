@@ -39,8 +39,8 @@ icon: 🎯
 
 ## 不要做
 
-- 不要用 update_database_rows 等通用写库工具直接改规则 JSON（`sla_config_items`）。那样没有命中行数预览，也无法按处回退。
-- 不要改指标 ID、条件列、展示列或预警目标。这组工具只改条件值。
+- 不要用 update_database_rows 等通用写库工具直接改规则 JSON（`sla_config_items`）。那样没有预览，也无法回退。
+- 只改条件值时用 `sla_update_metric_conditions`；要改条件列、取值列、类型、聚合方式、子指标，或新增 / 删除整条规则时，先 `sla_read_metric_rules` 看原规则，再用 `sla_edit_metric_rules`（同样有预览、记录和回退）。指标 ID 和预警目标不要改。
 - 不要声称"已修复高亮"，除非改后命中行数大于 0。命中行数只是按最近一次导入估算，下一次导入的数据可能不同。
 
 For English requests, follow the same steps: find, preview with match counts, apply after approval, report the change ID, and revert by change ID.

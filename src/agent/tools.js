@@ -303,6 +303,32 @@ const PLATFORM_TOOLS = [
     { id: 'requirements', name: '需求广场', href: '/requirements', guide: '提平台功能需求、看处理进度和记录；管理员按流程流转。' },
 ];
 
+// 抓取脚本保存：修改时以现有记录为底，只覆盖传入的字段（请求头、请求体、配置等不会被冲掉）
+const UIV_EDITABLE = ['name', 'category', 'url', 'method', 'code'];
+async function planUivSave(args = {}, ctx = {}) {
+    const clip = { name: 120, category: 60, url: 4000, method: 16, code: 60_000 };
+    const given = {};
+    for (const key of UIV_EDITABLE) {
+        if (args[key] === undefined || args[key] === null) continue;
+        let value = String(args[key]).slice(0, clip[key]);
+        if (key === 'method') value = value.toUpperCase();
+        if (key !== 'code') value = value.trim();
+        given[key] = value;
+    }
+    if (given.url !== undefined && !/^https?:\/\//i.test(given.url)) return { error: 'url 需要是 http(s) 地址' };
+    if (args.id) {
+        const existing = (await listScripts()).find((x) => String(x.id) === String(args.id));
+        if (!existing) return { error: `没有 id 为 ${args.id} 的脚本，先用 list_uiv_scripts 查` };
+        const record = { ...existing, ...given, id: existing.id, createdAt: existing.createdAt, updatedBy: ctx.identity?.username || '' };
+        const show = (key, value) => (key === 'code' ? `${String(value || '').length} 字符` : String(value ?? ''));
+        const diff = Object.keys(given).filter((key) => String(existing[key] ?? '') !== given[key])
+            .map((key) => ({ label: key, value: `${show(key, existing[key])} → ${show(key, given[key])}` }));
+        return { existing, record, diff };
+    }
+    if (!given.name || !given.url) return { error: '新建脚本需要 name 和 url' };
+    return { existing: null, record: { name: given.name, category: given.category || '默认分类', url: given.url, method: given.method || 'GET', code: given.code || '', source: 'chat', createdBy: ctx.identity?.username || '' }, diff: [] };
+}
+
 export const TOOLS = [
     {
         name: 'list_databases',
@@ -716,25 +742,42 @@ export const TOOLS = [
     },
     {
         name: 'save_uiv_script',
-        description: '把一段从浏览器 F12 复制的 fetch 请求保存为「数据抓取」脚本。仅管理员可用；只有用户明确要求保存时才调用。更新已有脚本时传 id。',
+        description: '新建或修改「数据抓取」脚本。仅管理员可用；只有用户明确要求保存时才调用，执行前会弹确认卡。新建：不传 id，name、url 必填。修改已有脚本：传 id，只传要改的字段，没传的字段（请求头、请求体、其它配置）保持原样；改之前先用 read_uiv_script 看原内容。',
         parameters: {
             type: 'object',
             properties: {
-                id: { type: 'string', description: '更新已有脚本时传；新建不传' },
+                id: { type: 'string', description: '修改已有脚本时传；新建不传' },
                 name: { type: 'string', description: '脚本名称' },
-                category: { type: 'string', description: '分类，默认「默认分类」' },
+                category: { type: 'string', description: '分类；新建默认「默认分类」，修改时不传则不变' },
                 url: { type: 'string', description: '请求地址' },
                 method: { type: 'string', description: 'GET / POST …' },
-                code: { type: 'string', description: 'fetch(...) 代码原文' },
+                code: { type: 'string', description: 'fetch(...) 代码原文；修改时不传则不变' },
             },
-            required: ['name', 'url'],
+        },
+        kind: 'write',
+        async approval(args, ctx) {
+            if (!ctx.identity.isAdmin) return { error: '保存抓取脚本需要管理员权限' };
+            const planned = await planUivSave(args, ctx);
+            if (planned.error) return { error: planned.error };
+            return { preview: {
+                title: planned.existing ? `修改抓取脚本「${planned.existing.name}」` : `新建抓取脚本「${planned.record.name}」`,
+                impact: planned.existing
+                    ? (planned.diff.length ? `改动 ${planned.diff.length} 个字段，其余字段（请求头、请求体、配置）保持不变` : '没有字段变化')
+                    : `分类「${planned.record.category}」`,
+                fields: planned.existing ? planned.diff : [
+                    { label: '地址', value: `${planned.record.method} ${planned.record.url}` },
+                    { label: '代码', value: planned.record.code ? `${planned.record.code.length} 字符` : '（无）' },
+                ],
+            } };
         },
         async run(args, ctx) {
             if (!ctx.identity.isAdmin) return { ok: false, summary: '需要管理员权限', content: '保存抓取脚本需要管理员权限。可以把脚本内容给用户，请管理员在「数据抓取」页面保存。' };
-            if (!/^https?:\/\//i.test(String(args.url || ''))) return { ok: false, summary: '地址不合法', content: 'url 需要是 http(s) 地址' };
+            const planned = await planUivSave(args, ctx);
+            if (planned.error) return { ok: false, summary: planned.error.slice(0, 60), content: planned.error };
+            if (planned.existing && !planned.diff.length) return { ok: true, summary: '没有变化', content: '内容和现有脚本一致，没有保存。' };
             const before = new Set((await listScripts()).map((s) => String(s.id)));
-            const all = await saveScripts([{ ...(args.id ? { id: String(args.id) } : {}), name: String(args.name).slice(0, 120), category: args.category, url: String(args.url), method: String(args.method || 'GET').toUpperCase(), code: String(args.code || '').slice(0, 60_000), source: 'chat', createdBy: ctx.identity.username }]);
-            const saved = args.id ? all.find((s) => String(s.id) === String(args.id)) : all.find((s) => !before.has(String(s.id)));
+            const all = await saveScripts([planned.record]);
+            const saved = planned.existing ? all.find((s) => String(s.id) === String(planned.existing.id)) : all.find((s) => !before.has(String(s.id)));
             if (!saved) {
                 return { ok: false, isError: true, summary: '保存失败', content: '保存抓取脚本未返回有效记录' };
             }
@@ -742,7 +785,7 @@ export const TOOLS = [
             if (!readback) {
                 return { ok: false, isError: true, summary: '验真失败', content: `抓取脚本保存后回读校验失败：未查到 ID 为 ${saved.id} 的记录` };
             }
-            return { ok: true, verified: true, summary: `已保存「${args.name}」`, content: JSON.stringify({ saved: true, verified: true, id: saved.id, name: args.name, linkHint: '可在 [数据抓取](/uivf12) 页面查看和运行' }) };
+            return { ok: true, verified: true, summary: `已保存「${readback.name}」`, content: JSON.stringify({ saved: true, verified: true, id: saved.id, name: readback.name, ...(planned.existing ? { changedFields: planned.diff.map((d) => d.label) } : {}), linkHint: '可在 [数据抓取](/uivf12) 页面查看与运行' }) };
         },
     },
 
