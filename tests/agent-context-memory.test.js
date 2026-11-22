@@ -221,7 +221,7 @@ test('context-stats & memory-service & history-evidence & agent-loop 集成验�
         const longSid = 'sess-compact-1';
         await saveSession({ id: longSid, ownerId: 'alice', title: '长会话', pinned: true });
         const longHistory = [];
-        for (let i = 0; i < 12; i += 1) {
+        for (let i = 0; i < 28; i += 1) {
             const msg = { role: i % 2 ? 'assistant' : 'user', content: i === 0 ? '海棠项目仅统计关闭工单。' : `第 ${i} 条${'记录 '.repeat(80)}` };
             await appendMessage(longSid, msg.role === 'assistant' ? 'model' : 'user', msg.content);
             longHistory.push(msg);
@@ -265,7 +265,7 @@ test('context-stats & memory-service & history-evidence & agent-loop 集成验�
         });
         delete mock.options.completionText;
         assert.ok(loopCompacted && loopCompacted.messages.some((m) => /自动压缩/.test(m.content)));
-        assert.equal((await listMessages(longSid)).length, 12);
+        assert.equal((await listMessages(longSid)).length, 28);
 
         // 前端只给最近几条（无数据库 ID）。跨过 500 条仍要取到真实换题边界。
         const pageSid = 'paged-context';

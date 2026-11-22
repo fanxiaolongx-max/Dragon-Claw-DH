@@ -1,3 +1,4 @@
+import { BusinessError } from '../core/errors.js';
 import { config, endpoints } from '../config.js';
 import { resolveRequestIdentity, parseCookies } from '../core/identity.js';
 import { listLogs, clearLogs, subscribeLogs, pushLog } from '../core/log-ring.js';
@@ -7,6 +8,8 @@ import { getActiveSettings } from '../services/ai-service.js';
 import { alertSummary } from '../services/alert-service.js';
 import { redactText } from '../agent/redact.js';
 import { secretsAreStrong } from '../core/secrets.js';
+import { guardStatus, generateDevToken, revokeDevToken, setVerifyUrl, probeVerifyUrl } from '../core/identity-guard.js';
+import { recordAudit } from '../services/audit-service.js';
 
 function maskVal(val) {
     const s = String(val || '');
@@ -16,6 +19,33 @@ function maskVal(val) {
 }
 
 export async function debugRoutes(fastify) {
+    // ── 身份加固：开发者免登录令牌、x-dh-user 服务端核验（/debug 整段只给管理员）──
+    fastify.get('/identity-guard', async () => guardStatus());
+    fastify.post('/dev-login/token', async (req) => {
+        const me = resolveRequestIdentity(req);
+        const { token, expiresAt } = await generateDevToken(me.username, req.body?.days);
+        await recordAudit(req, { actor: me.username, action: 'dev_token_create', detail: `有效期至 ${new Date(expiresAt).toISOString()}` });
+        // 令牌只在这里明文返回一次；loginPath 相对应用根目录
+        return { token, expiresAt, loginPath: `dev-login?token=${encodeURIComponent(token)}` };
+    });
+    fastify.delete('/dev-login/token', async (req) => {
+        const me = resolveRequestIdentity(req);
+        await revokeDevToken(me.username);
+        await recordAudit(req, { actor: me.username, action: 'dev_token_revoke' });
+        return { success: true };
+    });
+    fastify.post('/identity-verify/probe', async (req) => probeVerifyUrl(String(req.body?.url || ''), req.headers.cookie));
+    fastify.put('/identity-verify', async (req) => {
+        const me = resolveRequestIdentity(req);
+        try {
+            await setVerifyUrl(req.body?.url, me.username);
+        } catch (err) {
+            throw new BusinessError(err.message, 400);
+        }
+        await recordAudit(req, { actor: me.username, action: 'identity_verify_update', detail: String(req.body?.url || '（关闭）') });
+        return guardStatus();
+    });
+
     fastify.get('/summary', async (req) => {
         const identity = resolveRequestIdentity(req);
         const cookies = parseCookies(req.headers.cookie);

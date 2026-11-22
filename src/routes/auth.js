@@ -1,5 +1,6 @@
 import { BusinessError } from '../core/errors.js';
 import { resolveRequestIdentity } from '../core/identity.js';
+import { DEV_COOKIE } from '../core/identity-guard.js';
 import { config } from '../config.js';
 import { hasAdminMatch, isAuthEnforced, isSameUserId, listAdmins, saveAdmins } from '../core/access.js';
 import { pushLog } from '../core/log-ring.js';
@@ -22,6 +23,8 @@ function publicIdentity(id) {
         lang: id.lang,
         source: id.source,
         identified: id.identified,
+        devAdmin: Boolean(id.devAdmin),
+        identityVerified: Boolean(id.verified),
         appId: id.appId,
         appLevel: id.appLevel,
         digitalHumanMode: true,
@@ -37,7 +40,7 @@ export async function authRoutes(fastify) {
         // 登录由基座完成，这里把「同一账号 + 客户端 + IP 在 8 小时内首次进入」记为一次登录
         // 共享对话的账号目录：记下用过本应用的人（底座没有员工通讯录）；每人每小时最多写一次库，这里等它写完，
         // 刚进来的人马上就能被搜到
-        await rememberUser(id).catch(() => {});
+        if (!id.devAdmin) await rememberUser(id).catch(() => {});
         if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
         return publicIdentity(id);
     });
@@ -47,9 +50,11 @@ export async function authRoutes(fastify) {
         const id = resolveRequestIdentity(req);
         return { success: true, username: id.username, role: id.role, tenantId: id.tenantId, isSuper: id.isSuper };
     });
-    fastify.post('/logout', async (req) => {
+    fastify.post('/logout', async (req, reply) => {
         const id = resolveRequestIdentity(req);
         if (id.identified) await recordAudit(req, { actor: id.username, action: 'logout' });
+        // 开发者免登录会话随登出一起清掉
+        if (id.devAdmin) reply.header('Set-Cookie', `${DEV_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
         return { success: true };
     });
 

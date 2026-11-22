@@ -15,7 +15,7 @@ import { redactText } from '../agent/redact.js';
 
 export { estimateTokens };
 
-const SUMMARY_EVERY = 6; // 窗口外累计 6 条未压缩的消息再压一次，避免每轮都多调一次模型
+const SUMMARY_EVERY = 24; // 窗口外累计 24 条未压缩的消息再压一次，避免每轮都多调一次模型
 const SALIENT_RE = /error|fail|exception|denied|timeout|错误|失败|异常|报错|拒绝|超时/i;
 const TRUNCATED_RE = /^(MAX_TOKENS|LENGTH|max_tokens)$/i;
 const clip = (t, n) => (t.length > n ? `${t.slice(0, n)}…` : t);
@@ -77,24 +77,21 @@ async function summarize({ settings, previous = '', messages = [], task = '', se
     return redactText(retainUserConstraints(rawSummary, messages, redactText(previous, { secrets })), { secrets });
 }
 
-/** 单轮工具循环内超阈值时把较早步骤整理为摘要，保留最近约 25% 窗口的步骤原文 */
-export async function compactLoopMessages({ settings, messages = [], task = '', windowTokens = 128000, secrets = [] }) {
+/** 单轮工具循环内超阈值时把较早步骤整理为摘要，保留最近约 18% 窗口的步骤原文 */
+export async function compactLoopMessages({ settings, messages = [], task = '', windowTokens = 128000, fixedTokens = 0, secrets = [] }) {
     if (!Array.isArray(messages) || messages.length < 4) return null;
-    // 找到切分点：从末尾向前保留至少最近一组 (user / assistant+tool) 且约占窗口 25% 的最新内容
-    const keepBudget = Math.max(2048, Math.floor(windowTokens * 0.25));
-    let keepChars = 0;
+    const firstUserCost = messages[0]?.role === 'user' ? estimateTokens(messages[0]) : 0;
+    const keepBudget = Math.max(0, Math.min(windowTokens * 0.18,
+        windowTokens * 0.5 - fixedTokens - firstUserCost - 3000));
+    let recentTokens = 0;
     let splitAt = messages.length;
     for (let i = messages.length - 1; i >= 1; i -= 1) {
         const msg = messages[i];
-        keepChars += JSON.stringify(msg).length;
-        // 不能在 assistant(toolCalls) 和对应 tool 消息中间切开：只能在 user 或 assistant 无/已闭合处前切
-        const safeSplit = msg.role === 'user' || (msg.role === 'assistant' && (!messages[i - 1] || messages[i - 1].role !== 'assistant'));
-        if (safeSplit && i <= messages.length - 2 && keepChars >= keepBudget * 2.5) {
-            splitAt = i;
-            break;
-        }
+        recentTokens += estimateTokens(msg);
+        if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+        if (splitAt < messages.length && recentTokens > keepBudget) break;
+        splitAt = i;
     }
-    if (splitAt <= 1) return null;
     const headUser = messages[0]?.role === 'user' ? [messages[0]] : [];
     const sliceStart = headUser.length;
     if (splitAt <= sliceStart) return null;

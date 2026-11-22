@@ -68,6 +68,10 @@ export const config = {
     // 管理员：工号白名单（逗号分隔）。未配置时由首位已识别用户自动成为管理员，之后在界面里维护。
     adminUsers: String(process.env.DH_ADMIN_USERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     openAdmin: bool(process.env.DH_OPEN_ADMIN, false),
+    // 开发者免登录的固定令牌（可选；也可由管理员在调试面板生成）。打开 /dev-login?token=… 得到 8 小时管理员会话
+    devToken: String(process.env.DH_DEV_TOKEN || '').trim(),
+    // 服务端核验前端身份头 x-dh-user 用的底座接口（如 https://<门户域名>/digital-human/api/dh/user/current）；也可在调试面板配置
+    userVerifyUrl: String(process.env.DH_USER_VERIFY_URL || '').trim(),
     // 落库密钥的加密口令；未配置时退化为按应用 UUID 派生（仅防明文暴露，见 README 安全说明）
     secretKey: String(process.env.DH_SECRET_KEY || '').trim(),
 

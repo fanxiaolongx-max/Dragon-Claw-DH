@@ -237,6 +237,14 @@
             localStorage.removeItem('tools_super');
         } catch (_) { /* ignore */ }
     }
+    function rememberLoginUrl(resp) {
+        try {
+            return resp.clone().json().then((body) => {
+                const u = body && typeof body.loginUrl === 'string' ? body.loginUrl : '';
+                if (/^https?:\/\//i.test(u)) sessionStorage.setItem('dh_sso_login_url', u);
+            }).catch(() => {});
+        } catch (_) { return Promise.resolve(); }
+    }
     function redirectTo401() {
         if (IS_401_PAGE || dhRedirecting401) return;
         dhRedirecting401 = true;
@@ -363,8 +371,10 @@
                         }
                         const opts = Object.assign({}, options, { headers });
                         return origFetch(target, opts).then(unwrapEnvelope).then((resp) => {
-                            if (resp && resp.status === 401 && !IS_401_PAGE && !/\/api\/auth\/(?:me|logout)\b/.test(url)) {
-                                redirectTo401();
+                            if (resp && resp.status === 401 && !IS_401_PAGE) {
+                                // 基座 SSO 失效时网关/加载器会在 401 里带 loginUrl：记下来给 401 页直接跳 SSO 登录
+                                const captured = rememberLoginUrl(resp);
+                                if (!/\/api\/auth\/(?:me|logout)\b/.test(url)) captured.then(redirectTo401, redirectTo401);
                             }
                             return resp;
                         });

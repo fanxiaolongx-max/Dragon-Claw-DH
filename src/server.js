@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { config, STATIC_DIR } from './config.js';
 import { BusinessError } from './core/errors.js';
 import { parseIdentity } from './core/identity.js';
+import { hardenIdentity, redeemDevToken, DEV_COOKIE, DEV_USER } from './core/identity-guard.js';
 import { resolveAdmin, denyReason, isAuthEnforced, authRequiredReason } from './core/access.js';
 import { ok, fail } from './core/response.js';
 import { pushLog } from './core/log-ring.js';
@@ -30,7 +31,7 @@ import { departmentRewardPenaltyRoutes } from './routes/department-reward-penalt
 import { friendLinksRoutes, platformPromotionsRoutes } from './routes/home-extras.js';
 import { vaultRoutes } from './routes/vault.js';
 import { aiBiRoutes } from './routes/ai-bi.js';
-import { recordAuditOnce, clientIp } from './services/audit-service.js';
+import { recordAudit, recordAuditOnce, clientIp } from './services/audit-service.js';
 import { agentSkillsRoutes, customToolsRoutes, agentFilesRoutes, agentWorkspaceRoutes, registerCustomToolPages } from './routes/agent-extras.js';
 import { isSuperUser, isShared, isAnyShared, normalizePageId, canAccessPage, canAccessApi, pageSharedByDefault } from './services/distribution-service.js';
 import { builtinTool } from './services/custom-tool-service.js';
@@ -238,7 +239,15 @@ export async function createServer() {
         req.startedAt = Date.now();
         req.userIdentity = identity;
         reply.header('x-request-id', requestId);
-        requestContext.run({ requestId, userId: identity.username }, done);
+        // 开发者会话 / 服务端核验 x-dh-user（只有静态资源以外的请求才需要；核验结果按 Cookie 缓存）
+        const needsGuard = !/\.(?:css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|map|webp)$/i.test(String(req.url || '').split('?')[0]);
+        const proceed = () => requestContext.run({ requestId, userId: identity.username }, done);
+        if (!needsGuard) return proceed();
+        hardenIdentity(req, identity).then(proceed, (err) => {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `身份加固失败：${err?.message || err}`, requestId });
+            identity.unverified = true;
+            proceed();
+        });
     });
 
     const builtinApiAllowed = async (apiPath, method) => {
@@ -483,6 +492,31 @@ export async function createServer() {
     for (const loginPath of ['/login', '/login.html']) {
         app.get(loginPath, async (_req, reply) => sendHtmlFile(reply, '401.html'));
     }
+
+    // ── 开发者免登录：/dev-login?token=… 换一个 8 小时的管理员会话（令牌由管理员在调试面板生成或 DH_DEV_TOKEN 固定）──
+    const devCookieAttrs = (req, maxAgeSec) => {
+        const https = /https/i.test(String(req.headers['x-forwarded-proto'] || req.protocol || ''));
+        return `Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax${https ? '; Secure' : ''}`;
+    };
+    app.get('/dev-login', async (req, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        reply.header('Referrer-Policy', 'no-referrer');
+        const session = await redeemDevToken(req.query?.token).catch(() => null);
+        if (!session) {
+            pushLog({ level: 'WARN', category: 'AUTH', message: `开发者免登录失败（令牌无效或已过期）来自 ${clientIp(req)}` });
+            recordAuditOnce(`devlogin-fail:${clientIp(req)}`, 10 * 60_000, req, { actor: '（未登录）', action: 'login_failed', detail: '开发者免登录令牌无效' });
+            return reply.code(403).type('text/plain; charset=utf-8').send('开发者令牌无效或已过期');
+        }
+        reply.header('Set-Cookie', `${DEV_COOKIE}=${session.value}; ${devCookieAttrs(req, Math.floor((session.exp - Date.now()) / 1000))}`);
+        pushLog({ level: 'WARN', category: 'AUTH', message: `开发者免登录成功（令牌来源 ${session.source}）来自 ${clientIp(req)}`, userId: DEV_USER });
+        await recordAudit(req, { actor: DEV_USER, action: 'dev_login', detail: `开发者免登录（${session.source}），8 小时有效` });
+        // 跳回应用首页，地址栏里不留令牌
+        return reply.redirect('./', 302);
+    });
+    app.get('/dev-logout', async (req, reply) => {
+        reply.header('Set-Cookie', `${DEV_COOKIE}=; ${devCookieAttrs(req, 0)}`);
+        return reply.redirect('./', 302);
+    });
 
     app.get('/', async (req, reply) => {
         if (req.raw._dhNeedsTrailingSlash) {

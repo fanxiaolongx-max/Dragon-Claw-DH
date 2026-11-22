@@ -250,13 +250,39 @@
                 ? base.replace(/\/dh\/[^/]+$/i, '/')
                 : '/';
             const loginBtn = document.getElementById('dh401LoginBtn');
+            // 基座 SSO 失效时，网关/加载器的 401 里带有 loginUrl：优先直接去 SSO 登录，登录后回到本应用
+            const appHome = window.location.origin + (base ? base + '/' : '/');
+            function withReturn(u) {
+                try {
+                    const parsed = new URL(u);
+                    if (!/^https?:$/.test(parsed.protocol)) return '';
+                    if (parsed.searchParams.has('redirect')) parsed.searchParams.set('redirect', appHome);
+                    return parsed.toString();
+                } catch (_) { return ''; }
+            }
+            let loginTarget = portalUrl;
+            function useLoginUrl(u) {
+                const next = u ? withReturn(u) : '';
+                if (!next) return;
+                loginTarget = next;
+                loginBtn.href = next;
+                try { sessionStorage.setItem('dh_sso_login_url', u); } catch (_) { /* ignore */ }
+            }
             loginBtn.href = portalUrl;
+            try { useLoginUrl(sessionStorage.getItem('dh_sso_login_url') || ''); } catch (_) { /* ignore */ }
+            // 再问一次：此刻会话仍失效时，401 响应体里就有最新的 loginUrl
+            (window.dhRawFetch || window.fetch)(dhApi('api/auth/me'), { credentials: 'include' })
+                .then((r) => (r.status === 401 ? r.json() : null))
+                .then((body) => { if (body && typeof body.loginUrl === 'string') useLoginUrl(body.loginUrl); })
+                .catch(() => {});
+            function dhApi(p) { return (base ? base + '/' : '/') + p; }
             loginBtn.addEventListener('click', function (e) {
                 e.preventDefault();
+                try { sessionStorage.removeItem('dh_sso_login_url'); } catch (_) { /* ignore */ }
                 try {
-                    (window.top || window).location.href = portalUrl;
+                    (window.top || window).location.href = loginTarget;
                 } catch (_) {
-                    window.location.href = portalUrl;
+                    window.location.href = loginTarget;
                 }
             });
             document.getElementById('dh401RetryBtn').addEventListener('click', async function () {

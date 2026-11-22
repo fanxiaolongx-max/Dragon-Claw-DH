@@ -252,7 +252,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                 const taskText = latestPlan.length
                     ? `${lastUser}\n\n当前任务清单：\n${latestPlan.map((i) => `- [${i.status}] ${i.content}`).join('\n')}`
                     : lastUser;
-                const compacted = await compactLoopMessages({ settings: active, messages, task: taskText, windowTokens, secrets });
+                const compacted = await compactLoopMessages({ settings: active, messages, task: taskText, windowTokens, fixedTokens: estimateRequest(system, activeTools, []), secrets });
                 if (compacted?.messages?.length) {
                     messages = compacted.messages;
                     lastPromptTokens = 0;

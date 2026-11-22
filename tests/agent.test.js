@@ -492,16 +492,20 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 3 问' }] });
         // 前端只带了 1 条，服务端补上了窗口外还没压缩的 4 条
         assert.equal(streamReqs().at(-1).messages.filter((m) => m.role !== 'system').length, 5);
-        const fourth = await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 4 问' }] });
-        const comp = fourth.filter((e) => e.type === 'compaction');
+        for (let turn = 4; turn <= 12; turn++) {
+            const events = await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: `第 ${turn} 问` }] });
+            assert.ok(!events.some(e => e.type === 'compaction'), '短消息不会每三轮就触发摘要');
+        }
+        const next = await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 13 问' }] });
+        const comp = next.filter((e) => e.type === 'compaction');
         assert.deepEqual(comp.map((e) => e.phase), ['start', 'done']);
-        assert.equal(comp[1].summarized, 6);
+        assert.equal(comp[1].summarized, 24);
         const lastStream = streamReqs().at(-1);
         assert.match(lastStream.messages[0].content, /之前的对话摘要/);
         assert.equal(lastStream.messages.filter((m) => m.role !== 'system').length, 1);
         const compact = async () => (await fetch(`${url}/api/ai/compact`, { method: 'POST', headers: json(as('carol')), body: JSON.stringify({ sessionId: sid }) })).json();
         assert.equal((await compact()).performed, false, '刚压缩过，没有新内容可压');
-        await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 5 问' }] });
+        await chat('carol', { sessionId: sid, messages: [{ role: 'user', content: '第 14 问' }] });
         const manual = await compact();
         assert.equal(manual.performed, true);
         assert.equal(manual.summarized, 2);

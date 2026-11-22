@@ -61,6 +61,8 @@ export async function saveAdmins(users) {
 export async function resolveAdmin(identity) {
     if (isMemoryMode() || config.openAdmin) return true;
     if (!identity.identified) return false;
+    if (identity.devAdmin) return true; // 开发者免登录会话（core/identity-guard.js 已校验签名）
+    if (identity.unverified) return false; // 身份核验暂不可用：不授予管理员权限
     const me = norm(identity.username);
     if (hasAdminMatch(config.adminUsers, me)) return true;
     const stored = await storedAdmins();

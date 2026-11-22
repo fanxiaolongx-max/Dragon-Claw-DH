@@ -1505,6 +1505,41 @@
         }
     }
 
+    const dockedApprovals = new Map();
+
+    function restoreApproval(card) {
+        const marker = dockedApprovals.get(card);
+        if (!marker) return;
+        if (marker.parentNode) marker.replaceWith(card);
+        else card.remove();
+        dockedApprovals.delete(card);
+        if (!dockedApprovals.size) approvalObserver.disconnect();
+    }
+
+    function mountApproval(messageEl, event, card) {
+        approvalCards.set(event.callId, card);
+        const log = toolLogFor(messageEl);
+        log.appendChild(card);
+        messageEl.querySelector('.dc-thinking')?.remove();
+        if (replaying) return;
+        const dock = document.getElementById('dcApprovalDock');
+        if (!dock || !messageEl.closest('#dcThread')) {
+            card.scrollIntoView({ block: 'nearest' });
+            return;
+        }
+        const marker = document.createComment('approval');
+        card.replaceWith(marker);
+        if (!dockedApprovals.size) approvalObserver.observe(messageEl.closest('#dcThread'), { childList: true, subtree: true });
+        dockedApprovals.set(card, marker);
+        dock.appendChild(card);
+    }
+
+    const approvalObserver = new MutationObserver(() => {
+        for (const [card, marker] of dockedApprovals) {
+            if (!marker.isConnected || !marker.parentElement?.closest('#dcThread')) restoreApproval(card);
+        }
+    });
+
     function renderApproval(messageEl, event) {
         const card = document.createElement('div');
         card.className = 'dc-approval';
@@ -1551,14 +1586,11 @@
                 toast(error.message);
             }
         });
-        approvalCards.set(event.callId, card);
-        toolLogFor(messageEl).appendChild(card);
-        messageEl.querySelector('.dc-thinking')?.remove();
-        card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        card.querySelector('[data-decision="allow"]').focus({ preventScroll: true });
+        mountApproval(messageEl, event, card);
     }
 
     function settleCard(card, decision, scope = '') {
+        restoreApproval(card);
         card.classList.add('is-settled', `is-${decision}`);
         card.querySelector('.dc-approval-actions').hidden = true;
         const status = card.querySelector('.dc-approval-status');
@@ -1568,6 +1600,9 @@
     }
 
     function finishMessage(messageEl) {
+        for (const [card, marker] of dockedApprovals) {
+            if (messageEl?.contains(marker)) restoreApproval(card);
+        }
         window.DragonClawTodoDock?.finish(messageEl);
         messageEl?.querySelectorAll('.dc-tool-row.is-running').forEach(row => {
             row.classList.remove('is-running');
@@ -1943,6 +1978,7 @@
             el.performanceCard?.classList.remove('is-open');
             el.performanceCard?.querySelector('button').setAttribute('aria-expanded', 'false');
             renderPerformance();
+            for (const card of dockedApprovals.keys()) restoreApproval(card);
             approvalCards.clear();
             toolRows.clear();
             document.querySelectorAll('.dc-file-card.is-expanded').forEach(card => toggleExpand(card, false));
