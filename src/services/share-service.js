@@ -121,6 +121,17 @@ async function myMemberships(user) {
     return (await listRecords(K.member, { group: userKey(user), withPayload: true, limit: 500 })).map((r) => r.payload).filter(Boolean);
 }
 
+/** 我作为成员加入、仍有效的共享对话的会话号（不含自己发起的）：查自己的历史对话时用 */
+export async function memberSessionIds(user) {
+    const ids = [];
+    for (const m of await myMemberships(user)) {
+        if (m.status !== 'accepted') continue;
+        const share = await getShare(m.shareId);
+        if (share?.status === 'active' && share.sessionId) ids.push(String(share.sessionId));
+    }
+    return [...new Set(ids)];
+}
+
 /** 对话的访问权：发起者本人，或已接受邀请的成员（共享仍有效）。返回 { session, share, role } 或 null */
 export async function sessionAccess(sessionId, user) {
     const session = await getSession(String(sessionId || ''));

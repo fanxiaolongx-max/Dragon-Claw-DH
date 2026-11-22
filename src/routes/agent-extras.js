@@ -139,7 +139,7 @@ async function handleCustomToolBridge(req, reply) {
     reply.header('Cache-Control', 'no-store');
     if (method === 'me') return { username: identity.username, displayName: identity.displayName, isAdmin: Boolean(identity.isAdmin) };
     if (method === 'query') {
-        const out = await runSelect({ sql: String(params.sql || ''), limit: params.limit });
+        const out = await runSelect({ sql: String(params.sql || ''), limit: params.limit, identity });
         if (!out.ok) return reply.code(400).send({ error: out.content });
         return JSON.parse(out.content);
     }

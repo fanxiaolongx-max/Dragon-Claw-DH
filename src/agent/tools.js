@@ -17,6 +17,7 @@ import { evaluate } from './calc.js';
 import { NETCARE_TOOLS } from './netcare-tools.js';
 import { FOLLOWUP_TOOLS } from './followup-tools.js';
 import { SLA_RULE_TOOLS } from './sla-rule-tools.js';
+import { PAGE_CONFIG_TOOLS, HISTORY_TOOLS } from './data-tools.js';
 
 // ── 应用库目录：模型能查的业务表（其余表——对话、密钥、配置、附件——一律不可查）──
 const TABLE_NOTES = {
@@ -36,6 +37,11 @@ const TABLE_NOTES = {
     ai_report_documents: 'AI 月报文档：report_month、name、updated_by、updated_at（payload_json 很大）',
     uiv_scripts: '数据抓取脚本：name、url、category（payload_json 为脚本内容）',
     uiv_categories: '数据抓取脚本分类：name、description',
+    sla_config_items: '数据导入的指标规则与页面配置：scope_key 范围、item_key 键、value_json 配置内容（JSON，可能较长，按 item_key 筛选后再取）',
+    import_source_presets: '数据导入的预设：preset_type 类型、name 名称、payload_json 预设内容',
+    import_source_files: '归档的原始文件：batch_id 批次、filename、category、size_bytes、created_at（file_base64 是文件内容，不要查）',
+    monthly_documents: '月报文档：title、report_month、updated_at（payload_json 很大）',
+    platform_metrics_events: '平台使用埋点（仅管理员可查）：event_type 事件、tool_id 工具、user_id 账号、created_at(毫秒时间戳)',
 };
 const HEAVY_COLS = new Set(['payload_json', 'rows_json', 'raw_data_json', 'file_base64', 'data_base64', 'image_base64', 'html', 'body', 'meta_json']);
 
@@ -50,6 +56,37 @@ const SCHEMA = (() => {
     return map;
 })();
 const ALLOWED = new Set(Object.keys(TABLE_NOTES).filter((t) => SCHEMA.has(t)));
+
+// ── 对话查库的权限边界 ──
+// 1. 只开放 TABLE_NOTES 里的业务表；对话记录、附件、模型密钥、键值配置、大字段分片、共享关系（biz_records）一律不进通用查询；
+//    键值表里的页面配置走 read_page_config（按键白名单），自己的历史对话走 search_my_conversations / read_my_conversation。
+// 2. 表跟着页面走：能打开所属页面（全员开放或超级管理员）才能查这张表，与页面里看到的数据一致。
+// 3. 个别表只给管理员。
+const TABLE_PAGES = {
+    report_snapshots: ['report', 'bigscreen', 'expedite', 'monthly'],
+    report_category_scores: ['report', 'bigscreen', 'expedite', 'monthly'],
+    report_metric_data: ['report', 'bigscreen', 'expedite', 'monthly'],
+    bigscreen_owners: ['bigscreen', 'report', 'expedite'],
+    sla_snapshots: ['sla'], sla_targets: ['sla'], sla_categories: ['sla'], sla_groups: ['sla'], sla_group_items: ['sla'], sla_config_items: ['sla'],
+    upload_history: ['sla'], import_source_batches: ['sla'], import_source_sheets: ['sla'], import_source_presets: ['sla'], import_source_files: ['sla'],
+    monthly_snapshots: ['monthly'], ai_report_documents: ['monthly'], monthly_documents: ['monthly'],
+    uiv_scripts: ['uivf12'], uiv_categories: ['uivf12'],
+};
+const ADMIN_TABLES = new Set(['platform_metrics_events']);
+const isPrivileged = (identity) => Boolean(identity?.isSuper || identity?.isAdmin);
+
+/** 当前账号在对话里能查的表 */
+export async function allowedTablesFor(identity) {
+    const privileged = isPrivileged(identity);
+    const out = new Set();
+    for (const table of ALLOWED) {
+        if (ADMIN_TABLES.has(table) && !privileged) continue;
+        const pages = TABLE_PAGES[table];
+        if (!privileged && pages && !(await canAccessAnyPage(pages, identity))) continue;
+        out.add(table);
+    }
+    return out;
+}
 const APP_DB = 'app';
 const PRIORITY_TABLE_ORDER = Object.keys(TABLE_NOTES);
 const PRIORITY_TABLE_RANK = new Map(PRIORITY_TABLE_ORDER.map((name, idx) => [name, idx]));
@@ -103,7 +140,7 @@ export async function explorerCatalog(database = 'app') {
 
 /** 给系统提示词用的紧凑目录：模型不用先花一轮去查结构 */
 export function schemaDigest() {
-    return [...ALLOWED].map((t) => `- ${t}(${SCHEMA.get(t).map((c) => c.name).join(', ')})：${TABLE_NOTES[t]}`).join('\n');
+    return [...ALLOWED].filter((t) => !ADMIN_TABLES.has(t)).map((t) => `- ${t}(${SCHEMA.get(t).map((c) => c.name).join(', ')})：${TABLE_NOTES[t]}`).join('\n');
 }
 
 // ── 只读 SQL 守卫 ──
@@ -159,12 +196,13 @@ function shapeRows(rows, maxRows = 200, maxChars = 24_000) {
 }
 
 // explorer：来自数据探索页（仅管理员），应用库放开到实查出来的全部表（敏感表除外），结果也不为模型上下文截短
-export async function runSelect({ database, sql, limit, offset, explorer = false }) {
+// identity：对话 / 自定义工具里按账号收窄可查的表（见 allowedTablesFor）；不传时按普通账号处理
+export async function runSelect({ database, sql, limit, offset, explorer = false, identity = null }) {
     const isApp = !database || database === APP_DB || database === config.appSchema;
     if (!isApp && !hasBusinessDatasource()) return { ok: false, summary: '数据库不存在', content: `没有名为 ${database} 的数据库。可用：${APP_DB}` };
     const guarded = explorer && isApp
         ? guardSelect(sql, { appDb: true, allowed: new Set((await explorerAppTables()).map((t) => t.name.toLowerCase())), blocked: EXPLORER_HIDDEN })
-        : guardSelect(sql, { appDb: isApp });
+        : guardSelect(sql, { appDb: isApp, allowed: isApp ? await allowedTablesFor(identity) : ALLOWED });
     if (guarded.error) return { ok: false, summary: guarded.error.slice(0, 60), content: guarded.error };
     const cap = Math.max(1, Math.min(Number(limit) || 100, 500));
     const safeOffset = Math.max(0, Math.floor(Number(offset)) || 0);
@@ -270,8 +308,9 @@ export const TOOLS = [
         name: 'list_databases',
         description: '列出可以查询的数据库。',
         parameters: { type: 'object', properties: {} },
-        async run() {
-            const dbs = [{ database: APP_DB, description: '本应用的业务库（导入快照、报表指标、月报、抓取脚本等）', tables: ALLOWED.size }];
+        async run(_args, ctx) {
+            const dbs = [{ database: APP_DB, description: '本应用的业务库（导入快照、报表指标、月报、抓取脚本等）', tables: (await allowedTablesFor(ctx?.identity)).size },
+                { database: 'page_config', description: '各页面保存的配置（一键催办通讯录、报表看板配置、导入设置、月报模板等），用 read_page_config 读取，不能用 SQL' }];
             if (hasBusinessDatasource()) dbs.push({ database: config.businessDatasourceName, description: '平台授权的业务数据源（只读）。表结构用 query_database 执行 SHOW TABLES / DESCRIBE 不可用时，请直接向用户确认表名' });
             return { ok: true, summary: `${dbs.length} 个数据库`, content: JSON.stringify(dbs) };
         },
@@ -280,13 +319,14 @@ export const TOOLS = [
         name: 'database_schema',
         description: '查看应用库的表结构。不传 table 返回所有可查的表及说明；传 table 返回该表的列。',
         parameters: { type: 'object', properties: { database: { type: 'string', description: `数据库名，默认 ${APP_DB}` }, table: { type: 'string', description: '表名，可选' } } },
-        async run(args) {
+        async run(args, ctx) {
             const table = String(args.table || '').replace(/`/g, '').toLowerCase();
+            const allowed = await allowedTablesFor(ctx?.identity);
             if (!table) {
-                const ordered = [...ALLOWED].sort((a, b) => (PRIORITY_TABLE_RANK.get(a) ?? 999) - (PRIORITY_TABLE_RANK.get(b) ?? 999));
+                const ordered = [...allowed].sort((a, b) => (PRIORITY_TABLE_RANK.get(a) ?? 999) - (PRIORITY_TABLE_RANK.get(b) ?? 999));
                 return { ok: true, summary: `${args.database || APP_DB}（应用业务库） · ${ordered.length} 张核心表`, content: JSON.stringify(ordered.map((t) => ({ table: t, columns: SCHEMA.get(t).map((c) => c.name), note: TABLE_NOTES[t] }))) };
             }
-            if (!ALLOWED.has(table)) return { ok: false, summary: '表不可查', content: `表 ${table} 不在可查询范围内。可查的表：${[...ALLOWED].join('、')}` };
+            if (!allowed.has(table)) return { ok: false, summary: '表不可查', content: `表 ${table} 不在你可查询的范围内。可查的表：${[...allowed].join('、')}。页面配置用 read_page_config，自己的历史对话用 search_my_conversations。` };
             const purpose = String(TABLE_NOTES[table] || '').split(/[：；。\n]/)[0].trim().slice(0, 24);
             return { ok: true, summary: `${args.database || APP_DB}（应用业务库） / ${table}${purpose ? `（${purpose}）` : ''} · ${SCHEMA.get(table).length} 列`, content: JSON.stringify({ table, note: TABLE_NOTES[table], columns: SCHEMA.get(table) }) };
         },
@@ -303,7 +343,7 @@ export const TOOLS = [
             },
             required: ['sql'],
         },
-        run: (args) => runSelect(args),
+        run: (args, ctx) => runSelect({ ...args, explorer: false, identity: ctx?.identity }),
     },
     {
         name: 'read_database_table',
@@ -321,7 +361,7 @@ export const TOOLS = [
             },
             required: ['table'],
         },
-        async run(args) {
+        async run(args, ctx) {
             const table = String(args.table || '').replace(/`/g, '').toLowerCase();
             if (!/^\w+$/.test(table)) return { ok: false, summary: '表名不合法', content: '表名不合法' };
             const known = SCHEMA.get(table);
@@ -329,7 +369,7 @@ export const TOOLS = [
             if (wanted && wanted.some((c) => !/^\w+$/.test(c))) return { ok: false, summary: '列名不合法', content: '列名只能是字母、数字、下划线' };
             const cols = wanted ? wanted.map((c) => `\`${c}\``).join(', ') : '*';
             const sql = `SELECT ${cols} FROM \`${table}\`${args.where ? ` WHERE ${args.where}` : ''}${args.order_by ? ` ORDER BY ${args.order_by}` : ''}`;
-            const res = await runSelect({ database: args.database, sql, limit: args.limit || 50, offset: args.offset });
+            const res = await runSelect({ database: args.database, sql, limit: args.limit || 50, offset: args.offset, identity: ctx?.identity });
             if (res.ok) {
                 const purpose = String(TABLE_NOTES[table] || '').split(/[：；。\n]/)[0].trim().slice(0, 24);
                 res.summary = `${args.database || APP_DB}（应用业务库） / ${table}${purpose ? `（${purpose}）` : ''} · ${res.summary}`;
@@ -913,6 +953,8 @@ export const TOOLS = [
     ...NETCARE_TOOLS,
     ...FOLLOWUP_TOOLS,
     ...SLA_RULE_TOOLS,
+    ...PAGE_CONFIG_TOOLS,
+    ...HISTORY_TOOLS,
 ];
 
 export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));

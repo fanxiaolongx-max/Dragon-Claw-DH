@@ -38,6 +38,8 @@ function buildSystemPrompt({ identity, language, catalog, loaded, extra, memorie
 - 能一次并行调用的工具就一起调用，少绕弯；拿到足够信息后直接给结论。
 - 回答先给结论，再给依据。多行数据用 Markdown 表格；数字保留原始精度。
 - 普通闲聊、写作、解释概念、写代码不需要调用工具，直接回答。
+- 页面保存的配置（一键催办通讯录、报表看板配置、数据导入设置与映射模板、月报模板等）不在业务表里，用 read_page_config 读，不要用 SQL 去查键值表。
+- 用户问自己以前问过 / 聊过的内容、上次的结论时，用 search_my_conversations 找到对话，再用 read_my_conversation 看原文；只能查本人的对话。
 - 占比、差距、增减幅、工作日这类数字用 calculate 算，不要心算。
 - 需要 3 步以上的任务先用 update_plan 列出步骤并随进度更新；必须由用户拍板的事用 ask_user 提问。
 - 用户上传了 Excel / CSV 并要做统计、筛选时用 query_data（服务端计算），不要用 read_file 把整张表读进来再心算。用户上传的图片会直接附给你；需要再看某张图时用 view_image。

@@ -10,7 +10,7 @@ icon: 📣
 
 1. **查询数据与责任人（全部使用只读工具取数，禁止凭空编造）**：
    - 运营指标/催办类：先调用 `get_report_overview` 获取最新快照概览；需要明细时用 `query_database` 查询 `report_metric_data`（重点看 `is_failing = 1`、`gap`、`cat_name`、`metric_label`）。
-   - 责任人名单查询：用 `query_database` 查询 `bigscreen_owners`（`cat_name`, `metric_label`, `owner_name`, `emp_id`）及 `sys_kv_store`（`kv_key IN ('distribution_policy', 'expedite_notify_directory')`），定位对应责任人工号或邮箱。
+   - 责任人名单查询：用 `query_database` 查询 `bigscreen_owners`（`cat_name`, `metric_label`, `owner_name`, `emp_id`），再用 `read_page_config` 读取 `expedite_notify_directory`（一键催办通讯录），定位对应责任人工号或邮箱。
    - 若涉及现网业务库且用户已获授权，也可使用 `netcare_tables` / `netcare_query` / `netcare_sql` 做只读核查。
 
 2. **AI 研判并拟定通知方案（先汇报、再确认）**：

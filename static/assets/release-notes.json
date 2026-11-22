@@ -1,8 +1,12 @@
 {
   "zh": [
-    "修复对话顶栏「···」更多操作菜单：窗口或侧栏收窄后再拉宽时，按钮现在会自动恢复显示（之前会一直收在「···」里直到刷新）；收起时机改为按标题保底宽度判断，标题不再被挤得过窄；管理员的「终端」入口也会出现在「···」菜单中。"
+    "Dragon Claw 可以查各页面保存的配置了：一键催办通讯录、报表看板配置、数据导入设置与映射模板、月报模板等，直接问即可；能查哪些跟着页面权限走，密码、令牌类字段自动隐藏，登录与模型配置等敏感项不开放。",
+    "对话查库的范围扩大到数据导入规则、预设、归档文件和月报文档等业务表，并改为按页面权限收窄：某个页面没对你开放，它的数据在对话里也查不到。",
+    "新增「我的历史对话」：问“我之前问过……”“上次那个结论是什么”，AI 会搜索并翻看你自己的历史对话（含你已加入的共享对话）再回答，别人的对话查不到。"
   ],
   "en": [
-    "Fixed the chat header \"···\" more-actions menu: buttons now come back automatically when the window or sidebar is widened again (previously they stayed collapsed until reload); collapsing is based on a minimum title width so the title is no longer squeezed too far; the Terminal entry for admins now appears in the menu."
+    "Dragon Claw can now read the settings saved by each page — the expedite contact directory, dashboard settings, import settings and mapping templates, monthly report templates and more. What you can read follows page access, password- and token-like fields are hidden, and sign-in and model settings are never exposed.",
+    "Database questions in chat now cover more business tables (import rules, presets, archived files, monthly report documents) and are narrowed by page access: if a page is not open to you, its data cannot be queried in chat either.",
+    "New \"my past chats\": ask \"what did I ask before about…\" or \"what was the conclusion last time\" and the AI searches and reads your own earlier conversations (including shared ones you joined); other people's chats are never searchable."
   ]
 }
