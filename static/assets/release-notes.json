@@ -1,8 +1,8 @@
 {
   "zh": [
-    "表目录左侧分类的圆点改为显示该分类下最严重的状态，颜色与右侧表格一致：红 = 异常 / 查询失败，橙 = 空表，灰 = 库里没有；鼠标悬停可看各状态张数。筛选栏右侧新增圆点颜色图例。"
+    "修复数据治理页往下滚动时白底卡片比内容短、表格溢出到灰色背景上的问题；去掉数据源问题页底部多出来的「null」字样。"
   ],
   "en": [
-    "Category dots in the table catalog now show the worst status in that category, matching the table colours (red = anomaly / query failed, orange = empty, grey = missing), with per-status counts on hover. A colour legend was added beside the filters."
+    "Fixed the data-governance card being shorter than its content when scrolling, and removed a stray \"null\" at the bottom of the data-source issues tab."
   ]
 }

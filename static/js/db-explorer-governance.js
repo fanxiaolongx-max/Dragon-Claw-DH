@@ -191,7 +191,7 @@
             el('span', { class: 'gov-issue-metric' }, [el('b', { text: st.rate == null ? '—' : `${st.rate}%` }), '解决率']),
             el('span', { class: 'gov-issue-metric' }, [el('b', { text: fmt(st.open) }), '未解决']),
             el('span', { class: `gov-issue-metric${st.overdue ? ' is-hot' : ''}` }, [el('b', { text: fmt(st.overdue) }), `超过 ${v.config.alertDays} 天`]),
-            st.open ? el('span', { class: 'gov-issue-metric' }, [el('b', { text: span(st.longestMs) }), '最长未解决']) : null,
+            st.open ? el('span', { class: 'gov-issue-metric' }, [el('b', { text: span(st.longestMs) }), '最长未解决']) : '',
             el('span', { class: 'grow' }),
             el('span', { class: 'gov-issue-go', text: st.open ? '查看并提醒数据源 →' : '全部已解决 ✓' }),
         );
@@ -271,7 +271,7 @@
                 ]))),
             ])]),
         ]) : null;
-        body.replaceChildren(kpis, tools, openTable_, closed,
+        body.replaceChildren(...[kpis, tools, openTable_, closed].filter(Boolean),
             el('p', { class: 'gov-note', text: `跟踪范围：带 NetCare / DataFab 标识的表。每轮巡检自动复核：查到有数据即记为已解决；开始时间是第一次发现问题的时间。最近同步 ${when(v.syncedAt)}。` }));
     }
 

@@ -2,6 +2,8 @@
 .layout.is-gov { grid-template-columns: 78px minmax(0, 1fr); }
 .layout.is-gov .tables { display: none; }
 .view.gov { gap: 12px; min-height: 0; overflow: auto; position: relative; }
+/* 页面整体滚动：各块不被压缩到窗口高度，否则白底卡片会比内容短 */
+.view.gov > * { flex-shrink: 0; }
 .gov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .gov-title small { color: var(--ink3); font-size: 12px; }
 .gov-title h2 { margin: 2px 0; font-size: 20px; font-weight: 650; }
