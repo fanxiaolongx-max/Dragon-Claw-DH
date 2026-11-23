@@ -44,7 +44,7 @@ function altText(info) {
     return info?.alternative ? `；可改用 ${info.alternative.table}（${info.alternative.note}）` : '';
 }
 function blockedError(table, issue, sentence, info) {
-    return Object.assign(new Error(`表 ${table} 目前有数据源问题：${sentence(issue)}。数据治理里正在跟踪，对话里暂不使用它回答；请如实告诉用户这张表的数据源还没就绪${altText(info)}，不要编数据。`), { code: 'DATA_SOURCE_ISSUE' });
+    return Object.assign(new Error(`表 ${table} 目前有数据源问题：${sentence(issue)}。数据治理里正在跟踪，对话里暂不使用它回答；请如实告诉用户这张表的数据源还没就绪${altText(info)}，不要编数据。需要指路时说「数据探索 → 数据治理 → 数据源问题」，不要编造页面链接。`), { code: 'DATA_SOURCE_ISSUE' });
 }
 async function dictIndex() {
     try { return await (await dataDict()).chatTableIndex(); } catch { return new Map(); }
@@ -127,7 +127,7 @@ async function findTables(args) {
             return matchScore(words, text, more) > 0;
         });
         if (hidden.length) {
-            lines.push('', `以下相关表目前有数据源问题（数据治理 → 数据源问题里在跟踪），${issues.blocked.size ? '暂不用于回答' : '查询结果可能为空'}：`);
+            lines.push('', `以下相关表目前有数据源问题（「数据探索 → 数据治理 → 数据源问题」里在跟踪；回复里照这个说法指路，不要编造链接），${issues.blocked.size ? '暂不用于回答，请如实告诉用户数据源还没就绪' : '查询结果可能为空'}：`);
             for (const i of hidden.slice(0, 12)) lines.push(`- ${i.table}（${[ORIGIN_TEXT[i.origin], i.board].filter(Boolean).join('·')}）：${issues.sentence(i)}${altText(index.get(i.key))}`);
         }
     }
