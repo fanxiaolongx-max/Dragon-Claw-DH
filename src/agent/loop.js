@@ -53,6 +53,7 @@ ${schemaDigest()}
 - **默认检索范围与引导协议（严禁无目的扫多张表）**：
 ${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@netcare-data\` 或明确提到 NetCare / 实时库 / DWS / DWD / 原始工单流水，直接用 \`netcare_*\` 查询 NetCare 业务库。
   2) 用户已明确点名具体表（如 \`report_*\` / \`sla_snapshots\` / \`import_source_batches\`），只查对应的 1–3 张具体表，不要全库泛查。
+     用户用中文叫法、英文表名或看板名点名一张不在上面应用库里的表（如「岗位基线导入表」「漏洞预警表」「整改清零看板」）也算点名：直接用 \`netcare_tables\`（看板指标用 \`netcare_boards\`）按这个说法找，找到就查；工具提示该表有数据源问题时如实告诉用户，不要弹选择卡片、也不要反问数据源。
   3) 当用户泛泛询问业务指标、异常值、完成率或“最新导入的数据”且未指明具体位置时，先调用 \`ask_user\` 弹出三选项选择卡片（2 个最常用入口 + 1 个其他选项）：
      ["应用库报表看板与导入指标（report_snapshots / report_metric_data / sla_snapshots）", "NetCare 实时业务库（@netcare-data，在线最新汇总与明细）", "其他业务表（按常用顺序选择）"]
   4) 若用户点击「其他业务表（按常用顺序选择）」，立即再次调用 \`ask_user\` 按常用顺序列出已有业务表供点选（最多 6 项，不含系统配置表）：
