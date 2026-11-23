@@ -252,7 +252,7 @@ test('接口：一键体检后台执行、状态可查、表字典可导出', as
     const settings = await app.inject({ method: 'PUT', url: '/api/db-explorer/governance/settings', payload: { intervalMinutes: 5, collectRows: 500 } });
     assert.deepEqual([JSON.parse(settings.body).intervalMinutes, JSON.parse(settings.body).collectRows], [15, 200], '周期和行数有上下限');
     const xlsx = await app.inject({ method: 'GET', url: '/api/db-explorer/governance/dictionary/export' });
-    assert.equal(xlsx.statusCode, 200);
+    assert.equal(xlsx.statusCode, 200, xlsx.body.slice(0, 500));
     assert.match(xlsx.headers['content-disposition'], /table-dictionary-.*\.xlsx/);
     assert.equal(xlsx.rawPayload.subarray(0, 2).toString(), 'PK');
     const ExcelJS = (await import('exceljs')).default;
@@ -283,4 +283,50 @@ test('内置默认数据：启动导入表字典和看板 SQL，内容没变不�
     assert.ok(boards.length >= 20);
     assert.ok(boards.every((d) => d.sources.length && !/"/.test(d.sql)), '都改写成了 MySQL 并识别到源表');
     assert.deepEqual(await dict.applyBundledDefaults(), { skipped: 'unchanged' });
+});
+
+test('数据源问题跟踪：空表 / 库里没有开问题、有数据后自动解决；超期、解决率；对话里限制访问问题表', async () => {
+    const issues = await import('../src/services/data-issue-service.js');
+    const t0 = Date.now();
+    const DAY = 86_400_000;
+    await issues.saveConfig({ alertDays: 3, restrictChat: true });
+    // tickets 被派生表引用 → DataFab·二次加工，在跟踪范围；redline_personnel 在需求清单里；position_baseline_import 不在库里
+    await issues.syncWithRun({ id: 'r_issue_1', results: [{ key: 'tickets', count: 0 }, { key: 'redline_personnel', count: 0 }, { key: 'Rectification_Overdue', count: 12 }, { key: 'secret', count: null, error: '没有查询权限' }] }, { now: t0 });
+    let view = await issues.issuesView({ now: t0 + 4 * DAY });
+    const open = new Map(view.open.map((i) => [i.key, i]));
+    assert.equal(open.get('tickets').kind, 'empty');
+    assert.equal(open.get('redline_personnel').kind, 'empty');
+    assert.equal(open.get('position_baseline_import').kind, 'missing', '清单里的表库里没有');
+    assert.ok(!open.has('rectification_overdue'), '有数据的不算问题');
+    assert.ok(!open.has('secret'), '不在跟踪范围的表不管');
+    assert.ok(!open.has('gts_datalink_d5d5b2_151046751'), 'DataFab 数据集名已换成库里的别名表');
+    assert.equal(open.get('t2_high_risk_command_interception').alternative.table, 't2_high_risk_command_interception_004');
+    assert.equal(view.stats.overdue, view.stats.open, '4 天都超过了 3 天');
+    const openedAt = open.get('redline_personnel').openedAt;
+
+    // 第二轮：tickets 有数据了 → 已解决；redline_personnel 仍空，开始时间不变
+    await issues.syncWithRun({ id: 'r_issue_2', results: [{ key: 'tickets', count: 10 }, { key: 'redline_personnel', count: 0 }, { key: 'Rectification_Overdue', count: 12 }] }, { now: t0 + 2 * DAY });
+    view = await issues.issuesView({ now: t0 + 2 * DAY });
+    const resolved = view.closed.find((i) => i.key === 'tickets');
+    assert.ok(resolved.durationMs >= 2 * DAY);
+    assert.equal(resolved.resolvedCount, 10);
+    assert.equal(view.open.find((i) => i.key === 'redline_personnel').openedAt, openedAt, '问题没解决，开始时间不变');
+    assert.ok(view.stats.rate > 0 && view.stats.rate < 100);
+    assert.equal(view.stats.overdue, 0, '才 2 天，没超过 3 天');
+    assert.equal((await issues.updateIssue('redline_personnel', { notified: true })).notifiedAt.length > 0, true);
+
+    // 对话：问题表不用来回答，说明原因并给出替代表
+    const { NETCARE_TOOLS } = await import('../src/agent/netcare-tools.js');
+    const run = (name, args) => NETCARE_TOOLS.find((t) => t.name === name).run(args);
+    const q = await run('netcare_query', { table: 'redline_personnel' });
+    assert.equal(q.ok, false);
+    assert.match(q.content, /DATA_SOURCE_ISSUE.*redline_personnel.*空表.*不要编数据/s);
+    const t2 = await run('netcare_sql', { sql: 'SELECT COUNT(*) FROM t2_high_risk_command_interception' });
+    assert.match(t2.content, /可改用 t2_high_risk_command_interception_004/);
+    const api = JSON.parse((await app.inject({ method: 'GET', url: '/api/db-explorer/governance/issues' })).body);
+    assert.ok(api.stats.open >= 1 && api.config.alertDays === 3);
+    await app.inject({ method: 'PUT', url: '/api/db-explorer/governance/issues/config', payload: { restrictChat: false, alertDays: 5 } });
+    const free = await run('netcare_query', { table: 'redline_personnel' });
+    assert.doesNotMatch(free.content, /DATA_SOURCE_ISSUE/, '关掉限制后照常查');
+    await issues.saveConfig({ restrictChat: true, alertDays: 3 });
 });

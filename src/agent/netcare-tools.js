@@ -31,6 +31,21 @@ function rowsText(rows, { sql, truncated } = {}) {
 
 // 表字典（数据治理页导入的中文名、看板、字段中文名）和来源标识；读不到时退回只用目录
 const dataDict = () => import('../services/data-dictionary-service.js');
+// 数据源问题（空表 / 库里没有 / 查询失败，数据治理里跟踪）：默认不用这些表回答，只告诉用户数据源还没就绪
+const dataIssues = () => import('../services/data-issue-service.js');
+async function issueState() {
+    try {
+        const mod = await dataIssues();
+        const [blocked, all] = await Promise.all([mod.chatIssueMap(), mod.chatIssueMap({ annotate: true })]);
+        return { blocked, all, sentence: mod.issueSentence };
+    } catch { return { blocked: new Map(), all: new Map(), sentence: () => '' }; }
+}
+function altText(info) {
+    return info?.alternative ? `；可改用 ${info.alternative.table}（${info.alternative.note}）` : '';
+}
+function blockedError(table, issue, sentence, info) {
+    return Object.assign(new Error(`表 ${table} 目前有数据源问题：${sentence(issue)}。数据治理里正在跟踪，对话里暂不使用它回答；请如实告诉用户这张表的数据源还没就绪${altText(info)}，不要编数据。`), { code: 'DATA_SOURCE_ISSUE' });
+}
 async function dictIndex() {
     try { return await (await dataDict()).chatTableIndex(); } catch { return new Map(); }
 }
@@ -59,7 +74,7 @@ function matchScore(words, primary, secondary) {
 }
 
 async function findTables(args) {
-    const [result, index] = await Promise.all([catalog.listTables({ scope: 'business' }), dictIndex()]);
+    const [result, index, issues] = await Promise.all([catalog.listTables({ scope: 'business' }), dictIndex(), issueState()]);
     const words = keywordsOf(args.keyword);
     const category = String(args.category || '').trim();
     const onlyWithData = args.onlyWithData !== false;
@@ -99,14 +114,32 @@ async function findTables(args) {
     for (const { view: table } of scored.slice(0, limit)) {
         lines.push([table.name, table.nameCn || '-', table.origin || '-', table.module || '-', [table.category, table.board].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' / ') || '-', table.grain || '-', table.rows, table.verified ? '是' : '否', (table.description || table.review || '').slice(0, 80) || '-'].join(' | ')
             + (table.family ? `（分区族 ${table.family}）` : '')
-            + (table.boards.length ? `（看板指标 ${table.boards.length} 个已算好，如 ${table.boards.slice(0, 2).map((b) => b.title).join('、')}，可用 netcare_boards 直接取）` : ''));
+            + (table.boards.length ? `（看板指标 ${table.boards.length} 个已算好，如 ${table.boards.slice(0, 2).map((b) => b.title).join('、')}，可用 netcare_boards 直接取）` : '')
+            + (issues.all.has(table.name.toLowerCase()) ? `（⚠ 数据源问题：${issues.sentence(issues.all.get(table.name.toLowerCase()))}${issues.blocked.size ? '，暂不用于回答' : ''}${altText(index.get(table.name.toLowerCase()))}）` : ''));
+    }
+    // 和关键词相关、但因数据源问题没列出来的表：告诉模型原因，让它如实回复用户
+    if (words.length && issues.all.size) {
+        const shown = new Set(scored.slice(0, limit).map(({ view }) => view.name.toLowerCase()));
+        const hidden = [...issues.all.values()].filter((i) => !shown.has(i.key)).filter((i) => {
+            const d = index.get(i.key)?.entry;
+            const text = `${i.table} ${i.nameCn || ''} ${d?.nameCn || ''} ${d?.nameEn || ''}`.toLowerCase();
+            const more = `${i.board || ''} ${d?.description || ''} ${(index.get(i.key)?.boards || []).map((b) => b.title).join(' ')}`.toLowerCase();
+            return matchScore(words, text, more) > 0;
+        });
+        if (hidden.length) {
+            lines.push('', `以下相关表目前有数据源问题（数据治理 → 数据源问题里在跟踪），${issues.blocked.size ? '暂不用于回答' : '查询结果可能为空'}：`);
+            for (const i of hidden.slice(0, 12)) lines.push(`- ${i.table}（${[ORIGIN_TEXT[i.origin], i.board].filter(Boolean).join('·')}）：${issues.sentence(i)}${altText(index.get(i.key))}`);
+        }
     }
     // 关键词也对一下看板指标：问的是看板上的数时，直接给出可读取的指标
     if (words.length) {
         const boards = await matchBoards(words, 6).catch(() => []);
         if (boards.length) {
             lines.push('', `相关看板指标（结果已按看板 SQL 算好，用 netcare_boards 传 board 读取）：`);
-            for (const b of boards) lines.push(`- ${b.id} | ${b.title} | ${b.rowCount ?? '-'} 行 | 源表 ${b.sources.join(',')}`);
+            for (const b of boards) {
+                const bad = b.sources.filter((k) => issues.all.has(String(k).toLowerCase()));
+                lines.push(`- ${b.id} | ${b.title} | ${b.rowCount ?? '-'} 行 | 源表 ${b.sources.join(',')}${bad.length ? `（⚠ 源表 ${bad.join('、')} 有数据源问题，结果可能为空）` : ''}`);
+            }
         }
     }
     return { content: lines.join('\n'), summary: `找到 ${scored.length} 张表` };
@@ -130,7 +163,11 @@ async function boards(args) {
         const list = await matchBoards(keywordsOf(args.keyword), clampInt(args.limit, 1, 200, 60));
         if (!list.length) return { content: args.keyword ? `没有和「${args.keyword}」相关的看板指标。可以换个说法，或用 netcare_tables 找源表直接查。` : '还没有看板指标（数据探索 → 数据治理 → 派生表 里导入看板 SQL 后就有）。', summary: '0 个看板指标' };
         const lines = [`看板指标 ${list.length} 个（board 传第一列的标识读取结果）：`, '标识 | 看板--指标 | 行数 | 状态 | 最近计算 | 源表'];
-        for (const d of list) lines.push([d.id, d.title, d.rowCount ?? '-', d.status === 'error' ? `计算失败：${String(d.lastError || '').slice(0, 60)}` : d.status || '未计算', d.lastRunAt || '-', d.sources.join(',')].join(' | '));
+        const issues = await issueState();
+        for (const d of list) {
+            const bad = d.sources.filter((k) => issues.all.has(String(k).toLowerCase()));
+            lines.push([d.id, d.title, d.rowCount ?? '-', bad.length ? `源表数据源问题（${bad.join('、')}）` : d.status === 'error' ? `计算失败：${String(d.lastError || '').slice(0, 60)}` : d.status || '未计算', d.lastRunAt || '-', d.sources.join(',')].join(' | '));
+        }
         return { content: lines.join('\n'), summary: `${list.length} 个看板指标` };
     }
     const defs = await mod.listDerived();
@@ -141,6 +178,11 @@ async function boards(args) {
         if (best.length === 1 || (best.length > 1 && best[0].score > best[1].score)) def = best[0];
         else if (best.length) return { ok: false, summary: '看板指标不唯一', content: `「${target}」对上多个看板指标，请用标识指定：\n${best.map((d) => `- ${d.id} | ${d.title}`).join('\n')}` };
         else throw Object.assign(new Error(`没有找到看板指标「${target}」，先不带 board 调用 netcare_boards 看清单`), { code: 'NOT_FOUND' });
+    }
+    {
+        const issues = await issueState();
+        const bad = def.sources.map((k) => issues.blocked.get(String(k).toLowerCase())).filter(Boolean);
+        if (bad.length) throw Object.assign(new Error(`看板指标「${mod.boardTitle(def)}」的源表有数据源问题：${bad.map((i) => `${i.table} ${issues.sentence(i)}`).join('；')}。结果不可信，对话里暂不使用；请如实告诉用户数据源还没就绪，不要编数据。`), { code: 'DATA_SOURCE_ISSUE' });
     }
     if (!def.status || def.status === 'pending' || def.rowCount == null) def = await mod.refreshDerived(def.id, { reason: '对话里首次读取' });
     if (def.status === 'error') throw Object.assign(new Error(`看板指标「${mod.boardTitle(def)}」计算失败：${def.lastError}`), { code: 'BOARD_ERROR' });
@@ -160,6 +202,9 @@ async function describe(args) {
     const d = info?.entry || null;
     const nameCn = note.nameCn || detail.seed?.nameCn || d?.nameCn;
     const lines = [`表 ${detail.schema ? `${detail.schema}.` : ''}${detail.name}${nameCn ? `（${nameCn}）` : ''}，${detail.columns.length} 个字段`];
+    const issues = await issueState();
+    const issue = issues.all.get(String(detail.name).toLowerCase());
+    if (issue) lines.push(`⚠ 数据源问题：${issues.sentence(issue)}${issues.blocked.size ? '，对话里暂不用它回答数据问题（字段结构可以参考）' : ''}${altText(info)}`);
     if (info?.origin) lines.push(`来源：${originText(info)}`);
     if (d) lines.push(`表字典：${[d.nameEn && `英文名 ${d.nameEn}`, (d.category || d.subCategory) && `分类 ${[d.category, d.subCategory].filter(Boolean).join(' / ')}`, d.layer && `分层 ${d.layer}`, d.description && `说明 ${d.description.slice(0, 200)}`].filter(Boolean).join('；') || '已登记'}`);
     if (info?.boards.length) lines.push(`看板指标（已算好，可用 netcare_boards 直接取）：${info.boards.slice(0, 8).map((b) => b.title).join('、')}${info.boards.length > 8 ? ` 等 ${info.boards.length} 个` : ''}`);
@@ -182,12 +227,24 @@ async function describe(args) {
     return { content, summary: `${detail.name}：${detail.columns.length} 个字段` };
 }
 
+async function assertUsable(tables) {
+    const issues = await issueState();
+    if (!issues.blocked.size) return;
+    const index = await dictIndex();
+    for (const t of tables) {
+        const issue = issues.blocked.get(String(t).toLowerCase());
+        if (issue) throw blockedError(issue.table || t, issue, issues.sentence, index.get(String(t).toLowerCase()));
+    }
+}
+
 async function query(args) {
+    await assertUsable([String(args.table || '')]);
     const result = await catalog.queryTable('business', { ...args, limit: clampInt(args.limit, 1, MAX_MODEL_ROWS, 100) });
     return { content: rowsText(result.rows, result), summary: `${args.table}：${result.rows.length} 行`, output: result.sql };
 }
 
 async function sql(args) {
+    await assertUsable(await dataDict().then((m) => m.parseSources(String(args.sql || ''))).catch(() => []));
     const result = await queryAll(args.sql, { scope: 'business', maxRows: clampInt(args.maxRows, 1, MAX_MODEL_ROWS, 200) });
     const text = String(args.sql).slice(0, 600);
     return { content: rowsText(result.rows, { sql: text, truncated: result.truncated }), summary: `SQL：${result.rows.length} 行`, output: text };

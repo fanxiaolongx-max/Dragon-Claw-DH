@@ -115,14 +115,16 @@ for (let i = 0; i < 320; i += 1) {
 }
 table('business_backup_t8', t8Cols, t8);
 
-// ── 表字典里的其他看板表：结构简化，有数据（其中一张故意留空，演示“空表”说明）──
-const simple = ['redline_personnel', 'redline_post_new', 'gts_datalink_d5d5b2_151046751', 'redline_project', 'redline_match', 'netcare_network_project',
+// ── 表字典里的其他看板表：结构简化，有数据。和内网实测对齐：两张 DataFab 数据集在库里叫别名表且是空表，
+// t2_high_risk_command_interception 是空表、数据在 _004（用来演示「数据源问题」跟踪和对话限制）──
+const simple = ['redline_personnel', 'redline_post_new', 'position_baseline_import', 'redline_project', 'redline_match', 'netcare_network_project',
     'redline_resource_investment', 'redline_resource_investment_new_total', 'redline_resource_investment_new', 'business_backup_t7',
-    'value_network_inspection', 'inspection_coverage', 'inspection_topic_improvement', 'ds_6jp5uhmzpdkgjxhfpuohup', 'risk_prevention',
-    'vulnerability_warning', 'first_node_vulnerability_warning', 'topn_list_total2023', 'drill_live_network', 't2_high_risk_command_interception'];
+    'value_network_inspection', 'inspection_coverage', 'inspection_topic_improvement', 'ne_inspection_coverage_total', 'risk_prevention',
+    'vulnerability_warning', 'first_node_vulnerability_warning', 'topn_list_total2023', 'drill_live_network', 't2_high_risk_command_interception', 't2_high_risk_command_interception_004'];
+const EMPTY = new Set(['t2_high_risk_command_interception', 'position_baseline_import', 'ne_inspection_coverage_total']);
 const simpleCols = [['id', 'int'], ['region_cn_name', 'varchar(64)'], ['repoffice_cn_name', 'varchar(64)'], ['item_name', 'varchar(128)'], ['metric_value', 'decimal(12,2)'], ['stat_date', 'date']];
 for (const [n, name] of simple.entries()) {
-    const rows = name === 't2_high_risk_command_interception' ? [] : Array.from({ length: 20 + (n * 13) % 90 }, (_, i) => {
+    const rows = EMPTY.has(name) ? [] : Array.from({ length: 20 + (n * 13) % 90 }, (_, i) => {
         const [region, , offices] = pick(REGIONS);
         return { id: i + 1, region_cn_name: region, repoffice_cn_name: pick(offices), item_name: `示例条目${i + 1}`, metric_value: Math.round(rnd() * 10000) / 100, stat_date: day(-int(0, 90)) };
     });

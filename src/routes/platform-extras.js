@@ -6,6 +6,7 @@ import { toolCatalog, setToolAccess } from '../services/tool-catalog-service.js'
 import { runSelect, explorerCatalog, explorerDatabases } from '../agent/tools.js';
 import * as dataWatch from '../services/data-watch-service.js';
 import * as dataDict from '../services/data-dictionary-service.js';
+import * as dataIssues from '../services/data-issue-service.js';
 
 // 消息只属于本人：每个接口都按当前工号取
 export async function alertCenterRoutes(fastify) {
@@ -126,6 +127,10 @@ export async function dbExplorerRoutes(fastify) {
             reply.header('Content-Disposition', `attachment; filename="${fileName('table-dictionary', 'csv')}"`);
             return dataDict.exportDictionaryCsv();
         });
+        // 数据源问题跟踪：空表 / 库里没有 / 查询失败，从第一次发现开始计时；解决率、超期
+        g.get('/issues', async () => dataIssues.issuesView());
+        g.put('/issues/config', async (req) => dataIssues.saveConfig(req.body || {}));
+        g.put('/issues/:key', async (req, reply) => (await dataIssues.updateIssue(req.params.key, req.body || {})) || reply.code(404).send({ error: '这张表没有未解决的问题' }));
         g.get('/derived', async () => ({ items: await dataDict.listDerived() }));
         g.post('/derived/preview', async (req) => dataDict.previewDerived(req.body || {}));
         // 批量导入看板 SQL（「看板--指标」+ SQL，多段）；dryRun 只看拆分和改写结果

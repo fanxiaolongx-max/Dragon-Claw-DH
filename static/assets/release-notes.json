@@ -1,10 +1,12 @@
 {
   "zh": [
-    "DragonClaw 问答接入表字典：用中文表名、近似说法或英文表名都能找到 NetCare / DataFab 业务表并直接查数。找表时会同时匹配表字典里的中文名、看板、说明和字段中文名，结果里标出 NetCare / DataFab / 二次加工；看字段时附带字段中文名。",
-    "新增「看板指标」查询工具：问到看板或看板上的指标（如「整改清零--整体网元进展」）时，直接读取按看板 SQL 算好的结果，源表变化后会自动重算。"
+    "数据治理新增「数据源问题」跟踪：带 NetCare / DataFab 标识的表出现空表、库里没有或查询失败时自动记为未解决，从第一次发现开始计时，有数据后自动记为已解决。页面顶部显示解决率、未解决数和超过设定天数的超期数（超期时醒目提示），可一键复制提醒文本发给数据源负责人，并记录已提醒。",
+    "DragonClaw 对话会自动避开有数据源问题的表：不再用空表回答，而是如实说明数据源未就绪，有替代表时提示改用（如 t2_high_risk_command_interception_004）。可在数据源问题页关闭此限制。",
+    "按内网实测修正表名：两张 DataFab 数据集对应库里的 position_baseline_import、ne_inspection_coverage_total；库里的中文字段注释会用作字段中文名，导出的表字典和体检汇总也带上字段明细与数据源问题。"
   ],
   "en": [
-    "DragonClaw chat now uses the table dictionary: Chinese table names, close phrasings and English names all find NetCare / DataFab tables and query them directly. Table search also matches dictionary names, boards, descriptions and field names, labels NetCare / DataFab / Reprocessed, and column details include Chinese field names.",
-    "New board-metrics tool: questions about a board or one of its metrics (e.g. a rectification board) read the results already computed from the board SQL, which recompute automatically when source tables change."
+    "Data governance adds data-source issue tracking: NetCare / DataFab tables that are empty, missing or failing are opened as issues timed from first detection and resolved automatically once data arrives. The page header shows the resolution rate, open issues and overdue issues (highlighted), and you can copy a reminder for the data-source owners and mark it as sent.",
+    "DragonClaw chat now avoids tables with open data-source issues: it says the source is not ready instead of answering from empty tables, and suggests a replacement table when there is one. This can be turned off on the issues page.",
+    "Table names were corrected from the intranet check (two DataFab datasets map to position_baseline_import and ne_inspection_coverage_total); Chinese column comments from the database are used as field names, and the exported dictionary includes field details and data-source issues."
   ]
 }

@@ -5,6 +5,7 @@ import { pushLog } from './core/log-ring.js';
 import { startScheduler, stopScheduler } from './services/schedule-service.js';
 import { startDataWatch, stopDataWatch } from './services/data-watch-service.js';
 import './services/data-dictionary-service.js';
+import './services/data-issue-service.js';
 
 export async function start() {
     const app = await createServer();

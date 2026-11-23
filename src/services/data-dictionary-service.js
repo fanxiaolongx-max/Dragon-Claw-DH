@@ -33,6 +33,13 @@ const pick = (row, key) => {
     const found = Object.keys(row).find((name) => name.toLowerCase() === key.toLowerCase());
     return found ? row[found] : undefined;
 };
+/** 库里的注释能不能当中文名用：DataFab 表的注释常常就是表名本身、「别名:xxx」或「点击编辑」，这些不算 */
+export function usefulComment(name, comment) {
+    const c = String(comment ?? '').trim();
+    if (!c || c.toLowerCase() === String(name ?? '').trim().toLowerCase()) return '';
+    if (/^别名\s*[:：]/.test(c) || /^点击编辑$/.test(c)) return '';
+    return c;
+}
 /** 表键就是业务库里的表名（业务库只有一个）。字典或 SQL 里写了 库名.表名 / "库"."模式"."表" 时只取最后的表名 */
 export function normalizeKey(name) {
     const text = String(name || '').trim().replace(/[`"]/g, '');
@@ -251,6 +258,8 @@ export async function exportDictionaryXlsx() {
     const tz = 'Asia/Shanghai';
     const stamp = (iso) => (iso ? new Date(iso).toLocaleString('zh-CN', { timeZone: tz, hour12: false }) : '—');
     const run = view.lastRun, coll = view.lastCollection;
+    // 最近一次收集到的真实字段（含库里的字段注释）：字典没写字段的表用它补字段明细
+    const liveCols = new Map(coll ? (await watch.collectionTables(coll.id, { withRows: true }).catch(() => [])).map((x) => [String(x.key).toLowerCase(), Array.isArray(x.columns) ? x.columns : []]) : []);
 
     const C = {
         ink: 'FF0F172A', ink2: 'FF475569', ink3: 'FF94A3B8', line: 'FFE2E8F0', white: 'FFFFFFFF', band: 'FFF8FAFC',
@@ -321,7 +330,9 @@ export async function exportDictionaryXlsx() {
     const tone = (cell, [bg, fg], bold = true) => { cell.fill = fill(bg); cell.font = { bold, color: { argb: fg } }; cell.alignment = { horizontal: 'center', vertical: 'top' }; };
     const ordered = [...view.tables].sort((a, b) => ({ netcare: 0, datafab: 1, '': 2 }[a.origin] - { netcare: 0, datafab: 1, '': 2 }[b.origin]) || Number(b.reprocess) - Number(a.reprocess) || a.key.localeCompare(b.key));
     ordered.forEach((t, ti) => {
-        const fields = dict.get(t.key.toLowerCase())?.columns || [];
+        // 字典没写字段时，用最近一次收集到的真实字段（库里的中文注释当字段中文名）
+        const dictFields = dict.get(t.key.toLowerCase())?.columns || [];
+        const fields = dictFields.length ? dictFields : (liveCols.get(t.key.toLowerCase()) || []).map((c) => ({ name: c.name, nameCn: usefulComment(c.name, c.comment), type: c.type || '' }));
         const band = ti % 2 ? C.band : C.white;
         const originLabel = ORIGIN_LABEL[t.origin];
         const check = [
@@ -388,6 +399,19 @@ export async function exportDictionaryXlsx() {
     kv('查询失败', view.stats.errors, '没权限、表坏了或超时', C.bad);
     kv('未巡检', view.stats.unchecked, '', C.mute);
     if (view.stats.missing) kv('库里没有', view.stats.missing, '只在字典里登记，业务库里查不到', C.mute);
+    const issues = await import('./data-issue-service.js').then((m) => m.issuesView()).catch(() => null);
+    if (issues?.stats.total) {
+        sum.addRow([]);
+        section('数据源问题跟踪', C.bad[1]);
+        const st = issues.stats;
+        kv('解决率', st.rate == null ? '—' : `${st.rate}%`, `已解决 ${st.resolved} / 累计 ${st.total}`);
+        kv('未解决', st.open, '空表、库里没有或查询失败；开始时间 = 第一次发现', st.open ? C.warn : C.ok);
+        kv(`超过 ${issues.config.alertDays} 天`, st.overdue, st.overdue ? '需要催数据源' : '', st.overdue ? C.bad : C.ok);
+        for (const i of issues.open.slice(0, 40)) {
+            const days = Math.floor(i.ageMs / 86_400_000);
+            kv(i.table, i.kindLabel, `${[i.originLabel, i.board].filter(Boolean).join(' · ')} · ${stamp(i.openedAt)} 起 ${days ? `${days} 天` : `${Math.floor(i.ageMs / 3_600_000)} 小时`}${i.overdue ? ' · 超期' : ''}`, i.overdue ? C.bad : null);
+        }
+    }
     sum.addRow([]);
     section('表来源', C.idHead);
     kv('NetCare', view.stats.netcare, 'NetCare 业务表（抓取脚本等使用的源表）', C.netcare);
@@ -692,6 +716,17 @@ watch.onLinkTick(() => linkCheck());
 // ── 表来源：NetCare 业务表 / DataFab 表；DataFab 里被看板 SQL 计算引用的表再叠一个「二次加工」 ──
 // 名单来自需求 #769 随包带的两份清单（netcare-script-tables.csv、board-tables.txt）；看板 SQL（及其他派生表）引用到的源表都算二次加工，
 // 不在 NetCare 清单里的源表也归 DataFab。
+let aliasCache = null;
+/** 表名映射与替代表（src/defaults/data-governance/table-aliases.json） */
+export function tableAliases() {
+    if (aliasCache) return aliasCache;
+    try {
+        const raw = JSON.parse(fs.readFileSync(new URL('table-aliases.json', BUNDLE_DIR), 'utf8'));
+        const lower = (obj) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k.toLowerCase(), v]));
+        aliasCache = { renamed: lower(raw.renamed), alternatives: lower(raw.alternatives) };
+    } catch { aliasCache = { renamed: {}, alternatives: {} }; }
+    return aliasCache;
+}
 let originCache = null;
 function bundledOrigins() {
     if (originCache) return originCache;
@@ -724,7 +759,7 @@ export async function chatTableIndex() {
     const origins = bundledOrigins();
     const index = new Map();
     for (const key of new Set([...dict.keys(), ...origins.netcare, ...origins.datafab, ...reprocessed])) {
-        index.set(key, { entry: dict.get(key) || null, ...tableOrigin(key, origins, reprocessed), boards: boards.get(key) || [] });
+        index.set(key, { entry: dict.get(key) || null, ...tableOrigin(key, origins, reprocessed), boards: boards.get(key) || [], alternative: tableAliases().alternatives[key] || null });
     }
     return index;
 }
@@ -765,8 +800,8 @@ export async function catalogView() {
         const status = !inLive ? 'missing' : a ? 'anomaly' : r?.count == null && r ? 'error' : r?.count === 0 ? 'empty' : r ? 'ok' : 'unchecked';
         return {
             key, name: key,
-            nameCn: d?.nameCn || c?.nameCn || r?.comment || '',
-            nameCnSource: d?.nameCn ? 'dictionary' : c?.nameCn ? (c.nameCnSource || 'catalog') : r?.comment ? 'comment' : '',
+            nameCn: d?.nameCn || c?.nameCn || usefulComment(key, r?.comment) || '',
+            nameCnSource: d?.nameCn ? 'dictionary' : c?.nameCn ? (c.nameCnSource || 'catalog') : usefulComment(key, r?.comment) ? 'comment' : '',
             nameEn: d?.nameEn || '',
             category: d?.category || c?.category || '未分类',
             subCategory: d?.subCategory || c?.module || '',
@@ -828,7 +863,7 @@ export async function tableDetail(key) {
     ]);
     const live = sample?.columns || [];
     const dictCols = new Map((dict?.columns || []).map((c) => [c.name.toLowerCase(), c]));
-    const columns = live.map((c) => ({ name: c.name, type: c.type || '', comment: c.comment || '', nameCn: dictCols.get(c.name.toLowerCase())?.nameCn || c.comment || '', description: dictCols.get(c.name.toLowerCase())?.description || '', inDictionary: dictCols.has(c.name.toLowerCase()) }));
+    const columns = live.map((c) => ({ name: c.name, type: c.type || '', comment: c.comment || '', nameCn: dictCols.get(c.name.toLowerCase())?.nameCn || usefulComment(c.name, c.comment) || '', description: dictCols.get(c.name.toLowerCase())?.description || '', inDictionary: dictCols.has(c.name.toLowerCase()) }));
     // 字典里有、库里已没有的字段也列出来，提醒字典过期
     const liveNames = new Set(live.map((c) => c.name.toLowerCase()));
     for (const c of dict?.columns || []) if (!liveNames.has(c.name.toLowerCase())) columns.push({ name: c.name, type: c.type || '', nameCn: c.nameCn || '', description: c.description || '', inDictionary: true, missingInDb: true });
@@ -847,7 +882,7 @@ const BUNDLE_FILES = [
 ];
 
 export async function applyBundledDefaults({ force = false } = {}) {
-    const files = BUNDLE_FILES.map((f) => {
+    const files = [...BUNDLE_FILES, { file: 'table-aliases.json', kind: 'aliases' }].map((f) => {
         try { return { ...f, text: fs.readFileSync(new URL(f.file, BUNDLE_DIR), 'utf8') }; } catch { return null; }
     }).filter(Boolean);
     if (!files.length) return { skipped: 'no-bundle' };
@@ -856,12 +891,17 @@ export async function applyBundledDefaults({ force = false } = {}) {
     const out = {};
     for (const f of files) {
         try {
+            if (f.kind === 'aliases') continue;
             out[f.file] = f.kind === 'dictionary'
                 ? await importDictionary({ filename: f.file, text: f.text }, { actor: 'system', mode: 'merge' })
                 : await importBoardSql({ text: f.text }, 'system').then((r) => ({ total: r.total, created: r.created, updated: r.updated, unchanged: r.unchanged, errors: r.errors }));
         } catch (error) {
             out[f.file] = { error: error.message };
         }
+    }
+    // 需求里写的是 DataFab 数据集名、库里实际是别名表的：删掉旧名的字典条目，免得一直显示「库里没有」
+    for (const old of Object.keys(tableAliases().renamed)) {
+        try { await deleteRecord(DICT_KIND, dictId(old)); } catch { /* 没有就算了 */ }
     }
     if (!Object.values(out).some((r) => r.error)) await kvSet(BUNDLE_KEY, digest);
     pushLog({ level: 'INFO', category: 'DATA_WATCH', message: '已导入内置的表字典与看板 SQL', detail: out });

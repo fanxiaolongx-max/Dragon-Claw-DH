@@ -1,0 +1,13 @@
+{
+  "_说明": "内网业务库实测（2026-11-23 收集）：需求 #769 里的两张 DataFab 数据集在库里用的是别名表；t2_high_risk_command_interception 是空表，数据在 _004。",
+  "renamed": {
+    "gts_datalink_d5d5b2_151046751": "position_baseline_import",
+    "ds_6jp5uhmzpdkgjxhfpuohup": "ne_inspection_coverage_total"
+  },
+  "alternatives": {
+    "t2_high_risk_command_interception": {
+      "table": "t2_high_risk_command_interception_004",
+      "note": "同结构的 t2_high_risk_command_interception_004 有数据（高危命令拦截扣分计算数据）"
+    }
+  }
+}

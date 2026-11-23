@@ -72,9 +72,10 @@
                 ]),
             ]),
             el('div', { class: 'gov-progress', id: 'govProgress', hidden: true }, [el('span', { id: 'govProgressText' }), el('i', null, [el('b', { id: 'govProgressBar' })])]),
+            el('button', { type: 'button', class: 'gov-issue-strip', id: 'govIssueStrip', hidden: true, onclick: () => setTab('issues') }),
             el('div', { class: 'gov-kpis', id: 'govKpis' }),
             el('div', { class: 'gov-tabs tabs', role: 'tablist' }, [
-                ['anomalies', '本轮异常'], ['catalog', '表目录与字典'], ['derived', '派生表'], ['collect', '收集结果'], ['runs', '巡检历史'],
+                ['anomalies', '本轮异常'], ['issues', '数据源问题'], ['catalog', '表目录与字典'], ['derived', '派生表'], ['collect', '收集结果'], ['runs', '巡检历史'],
             ].map(([id, label]) => el('button', { type: 'button', role: 'tab', dataset: { govTab: id }, 'aria-selected': String(state.tab === id), onclick: () => setTab(id) }, label))),
             el('div', { class: 'gov-body card', id: 'govBody' }),
             el('div', { class: 'gov-toast', id: 'govToast', hidden: true, role: 'status' }),
@@ -83,12 +84,13 @@
 
     async function refresh({ catalog = true } = {}) {
         try {
-            const [status, view, derived] = await Promise.all([
+            const [status, view, derived, issues] = await Promise.all([
                 api('/status'),
                 catalog || !state.catalog ? api('/catalog') : Promise.resolve(state.catalog),
                 api('/derived'),
+                api('/issues').catch(() => null),
             ]);
-            state.status = status; state.catalog = view; state.derived = derived.items || [];
+            state.status = status; state.catalog = view; state.derived = derived.items || []; state.issues = issues;
         } catch (error) {
             $('#govSub').textContent = `读取失败：${error.message}`;
             return;
@@ -131,6 +133,7 @@
             $('#govProgressText').textContent = `${running.kind === 'collect' ? '正在收集样例' : '正在巡检行数'}：${running.done} / ${running.total || '?'} 张表`;
             $('#govProgressBar').style.width = `${pct}%`;
         }
+        renderIssueStrip();
         const c = state.catalog?.stats || {};
         const run = s.lastRun;
         const kpi = (label, value, hint, tone, tab, filter) => el('button', { type: 'button', class: `gov-kpi${tone ? ` is-${tone}` : ''}`, onclick: tab ? () => { if (filter) { state.filter = filter; state.category = ''; } setTab(tab); } : null }, [el('span', { text: label }), el('strong', { text: value }), el('small', { text: hint || '' })]);
@@ -157,7 +160,7 @@
             body.replaceChildren(el('div', { class: 'empty', text: '平台还没有给本应用授权业务数据源（BUSINESS_DATASOURCE_NAME）。授权后这里会自动巡检所有业务表。' }));
             return;
         }
-        ({ anomalies: renderAnomalies, catalog: renderCatalog, derived: renderDerived, collect: renderCollect, runs: renderRuns }[state.tab] || renderAnomalies)(body);
+        ({ anomalies: renderAnomalies, issues: renderIssues, catalog: renderCatalog, derived: renderDerived, collect: renderCollect, runs: renderRuns }[state.tab] || renderAnomalies)(body);
     }
 
     const tableByKey = (key) => state.catalog?.tables.find((t) => t.key === key);
@@ -165,6 +168,112 @@
         const t = tableByKey(key);
         return el('div', { class: 'gov-name' }, [el('div', { class: 'gov-key' }, [el('code', { text: key.split('.').slice(1).join('.') || key }), ...originBadges(t)]), t?.nameCn ? el('span', { text: t.nameCn }) : el('span', { class: 'is-muted', text: '未命名' })]);
     };
+
+    // ── 数据源问题跟踪 ──
+    const span = (ms) => {
+        const h = Math.floor((ms || 0) / 3_600_000);
+        if (h < 24) return `${Math.max(0, h)} 小时`;
+        const d = Math.floor(h / 24);
+        return `${d} 天${h % 24 ? ` ${h % 24} 小时` : ''}`;
+    };
+    const ISSUE_TONE = { empty: 'warn', missing: 'bad', error: 'bad' };
+
+    function renderIssueStrip() {
+        const box = $('#govIssueStrip');
+        const v = state.issues;
+        if (!box) return;
+        if (!v || !v.stats.total) { box.hidden = true; return; }
+        const st = v.stats;
+        box.hidden = false;
+        box.className = `gov-issue-strip${st.overdue ? ' is-overdue' : st.open ? ' is-open' : ' is-clear'}`;
+        box.replaceChildren(
+            el('span', { class: 'gov-issue-strip-label', text: '数据源问题跟踪' }),
+            el('span', { class: 'gov-issue-metric' }, [el('b', { text: st.rate == null ? '—' : `${st.rate}%` }), '解决率']),
+            el('span', { class: 'gov-issue-metric' }, [el('b', { text: fmt(st.open) }), '未解决']),
+            el('span', { class: `gov-issue-metric${st.overdue ? ' is-hot' : ''}` }, [el('b', { text: fmt(st.overdue) }), `超过 ${v.config.alertDays} 天`]),
+            st.open ? el('span', { class: 'gov-issue-metric' }, [el('b', { text: span(st.longestMs) }), '最长未解决']) : null,
+            el('span', { class: 'grow' }),
+            el('span', { class: 'gov-issue-go', text: st.open ? '查看并提醒数据源 →' : '全部已解决 ✓' }),
+        );
+    }
+
+    function reminderText(v) {
+        const now = new Date();
+        const p = (x) => String(x).padStart(2, '0');
+        const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+        const lines = [`【业务库数据源问题提醒】截至 ${stamp}，共 ${v.stats.open} 张表未解决${v.stats.overdue ? `，其中 ${v.stats.overdue} 张已超过 ${v.config.alertDays} 天` : ''}（解决率 ${v.stats.rate ?? 0}%）：`];
+        v.open.forEach((i, n) => {
+            lines.push(`${n + 1}. ${i.table}（${[i.originLabel, i.board, i.nameCn].filter(Boolean).join(' · ')}）：${i.kindLabel}，${i.openedAt.slice(0, 10)} 起已 ${span(i.ageMs)}${i.overdue ? '【超期】' : ''}${i.boards.length ? `，影响看板指标 ${i.boards.length} 个` : ''}`);
+        });
+        lines.push('请协助确认同步任务 / 数据是否已就绪，处理后回复即可，我们这边每轮体检会自动复核。');
+        return lines.join('\n');
+    }
+    async function copyText(text) {
+        try { await navigator.clipboard.writeText(text); return true; } catch { /* 退回老办法 */ }
+        const area = el('textarea', { style: 'position:fixed;left:-9999px;top:0' });
+        area.value = text; document.body.append(area); area.select();
+        let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
+        area.remove();
+        return ok;
+    }
+
+    function renderIssues(body) {
+        const v = state.issues;
+        if (!v) { body.replaceChildren(el('div', { class: 'empty', text: '读取数据源问题失败，稍后刷新再试。' })); return; }
+        const st = v.stats;
+        const card = (label, value, hint, tone) => el('div', { class: `gov-ikpi${tone ? ` is-${tone}` : ''}` }, [el('span', { text: label }), el('strong', { text: value }), el('small', { text: hint || '' })]);
+        const kpis = el('div', { class: 'gov-ikpis' }, [
+            card('解决率', st.rate == null ? '—' : `${st.rate}%`, `已解决 ${fmt(st.resolved)} / 累计 ${fmt(st.total)}`, st.rate === 100 ? 'good' : ''),
+            card('未解决', fmt(st.open), Object.entries(st.byKind).map(([k, n]) => `${k === 'empty' ? '空表' : k === 'missing' ? '库里没有' : '查询失败'} ${n}`).join(' · ') || '无', st.open ? 'warn' : 'good'),
+            card(`超过 ${v.config.alertDays} 天未解决`, fmt(st.overdue), st.overdue ? '需要催数据源' : '暂无超期', st.overdue ? 'hot' : ''),
+            card('最长未解决', st.open ? span(st.longestMs) : '—', st.open ? `${v.open[0].table}` : ''),
+            card('已提醒', `${fmt(st.notified)} / ${fmt(st.open)}`, '点表格里的「标记已提醒」记录'),
+        ]);
+        const days = el('input', { type: 'number', min: '1', max: '90', value: String(v.config.alertDays), class: 'gov-days', 'aria-label': '超期天数' });
+        const restrict = el('input', { type: 'checkbox', checked: v.config.restrictChat });
+        const saveCfg = async () => {
+            try { state.issues.config = await api('/issues/config', { method: 'PUT', body: JSON.stringify({ alertDays: Number(days.value), restrictChat: restrict.checked }) }); toast('已保存'); state.issues = await api('/issues'); renderIssueStrip(); renderIssues(body); } catch (e) { toast(e.message, true); }
+        };
+        days.addEventListener('change', saveCfg); restrict.addEventListener('change', saveCfg);
+        const copyBtn = el('button', { class: 'act primary', type: 'button', disabled: !st.open, onclick: async () => toast((await copyText(reminderText(v))) ? '提醒文本已复制，可直接发给数据源负责人' : '复制失败，请手动选择', false) }, '复制提醒文本');
+        const tools = el('div', { class: 'bar gov-issue-tools' }, [
+            el('label', { class: 'gov-inline' }, ['未解决超过', days, '天标记超期']),
+            el('label', { class: 'gov-inline', title: '开启后，DragonClaw 对话查库时不会用这些表回答，会如实告诉用户数据源还没就绪（有替代表时提示改用）' }, [restrict, '对话中自动限制访问这些表']),
+            el('span', { class: 'grow' }), copyBtn,
+        ]);
+        const mark = async (i, notified) => {
+            try { await api(`/issues/${encodeURIComponent(i.key)}`, { method: 'PUT', body: JSON.stringify({ notified }) }); state.issues = await api('/issues'); renderIssueStrip(); renderIssues(body); } catch (e) { toast(e.message, true); }
+        };
+        const openRows = v.open.map((i) => el('tr', { class: i.overdue ? 'is-overdue' : '' }, [
+            el('td', null, [el('i', { class: `dot ${ISSUE_TONE[i.kind] || 'warn'}` })]),
+            el('td', null, [el('div', { class: 'gov-name' }, [el('div', { class: 'gov-key' }, [el('code', { text: i.table, onclick: () => openTable(i.table), style: 'cursor:pointer' }), ...originBadges(i)]), el('span', { text: [i.board, i.nameCn].filter(Boolean).join(' · ') || '—' })])]),
+            el('td', null, [el('span', { class: `gov-chip t-${i.kind === 'empty' ? 'emptied' : 'error'}`, text: i.kindLabel, title: i.detail || '' })]),
+            el('td', { text: when(i.openedAt) }),
+            el('td', { class: 'gov-age' }, [el('b', { text: span(i.ageMs) }), i.overdue ? el('span', { class: 'gov-overdue', text: '超期' }) : null]),
+            el('td', { text: i.boards.length ? `${i.boards.length} 个看板指标` : '—', title: i.boards.map((b) => b.title).join('\n') }),
+            el('td', { class: 'wrap', text: i.alternative ? `可改用 ${i.alternative.table}` : '—', title: i.alternative?.note || '' }),
+            el('td', null, [i.notifiedAt
+                ? el('button', { type: 'button', class: 'gov-mini is-done', title: '点一下取消', onclick: () => mark(i, false) }, `已提醒 ${when(i.notifiedAt)}`)
+                : el('button', { type: 'button', class: 'gov-mini', onclick: () => mark(i, true) }, '标记已提醒')]),
+        ]));
+        const openTable_ = v.open.length ? el('div', { class: 'grid' }, [el('table', null, [
+            el('thead', null, [el('tr', null, ['', '表', '问题', '开始时间', '已持续', '影响', '替代', '提醒'].map((h) => el('th', { text: h })))]),
+            el('tbody', null, openRows),
+        ])]) : el('div', { class: 'empty', text: v.stats.total ? '所有跟踪的表都已有数据 🎉' : '还没有体检记录，跑一次「一键体检」后开始跟踪。' });
+        const closed = v.closed.length ? el('details', { class: 'gov-closed' }, [
+            el('summary', { text: `已解决 ${v.stats.resolved} 张（最近 ${v.closed.length} 条）` }),
+            el('div', { class: 'grid' }, [el('table', null, [
+                el('thead', null, [el('tr', null, ['表', '问题', '开始', '解决', '用时', '解决时行数'].map((h) => el('th', { text: h })))]),
+                el('tbody', null, v.closed.map((i) => el('tr', null, [
+                    el('td', null, [el('div', { class: 'gov-key' }, [el('code', { text: i.table }), ...originBadges(i)])]),
+                    el('td', { text: i.kindLabel }), el('td', { text: when(i.openedAt) }), el('td', { text: when(i.resolvedAt) }),
+                    el('td', { text: span(i.durationMs) }), el('td', { class: 'num', text: fmt(i.resolvedCount) }),
+                ]))),
+            ])]),
+        ]) : null;
+        body.replaceChildren(kpis, tools, openTable_, closed,
+            el('p', { class: 'gov-note', text: `跟踪范围：带 NetCare / DataFab 标识的表。每轮巡检自动复核：查到有数据即记为已解决；开始时间是第一次发现问题的时间。最近同步 ${when(v.syncedAt)}。` }));
+    }
 
     // ── 本轮异常 ──
     function renderAnomalies(body) {
