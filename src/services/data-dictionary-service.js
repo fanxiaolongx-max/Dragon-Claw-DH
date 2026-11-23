@@ -819,11 +819,12 @@ export async function catalogView() {
     });
     const categories = {};
     for (const t of tables) {
-        const node = categories[t.category] || (categories[t.category] = { name: t.category, total: 0, anomalies: 0, empty: 0, errors: 0, sub: {} });
+        const node = categories[t.category] || (categories[t.category] = { name: t.category, total: 0, anomalies: 0, empty: 0, errors: 0, missing: 0, sub: {} });
         node.total += 1;
         if (t.status === 'anomaly') node.anomalies += 1;
         if (t.status === 'empty') node.empty += 1;
         if (t.status === 'error') node.errors += 1;
+        if (t.status === 'missing') node.missing += 1;
         if (t.subCategory) node.sub[t.subCategory] = (node.sub[t.subCategory] || 0) + 1;
     }
     return {

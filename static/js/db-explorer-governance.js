@@ -314,6 +314,14 @@
         });
     }
 
+    // 分类圆点：取该分类下最严重的状态，颜色和右侧表格一致（红 = 异常 / 查询失败，橙 = 空表，灰 = 库里没有）
+    function catDot(c) {
+        const parts = [[c.anomalies, '异常'], [c.errors, '查询失败'], [c.empty, '空表'], [c.missing, '库里没有']].filter(([n]) => n).map(([n, l]) => `${n} 张${l}`);
+        if (!parts.length) return null;
+        const tone = c.anomalies || c.errors ? 'bad' : c.empty ? 'warn' : 's-unchecked';
+        return el('i', { class: `dot ${tone}`, title: parts.join('，') });
+    }
+
     function catalogCategories(view) {
         if (!state.dictOnly) return view.categories;
         const map = new Map();
@@ -322,12 +330,14 @@
             const name = t.category || '未分类';
             let entry = map.get(name);
             if (!entry) {
-                entry = { name, total: 0, anomalies: 0, errors: 0, sub: {} };
+                entry = { name, total: 0, anomalies: 0, empty: 0, errors: 0, missing: 0, sub: {} };
                 map.set(name, entry);
             }
             entry.total += 1;
             if (t.status === 'anomaly') entry.anomalies += 1;
             else if (t.status === 'error') entry.errors += 1;
+            else if (t.status === 'empty') entry.empty += 1;
+            else if (t.status === 'missing') entry.missing += 1;
             if (t.subCategory) entry.sub[t.subCategory] = (entry.sub[t.subCategory] || 0) + 1;
         }
         return view.categories.map((c) => map.get(c.name)).filter(Boolean);
@@ -343,7 +353,7 @@
             el('button', { type: 'button', class: !state.category ? 'is-on' : '', onclick: () => { state.category = ''; renderTab(); } }, [el('span', { text: '全部分类' }), el('b', { text: fmt(totalForCats) })]),
             ...visibleCats.map((c) => el('button', { type: 'button', class: state.category === c.name ? 'is-on' : '', title: Object.entries(c.sub).map(([k, n]) => `${k} ${n}`).join('\n'), onclick: () => { state.category = c.name; renderTab(); } }, [
                 el('span', { text: c.name }),
-                c.anomalies ? el('i', { class: 'dot bad', title: `${c.anomalies} 张异常` }) : c.errors ? el('i', { class: 'dot warn', title: `${c.errors} 张查询失败` }) : null,
+                catDot(c),
                 el('b', { text: fmt(c.total) }),
             ])),
         ]);
@@ -365,7 +375,8 @@
         const originFilters = el('div', { class: 'gov-origin-filters', role: 'group', 'aria-label': '按表来源筛选' }, [
             ['all', '全部来源', view.tables.length], ['netcare', 'NetCare', s.netcare], ['datafab', 'DataFab', s.datafab], ['reprocess', '二次加工', s.reprocess], ['other', '其他', otherCount],
         ].filter(([id, , n]) => id === 'all' || n).map(([id, label, n]) => el('button', { type: 'button', class: `o-${id}`, 'aria-pressed': String(state.origin === id), onclick: () => { state.origin = id; drawList(); originFilters.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.classList.contains(`o-${state.origin}`)))); } }, [el('span', { text: label }), el('b', { text: fmt(n) })])));
-        const filterRow = el('div', { class: 'gov-filter-row' }, [filters, dictToggle, originFilters]);
+        const legend = el('span', { class: 'gov-legend', title: '表名前圆点 = 最新一轮体检状态；左侧分类圆点 = 该分类下最严重的状态' }, [['s-ok', '正常'], ['s-empty', '空表'], ['bad', '异常 / 查询失败'], ['s-unchecked', '库里没有 / 未巡检']].map(([c, l]) => el('span', null, [el('i', { class: `dot ${c}` }), l])));
+        const filterRow = el('div', { class: 'gov-filter-row' }, [filters, dictToggle, originFilters, legend]);
         const fileInput = el('input', { type: 'file', accept: '.xlsx,.csv,.json,.txt', hidden: true, onchange: (e) => importDictionary(e.target.files[0], e.target) });
         const tools = el('div', { class: 'bar' }, [search, el('span', { class: 'grow' }),
             el('button', { class: 'act', type: 'button', title: '支持 Excel / CSV / JSON；表头自动识别：表名、中文名、英文名、分类、子分类、分层、说明、字段名、字段中文名', onclick: () => fileInput.click() }, '导入表字典'),
