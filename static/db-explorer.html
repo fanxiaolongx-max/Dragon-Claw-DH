@@ -213,7 +213,9 @@
         const cell = (value) => { const text = show(value) ?? ''; return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; };
         const lines = [columns.map(cell).join(',')].concat(rows.map((row) => columns.map((c) => cell(row[c])).join(',')));
         const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-        const link = el('a', { href: URL.createObjectURL(blob), download: name + '-' + new Date().toISOString().slice(0, 10) + '.csv' });
+        const filename = name + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+        if (window.dhDownload?.saveBlob) { window.dhDownload.saveBlob(blob, filename); return; }
+        const link = el('a', { href: URL.createObjectURL(blob), download: filename });
         document.body.append(link); link.click(); link.remove();
         setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }

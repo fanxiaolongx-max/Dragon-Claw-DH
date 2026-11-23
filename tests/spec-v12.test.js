@@ -71,6 +71,19 @@ test('Spec §7.2 + §12.5: 基座请求注入 x-app-id，且 /api/auth/me 与权
         assert.ok(seenAppIds.length >= 1, '应有请求转发至基座');
         assert.ok(seenAppIds.every((r) => r.xAppId === appUuid), `所有基座请求都应携带 x-app-id=${appUuid}`);
 
+        // 下载/导出带 x-dh-envelope: 1 时，无权限返回信封 403，有权限返回原始文件且不包信封
+        const exportDenied = await fetch(`${url}/api/db-explorer/governance/dictionary/export`, {
+            headers: { 'x-dh-user': 'bob', 'x-dh-envelope': '1' },
+        });
+        assert.equal(exportDenied.headers.get('x-dh-status'), '403');
+        const exportOk = await fetch(`${url}/api/db-explorer/governance/dictionary/export`, {
+            headers: { 'x-dh-user': 'z00569258', 'x-dh-envelope': '1' },
+        });
+        assert.equal(exportOk.status, 200);
+        assert.notEqual(exportOk.headers.get('x-dh-envelope'), '1');
+        assert.match(exportOk.headers.get('content-disposition') || '', /attachment; filename="table-dictionary-/);
+        assert.match(await exportOk.text(), /表名,中文名,英文名/);
+
         // 验证 /custom-tools 经过 /api/custom-tools/:slug/{meta,raw,bridge} 对非管理员本人工具可用
         const created = await (await fetch(`${url}/api/custom-tools`, {
             method: 'POST',
@@ -235,4 +248,117 @@ test('Spec v1.2 打包与依赖配置检查：mirrors.tools.huawei.com 与 engin
     const litePkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'profiles/lite/package.json'), 'utf8'));
     assert.equal(pkg.engines.node, '>=22 <23');
     assert.equal(litePkg.engines.node, '>=22 <23');
+});
+
+test('dh-runtime.js 全局鉴权下载与服务端 attachment 响应放行', async () => {
+    const runtimeSrc = fs.readFileSync(path.join(ROOT, 'static', 'js', 'shared', 'dh-runtime.js'), 'utf8');
+    const basePrefix = '/digital-human/dh/5b5def8e-13a9-4542-b5e1-1522845ca141';
+    const savedLinks = [];
+    const blobUrls = new Map();
+    let blobSeq = 0;
+
+    const fakeFetch = async (url, init = {}) => {
+        const headers = new Headers(init.headers || {});
+        const target = String(url);
+        if (target === '/digital-human/api/dh/user/current') {
+            return new Response(JSON.stringify({ code: 0, data: { uid: 'd00000001', cn: '管理员' } }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+        if (target.endsWith('/dictionary/export')) {
+            assert.equal(decodeURIComponent(headers.get('x-dh-user') || ''), 'd00000001');
+            assert.equal(headers.get('x-dh-envelope'), '1');
+            return new Response('table_name,name_cn\nusers,用户表\n', {
+                status: 200,
+                headers: {
+                    'Content-Type': 'text/csv; charset=utf-8',
+                    'Content-Disposition': 'attachment; filename="table-dictionary-2026-11-23.csv"',
+                    'Content-Length': '34',
+                },
+            });
+        }
+        return new Response(JSON.stringify({ code: 403, message: '仅超级管理员可用', data: { error: '仅超级管理员可用' } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'x-dh-envelope': '1', 'x-dh-status': '403' },
+        });
+    };
+
+    const makeAnchor = () => ({
+        href: '',
+        download: '',
+        style: {},
+        dataset: {},
+        click() { savedLinks.push({ href: this.href, download: this.download }); },
+        remove() {},
+    });
+    const makeFakeEl = () => ({
+        setAttribute() {},
+        appendChild() {},
+        remove() {},
+        querySelector: () => makeFakeEl(),
+        addEventListener() {},
+        classList: { add() {}, remove() {}, contains: () => false },
+        style: {},
+        children: [],
+    });
+    const fakeDocument = {
+        readyState: 'complete',
+        cookie: '',
+        currentScript: null,
+        documentElement: { classList: { add() {} }, appendChild() {} },
+        head: { appendChild() {} },
+        body: { appendChild() {} },
+        getElementById: () => null,
+        querySelector: () => null,
+        createElement: (tag) => (tag === 'a' ? makeAnchor() : makeFakeEl()),
+        addEventListener: () => {},
+    };
+    class FakeURL extends URL {
+        static createObjectURL(blob) {
+            const id = `blob:test/${++blobSeq}`;
+            blobUrls.set(id, blob);
+            return id;
+        }
+        static revokeObjectURL(id) { blobUrls.delete(id); }
+    }
+    const sandbox = {
+        URL: FakeURL,
+        URLSearchParams,
+        Headers,
+        Response,
+        Request,
+        Blob,
+        AbortController,
+        Element: { prototype: {} },
+        MutationObserver: class { observe() {} },
+        CustomEvent: class CustomEvent { constructor(t, opts = {}) { this.type = t; this.detail = opts.detail; } },
+        document: fakeDocument,
+        localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        location: {
+            href: `https://netcareclaw.gde.huawei.com${basePrefix}/db-explorer.html`,
+            origin: 'https://netcareclaw.gde.huawei.com',
+            pathname: `${basePrefix}/db-explorer.html`,
+        },
+        fetch: fakeFetch,
+        addEventListener: () => {},
+        dispatchEvent: () => {},
+        setTimeout: () => 0,
+        clearTimeout: () => {},
+    };
+    sandbox.window = sandbox;
+    vm.runInNewContext(runtimeSrc, sandbox);
+
+    const okRes = await sandbox.dhDownload('/api/db-explorer/governance/dictionary/export');
+    assert.equal(okRes.filename, 'table-dictionary-2026-11-23.csv');
+    assert.equal(savedLinks.length, 1);
+    assert.equal(savedLinks[0].download, 'table-dictionary-2026-11-23.csv');
+    assert.match(await okRes.blob.text(), /table_name,name_cn/);
+
+    await assert.rejects(() => sandbox.dhDownload('/api/db-explorer/governance/forbidden/export'), /仅超级管理员可用/);
+
+    sandbox.dhDownload.saveBlob(new Blob(['hello'], { type: 'text/plain' }), 'hello.txt');
+    assert.equal(savedLinks.length, 2);
+    assert.equal(savedLinks[1].download, 'hello.txt');
 });

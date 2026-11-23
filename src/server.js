@@ -361,6 +361,7 @@ export async function createServer() {
     // 垫片收到后还原成桌面版前端原有的协议。未带该头的调用方（curl、探活、脚本）保持原样。
     app.addHook('onSend', async (req, reply, payload) => {
         if (req.headers['x-dh-envelope'] !== '1' || apiPathOf(req.url) === null) return payload;
+        if (reply.statusCode < 400 && /\battachment\b/i.test(String(reply.getHeader('content-disposition') || ''))) return payload;
         const type = String(reply.getHeader('content-type') || '');
         if (!type.includes('application/json') || typeof payload !== 'string') return payload;
         let body;
