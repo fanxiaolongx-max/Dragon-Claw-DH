@@ -255,7 +255,7 @@ export async function exportReportMsgBuffer(rawBody = {}) {
 // AI Report Documents (ai_report_documents) & Template
 // ============================================================
 
-// 打开月报页时默认显示哪份报告（与主线版一致）。基座加列要走 DBA，这里只记一个报告 ID 在键值表里。
+// 打开月报页时默认显示哪份报告（与主线版一致）。加列不能重复执行（升级脚本只放 CREATE TABLE IF NOT EXISTS），这里只记一个报告 ID 在键值表里。
 const AI_REPORT_DEFAULT_KEY = 'ai_report_default_id';
 const defaultAiReportId = async () => String((await kvGet(AI_REPORT_DEFAULT_KEY, '')) || '');
 

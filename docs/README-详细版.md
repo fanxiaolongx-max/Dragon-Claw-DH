@@ -282,7 +282,7 @@ tests/                接口、权限、上下文、浏览器端到端
 - **数据层自动处理**（`dao/team-scope.js` + `dao/scoped.js`）：工具页面的表在非默认团队下改读写团队版表 `team_<表名>`（多一列 `team_id`，主键 / 唯一键带团队），读写改删自动按 `team_id` 过滤或填写，返回给业务层的行不带 `team_id`；`biz_records` 只有工具类种类（值班表、FRT、问卷、奖惩……）分团队；工具配置类键值加 `team:<团队>:` 前缀。services 不感知团队。
 - **对话查库工具**：`teamScopeSql` 把 SQL 里的工具表换成「本团队数据」的子查询。
 - **不分团队**：管理员名单、页面开放、模型配置、对话、消息中心、共享对话、保险箱、审计、数据治理。
-- **建表**：团队版表由 `node scripts/gen-team-tables.mjs` 按 init.sql 生成到 init.sql / upgrade.sql（只有 `CREATE TABLE IF NOT EXISTS`，可重复执行）。**新增工具表时把它加进 `TEAM_TABLES` 并重新生成**；上线前 DBA 执行 `db/upgrade.sql`。
+- **建表**：团队版表由 `node scripts/gen-team-tables.mjs` 按 init.sql 生成到 init.sql / upgrade.sql（只有 `CREATE TABLE IF NOT EXISTS`，可重复执行）。**新增工具表时把它加进 `TEAM_TABLES` 并重新生成**；基座更新应用时会自动执行 `db/upgrade.sql`，不需要 DBA。
 
 ## 9. 附件、图片与大字段
 

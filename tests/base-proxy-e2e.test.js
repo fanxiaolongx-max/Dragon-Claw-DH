@@ -126,7 +126,7 @@ test('Base Proxy E2E: full Phase-1 routes, subpath rewriting, debug probes & bin
 
         // Schema Check probe
         const schemaCheck = await (await fetch(`${appUrl}/api/debug/test/schema-check`, { method: 'POST' })).json();
-        assert.equal(schemaCheck.result.expectedCount, 38);
+        assert.equal(schemaCheck.result.expectedCount, 64);
         assert.equal(typeof schemaCheck.result.healthy, 'boolean');
         assert.ok(Array.isArray(schemaCheck.result.missingTables));
         assert.ok(Array.isArray(schemaCheck.result.expectedTables));

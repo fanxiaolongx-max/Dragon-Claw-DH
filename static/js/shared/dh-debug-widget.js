@@ -204,7 +204,7 @@
     checkSchemaBtn.type = 'button';
     schemaActions.appendChild(checkSchemaBtn);
 
-    const schemaPre = el('pre', 'dh-dbg-pre', '点击「立即检查」对比 db/init.sql 38 张表与当前基座数据库，自动排查是否有漏建的数据表...');
+    const schemaPre = el('pre', 'dh-dbg-pre', '点击「立即检查」对比 db/init.sql 里的全部表（含团队版表）与当前基座数据库，自动排查是否有漏建的数据表...');
     schemaSec.append(schemaHeader, schemaActions, schemaPre);
     probePanel.appendChild(schemaSec);
 

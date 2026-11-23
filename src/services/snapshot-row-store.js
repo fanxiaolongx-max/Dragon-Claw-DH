@@ -5,7 +5,7 @@
 // { rowsRef, rowCount }：相同内容只存一次，经基座 REST 写入的数据量也随之大幅减少。
 //
 // 存放位置用已有的 sys_kv_store（键 snapshot_rows:<hash>，大字段由数据层自动分片），
-// 不新增数据表，升级时不需要 DBA 执行脚本。另存一份索引（snapshot_rows_index）用于回收。
+// 不新增数据表。另存一份索引（snapshot_rows_index）用于回收。
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';

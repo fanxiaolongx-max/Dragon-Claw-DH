@@ -646,7 +646,7 @@ export async function sendBaseNotify(payload) {
     return r;
 }
 
-export const EXPECTED_INIT_TABLES = [
+const BASE_INIT_TABLES = [
     'sys_kv_store',
     'debug_audit_test',
     'platform_metrics_events',
@@ -686,6 +686,8 @@ export const EXPECTED_INIT_TABLES = [
     'agent_schedules',
     'biz_records',
 ];
+// 原有业务表 + 团队版表（团队隔离，见 dao/team-scope.js）
+export const EXPECTED_INIT_TABLES = [...BASE_INIT_TABLES, ...TEAM_TABLES.map(teamTableName)];
 
 export async function debugProbeAction(action, params = {}) {
     if (isMemoryMode() && !config.baseQueryUrl) {
@@ -705,7 +707,7 @@ export async function debugProbeAction(action, params = {}) {
                 missingTables: missing,
                 expectedTables: EXPECTED_INIT_TABLES,
                 presentTables: [...presentSet],
-                upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），升级前请联系 DBA 导入 db/upgrade.sql 补充缺失表。` : '全部 38 张业务数据表均已就绪。',
+                upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），重新上传最新安装包即可：基座更新应用时会自动在应用库执行 db/upgrade.sql 补齐（只建缺的表，不动已有数据）。` : `全部 ${EXPECTED_INIT_TABLES.length} 张业务数据表均已就绪。`,
             };
         }
         case 'query-self': {
@@ -801,7 +803,7 @@ export async function debugProbeAction(action, params = {}) {
             missingTables: missing,
             expectedTables: EXPECTED_INIT_TABLES,
             presentTables: (rows || []).map((r) => ({ name: r.TABLE_NAME, rows: r.TABLE_ROWS, createdAt: r.CREATE_TIME })),
-            upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），升级前请联系 DBA 导入 db/upgrade.sql 补充缺失表。` : '全部 38 张业务数据表均已就绪，当前环境数据库完整。',
+            upgradeAdvice: missing.length ? `检测到数据库缺少 ${missing.length} 张表（${missing.join(', ')}），重新上传最新安装包即可：基座更新应用时会自动在应用库执行 db/upgrade.sql 补齐（只建缺的表，不动已有数据）。` : `全部 ${EXPECTED_INIT_TABLES.length} 张业务数据表均已就绪，当前环境数据库完整。`,
         };
     }
     case 'query-base':
