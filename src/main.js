@@ -3,6 +3,8 @@ import { createServer } from './server.js';
 import { config } from './config.js';
 import { pushLog } from './core/log-ring.js';
 import { startScheduler, stopScheduler } from './services/schedule-service.js';
+import { startDataWatch, stopDataWatch } from './services/data-watch-service.js';
+import './services/data-dictionary-service.js';
 
 export async function start() {
     const app = await createServer();
@@ -14,6 +16,7 @@ export async function start() {
             closing = true;
             pushLog({ level: 'INFO', category: 'BOOT', message: `收到 ${signal}，正在关闭` });
             stopScheduler();
+            stopDataWatch();
             try {
                 await app.close();
             } finally {
@@ -31,6 +34,12 @@ export async function start() {
     });
     // 未注入基座地址也不是内存模式时，数据接口都不可用，定时任务也就不必轮询
     if (config.localDevMemory || config.baseQueryUrl) startScheduler();
+    // 数据巡检：没授权业务数据源时每次检查直接跳过
+    if (config.baseQueryUrl) startDataWatch();
+    // 内置的表字典与看板 SQL：启动后导入一次（内容没变就跳过），失败不影响服务
+    if (config.localDevMemory || config.baseQueryUrl) {
+        import('./services/data-dictionary-service.js').then((m) => m.applyBundledDefaults()).catch((error) => pushLog({ level: 'WARN', category: 'DATA_WATCH', message: `导入内置表字典 / 看板 SQL 失败：${error.message}` }));
+    }
     // 启动环境快照也放进调试面板的日志里，管理员不用翻平台日志就能看到
     if (globalThis.__dhBootReport) {
         pushLog({ level: 'INFO', category: 'BOOT', message: '启动环境快照', detail: globalThis.__dhBootReport });

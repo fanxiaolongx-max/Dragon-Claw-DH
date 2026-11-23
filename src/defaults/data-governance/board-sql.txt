@@ -1,0 +1,1151 @@
+整改清零--整体网元进展
+select region_cn_name "地区部"
+,sum(h1_plan_nes) "2026H1到期总计划网元数"
+,sum(h1_uncompleted_nes) "2026H1待清理网元数"
+,sum(uncomplete_task_h1)"2026H1待清理任务数"
+,1-divide(sum(h1_uncompleted_nes),sum(h1_plan_nes),0) "H1到期整改完成率"
+,sum(h2_plan_nes) "2026H2到期总计划网元数"
+,sum(h2_uncompleted_nes) "2026H2待清理网元数"
+,sum(uncomplete_task_h2) "2026H2待清理任务数"
+,1-divide(sum(h2_uncompleted_nes),sum(h2_plan_nes),0) "H2到期整改完成率"
+,sum(total_plan_nes) "2026计划网元总数"
+
+,sum(total_uncompleted_nes) "2026待清理网元总数"
+,1-divide(sum(total_uncompleted_nes),sum(total_plan_nes),0) "总完成率"
+from  "gauss200_datafab009_02"."datafab009"."rectification_overdue" 
+where repoffice_cn_name is not null 
+group by region_cn_name
+
+
+
+
+整改清零--2026H1到期整改总任务详单
+select task_id
+,source_id_ch
+,source_id_en
+,name_ch
+,name_en
+,notice_type_name
+,task_owner
+,fullname
+,rectify_plan_end_time
+,delivery_scene
+,region_cn_name
+,repoffice_cn_name
+,country_cn_name
+,network_name
+,network_cust_name
+,itr_product_line_name
+,product_line_name
+,product_category
+,bu
+,task_status
+,data_source
+,first_publish_time
+,task_create_time
+,h1_plan_nes
+,h1_uncompleted_nes
+,task_hw_plan_ne_qty
+,task_hw_actual_ne_qty
+,task_cust_plan_ne_qty
+,task_cust_actual_ne_qty
+,task_not_implement_ne_qty
+,task_type
+,request_delay_reason
+,task_approved_delay_times
+,task_create_type
+,implement_type
+,support_end_time
+,task_implement_complete_time			  		  										 		
+from Rectification_Overdue 
+where total_flag='H1'
+
+整改清零--全量整改数据
+select region_cn_name
+,sum(task_hw_plan_ne_qty+ task_cust_plan_ne_qty+ task_not_implement_ne_qty) "整改应完成网元数量"
+,sum(case when (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty)>(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) then (task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) else (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) end) "整改已完成网元数量"
+,divide(整改已完成网元数量,整改应完成网元数量,1) "完成率"			  		  										 		
+from Rectification_Overdue 
+where repoffice_cn_name is not null 
+ group by region_cn_name
+ 
+ 
+ 
+整改发布--地区部汇总
+select  region_cn_name
+,count(distinct case when first_publish_time is not null then pid else null end ) "整改通知发布数" 
+,count(distinct task_id)"整改任务数" 
+,count(case when task_status in ('Rectification Implementation','Rectification Completed','Rectification Closed','Rectification Overdue','Not Involve')then task_id else null end) "整改任务排查完成数" 
+,divide(整改任务排查完成数,整改任务数,0) "整改任务排查完成率" 
+,sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) "整改网元数"
+,sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty-uncomplete_nes)"整改网元完成数" 
+,sum(uncomplete_nes)"整改网元待完成数" 
+,sum(case when approved_delay_end_time is not null and date_trunc('day',approved_delay_end_time)>date_trunc('day',current_timestamp) then uncomplete_nes else 0 end) "延期备案网元数" 
+,divide(整改网元完成数,整改网元数,0) "整改网元完成率" 
+,count(distinct case when task_status='Rectification Closed' then task_id else null end) "整改任务关闭数" 
+,sum(case when task_status='Rectification Closed' then task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty else 0 end) "整改关闭网元数" 
+,count(distinct case when task_status='Not Involve'then task_id else null end) "整改不涉及任务数"	  		  										 		
+from Rectification_Overdue 
+where repoffice_cn_name is not null 
+ group by region_cn_name
+ 
+ 
+ 整改发布--整改任务发布详单
+select * 
+from (select distinct pid
+,source_id_ch
+,source_id_en
+,name_ch
+,name_en 
+,first_publish_time 
+,task_create_time 
+,data_source
+,support_end_time 
+,itr_product_line_name 
+,product_line_name
+,notice_type_name 
+,delivery_scene 	
+,row_number() over(partition by pid,itr_product_line_name order by first_publish_time asc nulls last) rank_id								 		
+from  "gauss200_datafab009_02"."datafab009"."rectification_overdue" 
+where first_publish_time  is not null )
+where rank_id=1
+
+
+整改发布--整改任务详单
+select task_id
+,source_id_ch
+,source_id_en
+,name_ch
+,name_en
+,region_cn_name
+,repoffice_cn_name
+,country_cn_name
+,network_cust_name
+,network_name
+,itr_product_line_name
+,product_line_name
+,product_category
+,task_owner
+,fullname
+,check_plan_end_time
+,rectify_plan_end_time
+,task_status
+,task_type
+,support_end_time
+,task_approved_delay_times
+,task_hw_plan_ne_qty
+,task_hw_actual_ne_qty
+,task_cust_plan_ne_qty
+,task_cust_actual_ne_qty
+,task_not_implement_ne_qty							 		
+from Rectification_Overdue 
+ 
+ 
+ 整改发布--全量整改数据
+select region_cn_name
+,sum(task_hw_plan_ne_qty+ task_cust_plan_ne_qty+ task_not_implement_ne_qty) "整改应完成网元数量" 
+,sum(case when (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty)>(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) then (task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) else (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) end) "整改已完成网元数量" 
+,divide(整改已完成网元数量,整改应完成网元数量,1) "完成率"					 		
+from Rectification_Overdue 
+where  repoffice_cn_name is not null
+ group by region_cn_name
+ 
+ 
+ 整改实施--整体网元进展
+select region_cn_name
+,coalesce(count(case when task_status in ('Rectification Implementation','Rectification Overdue') and rectify_plan_end_time>support_end_time then task_id else null end),0) "整改延期任务数"
+,coalesce(sum(case when task_status in ('Rectification Implementation','Rectification Overdue') and rectify_plan_end_time>support_end_time then uncomplete_nes else 0 end),0) "延期整改待清理网元数"
+,divide(延期整改待清理网元数,sum(uncomplete_nes),0) "延期整改待清理网元占比"
+,coalesce(count( distinct case when task_status='Check Overdue' then task_id else null end ),0) "排查超期任务数"
+,coalesce(count( distinct case when task_status='Rectification Overdue'then task_id else null end ),0)"整改超期任务数"
+,coalesce(sum(case when task_status='Rectification Overdue' then uncomplete_nes else 0 end),0)"整改超期待清理网元数"
+,coalesce(count(distinct case when task_not_implement_ne_qty>0 then task_id else null end),0) "决策不实施任务数"
+,coalesce(sum(case when task_not_implement_ne_qty>0 then task_not_implement_ne_qty else 0 end),0) "决策不实施网元数"
+,divide(决策不实施网元数,sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty),0)"决策不实施网元占比"				 		
+from Rectification_Overdue 
+where  repoffice_cn_name is not null
+ group by region_cn_name
+ 
+ 
+ 
+ 整改实施--整改延期任务详单
+select task_id
+,source_id_ch
+,source_id_en
+,name_ch
+,name_en
+,region_cn_name
+,repoffice_cn_name
+,country_cn_name
+,network_cust_name
+,network_name
+,itr_product_line_name
+,product_line_name
+,product_category
+,task_owner
+,fullname
+,check_plan_end_time
+,rectify_plan_end_time
+,task_status
+,task_type
+,support_end_time  
+,sum(t.task_approved_delay_times) AS task_approved_delay_times_t    
+,sum(t.total_plan_nes) AS total_plan_nes_t
+,(t.total_plan_nes - t.total_uncompleted_nes) AS total_completed_nes_t
+,sum(t.total_uncompleted_nes) AS total_uncompleted_nes_t
+,sum(t.task_hw_plan_ne_qty) AS task_hw_plan_ne_qty_t
+,sum(t.task_hw_actual_ne_qty) AS task_hw_actual_ne_qty_t
+,sum(t.task_cust_plan_ne_qty) AS task_cust_plan_ne_qty_t
+,sum(t.task_cust_actual_ne_qty) AS task_cust_actual_ne_qty_t
+,sum(t.task_not_implement_ne_qty) AS task_not_implement_ne_qty_t
+,key_ne  
+,sum(t.sub_task_hw_plan_ne_qty) AS sub_task_hw_plan_ne_qty_t	 		
+from Rectification_Overdue 
+GROUP BY 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    (total_plan_nes - total_uncompleted_nes),
+    key_ne 
+HAVING (
+    count(
+        DISTINCT CASE 
+            WHEN (
+                task_status IN ('Rectification Implementation', 'Rectification Overdue') 
+                AND (rectify_plan_end_time > support_end_time)
+            ) 
+            THEN task_id 
+            ELSE NULL 
+        END
+    ) > 0
+)
+
+
+
+整改实施--整改超期任务详单
+SELECT 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    sum(task_approved_delay_times) AS task_approved_delay_times_t,
+    sum(task_hw_plan_ne_qty) AS task_hw_plan_ne_qty_t,
+    sum(task_hw_actual_ne_qty) AS task_hw_actual_ne_qty_t,
+    sum(task_cust_plan_ne_qty) AS task_cust_plan_ne_qty_t,
+    sum(task_cust_actual_ne_qty) AS task_cust_actual_ne_qty_t,
+    sum(task_not_implement_ne_qty) AS task_not_implement_ne_qty_t,
+    key_ne,
+    sum(sub_task_hw_plan_ne_qty) AS sub_task_hw_plan_ne_qty_t 
+FROM  rectification_overdue 
+GROUP BY 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    key_ne 
+HAVING (
+    count(
+        DISTINCT CASE 
+            WHEN (task_status = 'Rectification Overdue') 
+            THEN task_id 
+            ELSE NULL 
+        END
+    ) > 0
+)
+
+
+
+整改实施--整改不实施任务详单
+SELECT 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    sum(task_approved_delay_times) AS task_approved_delay_times_t,
+    sum(task_not_implement_ne_qty) AS task_not_implement_ne_qty_t,
+    key_ne,
+    sum(sub_task_hw_plan_ne_qty) AS sub_task_hw_plan_ne_qty_t 
+FROM  rectification_overdue 
+WHERE 
+    (task_not_implement_ne_qty > 0) 
+GROUP BY 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    key_ne
+	
+	
+	
+	
+	整改实施--排查超期任务详单
+SELECT 
+    task_id AS task_id,
+    source_id_ch ,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    sum(task_approved_delay_times) AS task_approved_delay_times_t,
+    key_ne,
+    sum(sub_task_hw_plan_ne_qty) AS sub_task_hw_plan_ne_qty_t 
+FROM  rectification_overdue 
+GROUP BY 
+    task_id,
+    source_id_ch,
+    source_id_en,
+    name_ch,
+    name_en,
+    region_cn_name,
+    repoffice_cn_name,
+    country_cn_name,
+    network_cust_name,
+    network_name,
+    itr_product_line_name,
+    product_line_name,
+    product_category,
+    task_owner,
+    fullname,
+    check_plan_end_time,
+    rectify_plan_end_time,
+    task_status,
+    task_type,
+    support_end_time,
+    key_ne 
+HAVING (
+    count(
+        DISTINCT CASE 
+            WHEN (task_status = 'Check Overdue') 
+            THEN task_id 
+            ELSE NULL 
+        END
+    ) > 0
+)
+
+
+整改实施--全量整改数据
+SELECT 
+	region_cn_name,
+	sum(task_hw_plan_ne_qty + task_cust_plan_ne_qty + task_not_implement_ne_qty) AS 整改应完成网元数量,
+	sum(case when (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty)>(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) then (task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) else (task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) end) AS 整改已完成网元数量,		
+	divide(整改已完成网元数量,整改应完成网元数量,1) AS 完成率 
+FROM  rectification_overdue 
+WHERE repoffice_cn_name IS NOT NULL 
+GROUP BY  region_cn_name
+
+
+
+
+"共性问题整改--共性问题整改进展
+select 
+region_cn_name as ""地区部"",
+repoffice_cn_name as ""代表处"",
+rec_title as ""整改专项"",
+sum(plan_ne) as ""需消减网元数"",
+sum(actual_ne) as ""消减网元数"",
+sum(uncomplete_ne) as ""未消减网元数"",
+divide(sum(actual_ne),sum(plan_ne),1) as ""消减完成率""
+
+from(
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200020451','SC2200019693','SC2200019694') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694') then '路由器整改' when source_id_ch in ('SC2200019551','SC2200018998','SC2200019611') or source_id_en in ('SC2200019551','SC2200018998','SC2200019611') then '光波分整改' when source_id_ch in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') then '数据存储整改' end as rec_title,
+sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) as plan_ne,
+sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) as actual_ne,
+greatest(sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty)-sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty),0) as uncomplete_ne
+from ""gauss200_datafab009_02"".""datafab009"".""rectification_overdue"" 
+where source_id_ch in ('SC2200020451','SC2200019693','SC2200019694','SC2200019551','SC2200018998','SC2200019611','SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694','SC2200019551','SC2200018998','SC2200019611','SC2200020430','SC2200020431','SC2200020473','SC2200020474')
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200020451','SC2200019693','SC2200019694') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694') then '路由器整改' when source_id_ch in ('SC2200019551','SC2200018998','SC2200019611') or source_id_en in ('SC2200019551','SC2200018998','SC2200019611') then '光波分整改' when source_id_ch in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') then '数据存储整改' end)
+group by 
+region_cn_name,
+repoffice_cn_name,
+rec_title"								
+								
+								
+								
+								
+								
+								
+"共性问题整改--共性问题整改任务详单
+select 
+rec_title as ""业务场景"",
+sum(plan_ne) as ""需消减网元数"",
+sum(actual_ne) as ""消减网元数"",
+sum(uncomplete_ne) as ""未消减网元数"",
+/*divide(sum(actual_ne),sum(plan_ne),1) as ""消减完成率""*/
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+region_cn_name as ""region"",
+repoffice_cn_name as ""rep. office"",
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time
+
+from(
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200020451','SC2200019693','SC2200019694') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694') then '路由器整改' when source_id_ch in ('SC2200019551','SC2200018998','SC2200019611') or source_id_en in ('SC2200019551','SC2200018998','SC2200019611') then '光波分' when source_id_ch in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') then '数据存储' end as rec_title,
+sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) as plan_ne,
+sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) as actual_ne,
+greatest(sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty)-sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty),0) as uncomplete_ne,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time
+from ""gauss200_datafab009_02"".""datafab009"".""rectification_overdue"" 
+where source_id_ch in ('SC2200020451','SC2200019693','SC2200019694','SC2200019551','SC2200018998','SC2200019611','SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694','SC2200019551','SC2200018998','SC2200019611','SC2200020430','SC2200020431','SC2200020473','SC2200020474')
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200020451','SC2200019693','SC2200019694') or source_id_en in ('SC2200020451','SC2200019693','SC2200019694') then '路由器整改' when source_id_ch in ('SC2200019551','SC2200018998','SC2200019611') or source_id_en in ('SC2200019551','SC2200018998','SC2200019611') then '光波分' when source_id_ch in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') or source_id_en in ('SC2200020430','SC2200020431','SC2200020473','SC2200020474') then '数据存储' end,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time)
+group by 
+region_cn_name,
+repoffice_cn_name,
+rec_title,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time"									
+									
+									
+									
+									
+									
+"M硬盘整改--M硬盘整改
+select 
+region_cn_name as ""地区部"",
+repoffice_cn_name as ""代表处"",
+rec_title as ""整改专项"",
+sum(plan_ne) as ""需消减网元数"",
+sum(actual_ne) as ""消减网元数"",
+sum(uncomplete_ne) as ""未消减网元数"",
+divide(sum(actual_ne),sum(plan_ne),1) as ""消减完成率""
+
+from(
+	select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200021259','SC2200021061') or source_id_en in('SC2200021259','SC2200021061')  then '云核整改'
+	when source_id_ch in ('111') 
+			or source_id_en in ('111') then '存储整改'
+	when source_id_ch in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') 
+			or source_id_en in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') then 'OPMT整改' 
+	when source_id_ch in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') 
+			or source_id_en in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') then '无线&能源整改' 
+	when source_id_ch in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') 
+			or source_id_en in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') then '服务与软件整改' 
+ end as rec_title,
+sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) as plan_ne,
+sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) as actual_ne,
+greatest(sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty)-sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty),0) as uncomplete_ne
+from ""gauss200_datafab009_02"".""datafab009"".""rectification_overdue"" 
+where source_id_ch in ('SC2200021061','SC2200021282','SC2200021256',
+'SC2200021168','SC2200021319','SC2200021203','SC2200021205','SC2200020203','SC2200021328',
+'SC2200021259','SC2200021284','SC2200021283',
+'SC2200021257','SC2200021169','SC2200021320','SC2200021204','SC2200021206',
+'SC2200020204') 
+or source_id_en in ('SC2200021061','SC2200021282','SC2200021256',
+'SC2200021168','SC2200021319','SC2200021203','SC2200021205','SC2200020203','SC2200021328',
+'SC2200021259','SC2200021284','SC2200021283',
+'SC2200021257','SC2200021169','SC2200021320','SC2200021204','SC2200021206',
+'SC2200020204')
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200021259','SC2200021061') or source_id_en in('SC2200021259','SC2200021061')  then '云核整改'
+	when source_id_ch in ('111') 
+			or source_id_en in ('111') then '存储整改'
+	when source_id_ch in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') 
+			or source_id_en in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') then 'OPMT整改' 
+	when source_id_ch in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') 
+			or source_id_en in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') then '无线&能源整改' 
+	when source_id_ch in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') 
+			or source_id_en in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') then '服务与软件整改' 
+ end )
+group by 
+region_cn_name,
+repoffice_cn_name,
+rec_title"								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								"M硬盘整改--M硬盘整改详情
+select 
+rec_title as ""业务场景"",
+sum(plan_ne) as ""需消减网元数"",
+sum(actual_ne) as ""消减网元数"",
+sum(uncomplete_ne) as ""未消减网元数"",
+/*divide(sum(actual_ne),sum(plan_ne),1) as ""消减完成率""*/
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+region_cn_name as ""region"",
+repoffice_cn_name as ""rep. office"",
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time
+
+from(
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200021259','SC2200021061') or source_id_en in('SC2200021259','SC2200021061')  then '云核整改'
+	when source_id_ch in ('111') 
+			or source_id_en in ('111') then '存储整改'
+	when source_id_ch in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') 
+			or source_id_en in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') then 'OPMT整改' 
+	when source_id_ch in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') 
+			or source_id_en in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') then '无线&能源整改' 
+	when source_id_ch in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') 
+			or source_id_en in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') then '服务与软件整改' 
+ end as rec_title,
+sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty) as plan_ne,
+sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty) as actual_ne,
+greatest(sum(task_hw_plan_ne_qty+task_cust_plan_ne_qty+task_not_implement_ne_qty)-sum(task_hw_actual_ne_qty+task_cust_actual_ne_qty+task_not_implement_ne_qty),0) as uncomplete_ne,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time
+from ""gauss200_datafab009_02"".""datafab009"".""rectification_overdue"" 
+where source_id_ch in ('SC2200021061','SC2200021282','SC2200021256',
+'SC2200021168','SC2200021319','SC2200021203','SC2200021205','SC2200020203','SC2200021328',
+'SC2200021259','SC2200021284','SC2200021283',
+'SC2200021257','SC2200021169','SC2200021320','SC2200021204','SC2200021206',
+'SC2200020204') 
+	or source_id_en in ('SC2200021061','SC2200021282','SC2200021256',
+'SC2200021168','SC2200021319','SC2200021203','SC2200021205','SC2200020203','SC2200021328',
+'SC2200021259','SC2200021284','SC2200021283',
+'SC2200021257','SC2200021169','SC2200021320','SC2200021204','SC2200021206',
+'SC2200020204')
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+case when source_id_ch in ('SC2200021259','SC2200021061') or source_id_en in('SC2200021259','SC2200021061')  then '云核整改'
+	when source_id_ch in ('111') 
+			or source_id_en in ('111') then '存储整改'
+	when source_id_ch in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') 
+			or source_id_en in ('SC2200021282','SC2200021256','SC2200021284','SC2200021283','SC2200021257') then 'OPMT整改' 
+	when source_id_ch in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') 
+			or source_id_en in ('SC2200021168','SC2200021319','SC2200021169','SC2200021320') then '无线&能源整改' 
+	when source_id_ch in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') 
+			or source_id_en in ('SC2200021203','SC2200021205','SC2200020203','SC2200021328','SC2200021204','SC2200021206','SC2200020204') then '服务与软件整改' 
+ end ,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time)
+group by 
+region_cn_name,
+repoffice_cn_name,
+rec_title,
+task_id,
+source_id_ch,
+source_id_en,
+name_ch,
+name_en,
+notice_type_name,
+task_owner,
+fullname,
+rectify_plan_end_time,
+delivery_scene,
+network_name,
+network_cust_name,
+itr_product_line_name,
+product_line_name,
+product_category,
+bu,
+task_status,
+task_create_time,
+task_type,
+request_delay_reason,
+task_approved_delay_times,
+task_create_type,
+implement_type,
+support_end_time,
+task_implement_complete_time"									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+"批量整改电子流--地区部/代表处/国家/地区维度
+select 
+region_cn_name as ""地区部"",
+repoffice_cn_name as ""代表处"",
+country_name_cn as ""国家/地区"",
+br_node_name as ""BR电子流环节"",
+sum(service_approver_br_qty) as ""电子流总数"",
+sum(service_approver_lost_sla_br_qty) as ""超SLA电子流数"",
+divide(sum(service_approver_lost_sla_br_qty),sum(service_approver_br_qty),0) as ""超SLA占比""
+from(
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+'服务审批人环节' as br_node_name,
+count(distinct case when service_approver_start_time is not null then orderid end) as service_approver_br_qty,
+count(distinct case when service_approver_lost_sla='Y' then orderid end) as service_approver_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en
+
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+'服务代表环节' as br_node_name,
+count(distinct case when service_approver_end_time is not null then orderid end) as service_representative_br_qty,
+count(distinct case when service_representative_lost_sla='Y' then orderid end) as service_representative_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en
+	
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+'PDT经理环节' as br_node_name,
+count(distinct case when pdt_manager_start_time is not null then orderid end) as pdt_manager_br_qty,
+count(distinct case when pdt_manager_lost_sla='Y' then orderid end) as pdt_manager_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en
+	
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+'汇总' as br_node_name,
+count(distinct case when service_approver_start_time is not null then orderid end)+count(distinct case when service_approver_end_time is not null then orderid end)+count(distinct case when pdt_manager_start_time is not null then orderid end) as total_br_qty,
+count(distinct case when service_approver_lost_sla='Y' then orderid end)+count(distinct case when service_representative_lost_sla='Y' then orderid end)+count(distinct case when pdt_manager_lost_sla='Y' then orderid end) as total_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en
+)
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+br_node_name"								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+								
+"批量整改电子流--产品线/产品维度
+select 
+product_line_name_cn as ""产品线"",
+product_name as ""产品"",
+br_node_name as ""BR电子流环节"",
+sum(service_approver_br_qty) as ""电子流总数"",
+sum(service_approver_lost_sla_br_qty) as ""超SLA电子流数"",
+divide(sum(service_approver_lost_sla_br_qty),sum(service_approver_br_qty),0) as ""超SLA占比""
+from(
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name,
+'服务审批人环节' as br_node_name,
+count(distinct case when service_approver_start_time is not null then orderid end) as service_approver_br_qty,
+count(distinct case when service_approver_lost_sla='Y' then orderid end) as service_approver_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name
+
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name,
+'服务代表环节' as br_node_name,
+count(distinct case when service_approver_end_time is not null then orderid end) as service_representative_br_qty,
+count(distinct case when service_representative_lost_sla='Y' then orderid end) as service_representative_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name
+	
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name,
+'PDT经理环节' as br_node_name,
+count(distinct case when pdt_manager_start_time is not null then orderid end) as pdt_manager_br_qty,
+count(distinct case when pdt_manager_lost_sla='Y' then orderid end) as pdt_manager_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name
+	
+union
+	
+select 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name,
+'汇总' as br_node_name,
+count(distinct case when service_approver_start_time is not null then orderid end)+count(distinct case when service_approver_end_time is not null then orderid end)+count(distinct case when pdt_manager_start_time is not null then orderid end) as total_br_qty,
+count(distinct case when service_approver_lost_sla='Y' then orderid end)+count(distinct case when service_representative_lost_sla='Y' then orderid end)+count(distinct case when pdt_manager_lost_sla='Y' then orderid end) as total_lost_sla_br_qty
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8""
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+product_line_name_cn,
+product_line_name_en,
+product_name
+)
+group by 
+region_cn_name,
+repoffice_cn_name,
+region_en_name,
+repoffice_en_name,
+country_name_cn,
+country_name_en,
+br_node_name,
+product_line_name_cn,
+product_line_name_en,
+product_name"									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+"批量整改电子流--批量整改电子流详单
+select distinct
+region_cn_name,
+repoffice_cn_name,
+country_name_cn,
+task_id as ""RC_task_id"",
+task_status,
+nid_ch as ""source_id_cn"",
+nid_en as ""source_id_en"",
+orderid as ""BR_orderid"",
+ticketstatus as ""BR_status"",
+originator,
+current_phase,
+currentoperator,
+createtime,
+operate_time,
+service_approver_start_time,
+service_approver_end_time,
+service_approver_lost_sla,
+service_approver_end_time as service_representative_start_time,
+pdt_manager_start_time as service_representative_end_time,
+service_representative_lost_sla,
+pdt_manager_start_time,
+pdt_manager_end_time,
+pdt_manager_lost_sla
+from ""gauss200_datafab009_02"".""datafab009"".""business_backup_t8"" order by orderid desc"

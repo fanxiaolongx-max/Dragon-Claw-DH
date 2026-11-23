@@ -44,7 +44,7 @@ async function findTables(args) {
         return words.some((word) => text.includes(word));
     }).sort((a, b) => Number(b.verified) - Number(a.verified) || Number(Boolean(b.nameCn)) - Number(Boolean(a.nameCn)) || b.rows - a.rows);
     const lines = [
-        `${result.live ? `实时目录（${result.schema}）` : `业务库暂时读不到，以下是全表盘点时的清单（${result.error || ''}），行数可能已过时`}：匹配 ${matched.length} 张${matched.length > limit ? `，显示前 ${limit} 张` : ''}`,
+        `${result.live ? `实时目录（${result.schema || '数据源当前库'}）` : `业务库暂时读不到，以下是全表盘点时的清单（${result.error || ''}），行数可能已过时`}：匹配 ${matched.length} 张${matched.length > limit ? `，显示前 ${limit} 张` : ''}`,
         '表名 | 中文名 | 模块 | 类别 | 粒度 | 估算行数 | 已核对 | 说明',
     ];
     for (const table of matched.slice(0, limit)) {
@@ -58,7 +58,7 @@ async function describe(args) {
     const detail = await catalog.describeTable('business', String(args.table || ''), { sampleRows: clampInt(args.sampleRows, 0, 20, 5) });
     const note = detail.note || {};
     const nameCn = note.nameCn || detail.seed?.nameCn;
-    const lines = [`表 ${detail.schema}.${detail.name}${nameCn ? `（${nameCn}）` : ''}，${detail.columns.length} 个字段`];
+    const lines = [`表 ${detail.schema ? `${detail.schema}.` : ''}${detail.name}${nameCn ? `（${nameCn}）` : ''}，${detail.columns.length} 个字段`];
     if (note.description) lines.push(`标注说明：${note.description}`);
     if (note.timeField || note.regionField || note.officeField) lines.push(`标注字段：时间=${note.timeField || '-'}，地区部=${note.regionField || '-'}，代表处=${note.officeField || '-'}${note.verified ? '（已核对）' : ''}`);
     else lines.push(`建议字段：时间=${detail.suggestions.timeField || '-'}，地区部=${detail.suggestions.regionField || '-'}，代表处=${detail.suggestions.officeField || '-'}`);
@@ -168,7 +168,7 @@ export const NETCARE_TOOLS = [
     },
     {
         name: 'netcare_sql',
-        description: `在 NetCare 业务库上执行一条只读 SQL（SELECT / WITH），用于结构化查询表达不了的关联和子查询。表名写 ${netcareConfig().businessSchema}.表名。优先用聚合，不要把大量明细取回来。`,
+        description: `在 NetCare 业务库上执行一条只读 SQL（SELECT / WITH），用于结构化查询表达不了的关联和子查询。${netcareConfig().businessSchemaExplicit ? `表名写 ${netcareConfig().businessSchema}.表名。` : '表名直接写（数据源当前库），不要加库名前缀。'}优先用聚合，不要把大量明细取回来。`,
         parameters: {
             type: 'object',
             properties: { sql: { type: 'string', description: '单条 SELECT 语句' }, maxRows: { type: 'integer', description: `最多返回行数，默认 200，上限 ${MAX_MODEL_ROWS}` } },

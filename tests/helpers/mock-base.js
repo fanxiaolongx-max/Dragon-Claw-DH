@@ -296,7 +296,9 @@ export async function startMockBaseServer() {
             }
             // 业务数据源（按 datasourceName 查）：测试用 options.businessQuery 提供结果
             if (body.datasourceName && typeof options.businessQuery === 'function') {
-                const rows = options.businessQuery(String(body.sql || ''), body.limit || 200);
+                let rows;
+                // 用例可以抛错模拟业务库报错（无权限、表不存在、超时）
+                try { rows = await options.businessQuery(String(body.sql || ''), body.limit || 200); } catch (err) { return sendJson({ code: 500, message: err.message, data: null }); }
                 return sendJson({ code: 0, message: 'ok', data: { datasourceName: body.datasourceName, rows, rowCount: rows.length } });
             }
             try {

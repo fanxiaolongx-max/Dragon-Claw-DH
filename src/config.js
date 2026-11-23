@@ -57,6 +57,8 @@ export const config = {
     businessDatasourceName: String(process.env.BUSINESS_DATASOURCE_NAME || '').trim(),
     // 业务数据源里的库名（NetCare 数据探查按它读表目录）；平台没有单独注入时按约定取 netcare
     businessSchema: String(process.env.BUSINESS_SCHEMA || 'netcare').trim(),
+    // 没有显式注入 BUSINESS_SCHEMA 时，业务表一律按数据源的当前库（DATABASE()）查，表名不带库名前缀
+    businessSchemaExplicit: Boolean(String(process.env.BUSINESS_SCHEMA || '').trim()),
     systemDatasourceId: num(process.env.SYSTEM_DATASOURCE_ID, 0),
     systemDatasourceName: String(process.env.SYSTEM_DATASOURCE_NAME || '').trim(),
 

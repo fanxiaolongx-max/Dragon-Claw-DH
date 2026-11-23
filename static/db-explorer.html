@@ -87,6 +87,7 @@
             .content { min-height: 70vh; }
         }
     </style>
+    <link rel="stylesheet" href="css/db-explorer-governance.css">
 </head>
 <body>
 <header class="page-head"><a href="./">← 返回首页</a><h1>数据探索</h1></header>
@@ -98,6 +99,8 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6.5M4.5 12v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V12"/></svg>业务库</button>
         <button type="button" role="tab" data-view="sql" aria-selected="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="m7.5 10 3 2.5-3 2.5M12.5 15h4"/></svg>SQL 终端</button>
+        <button type="button" role="tab" data-view="governance" aria-selected="false" title="业务库巡检（行数突增 / 突降 / 变空）、每表样例收集、表字典与中英文映射、派生表联动">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6.2z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>数据治理</button>
     </nav>
 
     <aside class="tables card">
@@ -139,6 +142,9 @@
             </div>
         </section>
 
+        <!-- 数据治理：内容由 js/db-explorer-governance.js 渲染 -->
+        <section class="view gov" id="viewGov" hidden></section>
+
         <!-- SQL 终端 -->
         <section class="view" id="viewSql" hidden>
             <div class="view-head">
@@ -166,6 +172,7 @@
         </section>
     </div>
 </div>
+<script src="js/db-explorer-governance.js"></script>
 <script>
 (function () {
     const PAGE = 50;
@@ -261,6 +268,11 @@
     function setView(view) {
         state.view = view;
         document.querySelectorAll('.rail [data-view]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)));
+        const gov = view === 'governance';
+        document.querySelector('.layout').classList.toggle('is-gov', gov);
+        $('viewGov').hidden = !gov;
+        if (gov) { $('viewTable').hidden = true; $('viewSql').hidden = true; window.DbGovernance && window.DbGovernance.show(); return; }
+        if (window.DbGovernance) window.DbGovernance.hide();
         $('viewTable').hidden = view === 'sql';
         $('viewSql').hidden = view !== 'sql';
         useDb(view === 'sql' ? state.db : view);
@@ -370,7 +382,7 @@
     $('prev').addEventListener('click', () => { if (state.page > 0) { state.page -= 1; loadPage(); } });
     $('next').addEventListener('click', () => { state.page += 1; loadPage(); });
     $('tableCsv').addEventListener('click', () => downloadCsv(state.tableCols, state.tableRows, state.active.name + '-p' + (state.page + 1)));
-    $('toSql').addEventListener('click', () => { const table = state.active; state.view = 'sql'; document.querySelectorAll('.rail [data-view]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === 'sql'))); $('viewTable').hidden = true; $('viewSql').hidden = false; fillSql(table); run(); });
+    $('toSql').addEventListener('click', () => { const table = state.active; state.view = 'sql'; document.querySelector('.layout').classList.remove('is-gov'); $('viewGov').hidden = true; document.querySelectorAll('.rail [data-view]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === 'sql'))); $('viewTable').hidden = true; $('viewSql').hidden = false; fillSql(table); run(); });
     document.querySelectorAll('[data-db]').forEach((b) => b.addEventListener('click', () => useDb(b.dataset.db)));
     $('run').addEventListener('click', run);
     $('clear').addEventListener('click', () => { $('sql').value = ''; $('sql').focus(); });

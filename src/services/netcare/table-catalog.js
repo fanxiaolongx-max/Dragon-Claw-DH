@@ -65,7 +65,8 @@ async function liveConfig() {
 }
 
 function schemaOf(config, scope) {
-    return scope === 'app' ? config.appSchema : config.businessSchema;
+    // 业务库没有显式注入库名时，查的是数据源当前库：库名留空（查询用 DATABASE()、表名不加前缀）
+    return scope === 'app' ? config.appSchema : (config.businessSchemaExplicit ? config.businessSchema : '');
 }
 
 function cacheKey(config, scope) {
@@ -77,7 +78,7 @@ function invalidate() {
 }
 
 async function fetchLiveTables(config, scope) {
-    const schema = client.quote(schemaOf(config, scope));
+    const schema = scope === 'app' ? client.quote(schemaOf(config, scope)) : client.businessSchemaExpr();
     const [tables, columns] = await Promise.all([
         client.queryAll(`SELECT TABLE_NAME AS name, TABLE_COMMENT AS comment, TABLE_ROWS AS est_rows, TABLE_TYPE AS table_type, CREATE_TIME AS create_time, UPDATE_TIME AS update_time FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${schema} ORDER BY TABLE_NAME`, { scope, config }),
         client.queryAll(`SELECT TABLE_NAME AS name, COUNT(*) AS column_count FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${schema} GROUP BY TABLE_NAME ORDER BY TABLE_NAME`, { scope, config })
@@ -120,8 +121,9 @@ async function listTables({ scope = 'business', refresh = false } = {}) {
     const seedTables = scope === 'business' ? seed.tables : {};
     const liveMap = new Map((liveResult.tables || []).map(item => [item.name, item]));
     // 在线：基座真实表 + 种子里有但库里已不存在的表（标 missing）；离线：种子 + 已标注的表
+    // 以实际查到的业务库为准：在线时只列库里真有的表，种子只用来补中文名和分类；离线时才退回种子清单
     const names = [...new Set(liveResult.tables
-        ? [...liveMap.keys(), ...Object.keys(seedTables)]
+        ? [...liveMap.keys()]
         : [...Object.keys(seedTables), ...notes.keys()])].sort();
     const tables = names.map(name => {
         const live = liveMap.get(name);
@@ -207,12 +209,12 @@ async function describeTable(scope, name, { sampleRows = SAMPLE_ROWS } = {}) {
     const config = await liveConfig();
     const schema = schemaOf(config, scope);
     client.ident(name);
-    const columnResult = await client.queryAll(`SELECT COLUMN_NAME AS name, DATA_TYPE AS data_type, COLUMN_TYPE AS column_type, COLUMN_COMMENT AS comment, IS_NULLABLE AS nullable, COLUMN_KEY AS column_key, ORDINAL_POSITION AS position FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${client.quote(schema)} AND TABLE_NAME = ${client.quote(name)} ORDER BY ORDINAL_POSITION`, { scope, config });
+    const columnResult = await client.queryAll(`SELECT COLUMN_NAME AS name, DATA_TYPE AS data_type, COLUMN_TYPE AS column_type, COLUMN_COMMENT AS comment, IS_NULLABLE AS nullable, COLUMN_KEY AS column_key, ORDINAL_POSITION AS position FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${scope === 'app' ? client.quote(schema) : client.businessSchemaExpr()} AND TABLE_NAME = ${client.quote(name)} ORDER BY ORDINAL_POSITION`, { scope, config });
     const columns = columnResult.rows.map(row => ({
         name: String(pick(row, 'name') || ''), dataType: pick(row, 'data_type') || '', columnType: pick(row, 'column_type') || '',
         comment: pick(row, 'comment') || '', nullable: pick(row, 'nullable') === 'YES', key: pick(row, 'column_key') || ''
     })).filter(item => item.name);
-    if (!columns.length) throw client.dhError('DH_TABLE_NOT_FOUND', `${schema} 中没有表 ${name}`, { statusCode: 404 });
+    if (!columns.length) throw client.dhError('DH_TABLE_NOT_FOUND', `${schema || '业务库'} 中没有表 ${name}`, { statusCode: 404 });
     const limit = Math.min(200, Math.max(0, Number(sampleRows) || 0));
     const sample = limit ? await client.queryPage(`SELECT * FROM ${tableRef(config, scope, name)} LIMIT ${limit}`, { scope, limit, config }) : { rows: [] };
     const fields = profile(columns, sample.rows);
@@ -244,7 +246,7 @@ function hintsOf(name, fields, base) {
 }
 
 function tableRef(config, scope, name) {
-    return scope === 'app' ? client.ident(name) : `${client.ident(config.businessSchema)}.${client.ident(name)}`;
+    return scope === 'app' ? client.ident(name) : client.businessTableRef(name);
 }
 
 // ── 结构化查询 ───────────────────────────────────────
@@ -307,9 +309,9 @@ function buildSelect(config, scope, spec, knownColumns) {
 }
 
 async function columnNames(config, scope, table) {
-    const result = await client.queryAll(`SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${client.quote(schemaOf(config, scope))} AND TABLE_NAME = ${client.quote(table)} ORDER BY ORDINAL_POSITION`, { scope, config });
+    const result = await client.queryAll(`SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${scope === 'app' ? client.quote(schemaOf(config, scope)) : client.businessSchemaExpr()} AND TABLE_NAME = ${client.quote(table)} ORDER BY ORDINAL_POSITION`, { scope, config });
     const names = result.rows.map(row => String(pick(row, 'name') || '')).filter(Boolean);
-    if (!names.length) throw client.dhError('DH_TABLE_NOT_FOUND', `${schemaOf(config, scope)} 中没有表 ${table}`, { statusCode: 404 });
+    if (!names.length) throw client.dhError('DH_TABLE_NOT_FOUND', `${schemaOf(config, scope) || '业务库'} 中没有表 ${table}`, { statusCode: 404 });
     return names;
 }
 

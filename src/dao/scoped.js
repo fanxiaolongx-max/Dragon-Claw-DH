@@ -119,8 +119,18 @@ export async function listAppTables() {
 /** 业务数据源当前库的全部表（只读）。数据源不允许读系统表时会抛错，由调用方提示 */
 export async function listBusinessTables() {
     if (isMemoryMode()) return [];
-    const tables = await queryBusiness('SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME', PAGE);
-    const columns = await queryBusiness('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION', PAGE);
+    // 表和字段都按页取全：单页上限 1000 行，表一多字段很容易超过一页（以前会截断，后面的表没有字段）
+    const all = async (sql) => {
+        const rows = [];
+        for (let offset = 0; offset < 50 * PAGE; offset += PAGE) {
+            const page = await queryBusiness(`${sql} LIMIT ${PAGE} OFFSET ${offset}`, PAGE);
+            rows.push(...page);
+            if (page.length < PAGE) break;
+        }
+        return rows;
+    };
+    const tables = await all('SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME');
+    const columns = await all('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION');
     return groupTables(tables, columns);
 }
 

@@ -4,6 +4,8 @@ import { listAlerts, alertSummary, markAlertsRead, removeAlerts, backfillAlertSu
 import { logoStatus, logoImage, saveLogo, resetLogo } from '../services/logo-service.js';
 import { toolCatalog, setToolAccess } from '../services/tool-catalog-service.js';
 import { runSelect, explorerCatalog, explorerDatabases } from '../agent/tools.js';
+import * as dataWatch from '../services/data-watch-service.js';
+import * as dataDict from '../services/data-dictionary-service.js';
 
 // 消息只属于本人：每个接口都按当前工号取
 export async function alertCenterRoutes(fastify) {
@@ -79,4 +81,52 @@ export async function dbExplorerRoutes(fastify) {
         if (!out.ok) return reply.code(400).send({ error: out.content });
         return JSON.parse(out.content);
     });
+
+    // ── 数据治理：巡检、收集、表字典、派生表（整个 /db-explorer 只给管理员，见 core/access.js）──
+    const actor = (req) => req.userIdentity?.username || '';
+    const fileName = (prefix, ext) => `${prefix}-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    fastify.register(async (g) => {
+        g.addHook('onSend', async (_req, reply, payload) => { reply.header('Cache-Control', 'no-store'); return payload; });
+        g.get('/status', async () => dataWatch.status());
+        g.get('/settings', async () => dataWatch.getSettings());
+        g.put('/settings', async (req) => dataWatch.saveSettings(req.body || {}, actor(req)));
+        // 一键体检：check 巡检行数 / collect 收集前 N 行 / all 两样都做；后台执行，进度看 /status
+        g.post('/run', async (req, reply) => {
+            const kind = ['check', 'collect', 'all'].includes(req.body?.kind) ? req.body.kind : 'all';
+            const running = await dataWatch.runningJob();
+            if (running) return reply.code(409).send({ error: '已有巡检或收集在进行，请等它完成', running });
+            dataWatch.startInBackground(kind, actor(req));
+            return reply.code(202).send({ started: kind });
+        });
+        g.get('/runs', async (req) => ({ items: await dataWatch.listRuns(req.query?.limit) }));
+        g.get('/runs/:id', async (req, reply) => (await dataWatch.getRun(req.params.id)) || reply.code(404).send({ error: '没有这轮巡检' }));
+        g.get('/collections', async () => ({ items: await dataWatch.listCollections() }));
+        g.get('/collections/:id/tables', async (req) => ({ items: await dataWatch.collectionTables(req.params.id) }));
+        g.get('/collections/:id/export', async (req, reply) => {
+            const head = (await dataWatch.listCollections()).find((c) => c.id === req.params.id);
+            if (!head) return reply.code(404).send({ error: '没有这次收集' });
+            const tables = await dataWatch.collectionTables(req.params.id, { withRows: true });
+            reply.header('Content-Type', 'application/json; charset=utf-8');
+            reply.header('Content-Disposition', `attachment; filename="${fileName('business-db-collection', 'json')}"`);
+            return JSON.stringify({ collection: head, tables }, null, 1);
+        });
+        g.get('/catalog', async () => dataDict.catalogView());
+        g.get('/tables/:key', async (req) => dataDict.tableDetail(req.params.key));
+        g.put('/dictionary/:key', async (req) => dataDict.saveDictionaryEntry(req.params.key, req.body || {}, actor(req)));
+        g.post('/dictionary/import', async (req) => dataDict.importDictionary(req.body || {}, { actor: actor(req), mode: req.body?.mode === 'replace' ? 'replace' : 'merge' }));
+        g.get('/dictionary/export', async (_req, reply) => {
+            reply.header('Content-Type', 'text/csv; charset=utf-8');
+            reply.header('Content-Disposition', `attachment; filename="${fileName('table-dictionary', 'csv')}"`);
+            return dataDict.exportDictionaryCsv();
+        });
+        g.get('/derived', async () => ({ items: await dataDict.listDerived() }));
+        g.post('/derived/preview', async (req) => dataDict.previewDerived(req.body || {}));
+        // 批量导入看板 SQL（「看板--指标」+ SQL，多段）；dryRun 只看拆分和改写结果
+        g.post('/derived/import', async (req) => dataDict.importBoardSql({ text: String(req.body?.text || ''), dryRun: req.body?.dryRun === true }, actor(req)));
+        g.post('/derived', async (req) => dataDict.saveDerived(req.body || {}, actor(req)));
+        g.put('/derived/:id', async (req) => dataDict.saveDerived({ ...(req.body || {}), id: req.params.id }, actor(req)));
+        g.delete('/derived/:id', async (req, reply) => ((await dataDict.deleteDerived(req.params.id)) ? { success: true } : reply.code(404).send({ error: '派生表不存在' })));
+        g.post('/derived/:id/refresh', async (req) => dataDict.refreshDerived(req.params.id, { reason: '手动重算' }));
+        g.get('/derived/:id/data', async (req) => dataDict.derivedData(req.params.id, { limit: req.query?.limit, offset: req.query?.offset }));
+    }, { prefix: '/governance' });
 }

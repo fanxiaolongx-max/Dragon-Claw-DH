@@ -585,21 +585,21 @@ test('NetCare 数据探查工具：表目录（实时 + 种子 + 标注）、字
         // 找表：实时目录叠加种子；有数据的排前面，空表默认不出现；新表标出分区族
         const tables = await run('netcare_tables', { keyword: '整改 brand' });
         assert.equal(tables.ok, true, tables.content);
-        assert.match(tables.content, /实时目录（netcare）/);
+        assert.match(tables.content, /实时目录（数据源当前库）/);
         assert.match(tables.content, /risk_rectify_task_dwd \| 整改任务明细/);
         assert.match(tables.content, /brand_new_table_0 .*分区族 brand_new_table/);
         assert.doesNotMatch(tables.content, /brand_new_table_1/);
         const listing = await catalog.listTables({ scope: 'business' });
         assert.equal(listing.live, true);
         assert.equal(listing.tables.find((t) => t.name === 'brand_new_table_0').isNew, true);
-        assert.ok(listing.stats.missing > 400, '种子里有、库里没有的表标为缺失');
+        assert.deepEqual(listing.tables.map((t) => t.name), ['brand_new_table_0', 'brand_new_table_1', 'risk_rectify_task_dwd'], '以实际查到的业务库为准：种子里有、库里没有的表不再列出');
 
         // 管理员标注后，目录和字段说明里都能看到
         await catalog.saveNote('business', 'risk_rectify_task_dwd', { nameCn: '整改任务', description: '一行一个整改任务', timeField: 'create_time', verified: true }, 'alice');
         assert.match((await run('netcare_tables', { keyword: 'rectify' })).content, /risk_rectify_task_dwd \| 整改任务 \|.*\| 是 \| 一行一个整改任务/);
         const described = await run('netcare_describe', { table: 'risk_rectify_task_dwd' });
         assert.equal(described.ok, true, described.content);
-        assert.match(described.content, /表 netcare\.risk_rectify_task_dwd（整改任务），3 个字段/);
+        assert.match(described.content, /表 risk_rectify_task_dwd（整改任务），3 个字段/);
         assert.match(described.content, /标注字段：时间=create_time.*已核对/);
         assert.match(described.content, /毫秒时间戳字段：create_time/);
         assert.match(described.content, /占位值：region_code=SNULL/);
@@ -609,7 +609,7 @@ test('NetCare 数据探查工具：表目录（实时 + 种子 + 标注）、字
         // 结构化查询：字段必须真实存在，值统一转义，聚合在库里做
         const grouped = await run('netcare_query', { table: 'risk_rectify_task_dwd', filters: [{ column: 'region_code', op: 'in', value: ['R1', "R'2"] }], groupBy: ['region_code'], metrics: [{ agg: 'count', as: 'total' }] });
         assert.equal(grouped.ok, true, grouped.content);
-        assert.equal(grouped.output, "SELECT `region_code`, COUNT(*) AS `total` FROM `netcare`.`risk_rectify_task_dwd` WHERE `region_code` IN ('R1', 'R''2') GROUP BY `region_code` ORDER BY `total` DESC LIMIT 100");
+        assert.equal(grouped.output, "SELECT `region_code`, COUNT(*) AS `total` FROM `risk_rectify_task_dwd` WHERE `region_code` IN ('R1', 'R''2') GROUP BY `region_code` ORDER BY `total` DESC LIMIT 100");
         assert.match(grouped.content, /共 2 行/);
         assert.match((await run('netcare_query', { table: 'risk_rectify_task_dwd', columns: ['password'] })).content, /表中没有字段 password/);
 

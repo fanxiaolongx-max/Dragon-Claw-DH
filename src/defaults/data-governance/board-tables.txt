@@ -1,0 +1,25 @@
+看板	表名		备注	源表
+维护红线资源	redline_personnel			t_rt_dm_nc_userc_ncuc_ext_n_37fjtppcbcvs7,sdisd.t_rt_sys_user_6450,sdisd.t_intg_dm_0802_6450,commondatadb.t_intg_dm_0cxw(通用库),t_rt_dm_NetCareO_customer_i_1up079ragi1g5 (netcare库), sdisd.bas_project_all_t_3220,  sdisd.ppm_appt_member_t_2920,sdisd.bas_project_all_t_3220,sdisd.ppm_appt_application_t_2920,t_intg_dm_z018(netcare),dwisd_vi.t_intg_dm_09o6_6450_vi,dwrdim.dwr_dim_hrms_region_d,sdisd.t_intg_dm_0bdk_6450,wisd_vi.t_intg_dm_081z_6450_vi,dwritr.dwr_itr_party_org_d
+	redline_post_new			
+	gts_datalink_d5d5b2_151046751	position_baseline_import	岗位基线导入表	
+	redline_project			
+	redline_match			
+	netcare_network_project			
+	redline_resource_investment			
+	redline_resource_investment_new_total			
+	redline_resource_investment_new			
+	business_backup_t7			
+整改管理	Rectification_Overdue			
+	business_backup_t8			
+价值网络巡检	value_network_inspection			
+	inspection_coverage			
+	inspection_topic_improvement			
+	DS_6JP5UHMZPDKGJXHFPUOHUP	ne_inspection_coverage_total	网元巡检覆盖度总数据	
+	risk_prevention			
+漏洞预警	vulnerability_warning			
+	first_node_vulnerability_warning			
+产品TOPN风险	topn_list_total2023			
+应急演练	Drill_live_network			
+				
+	t2_high_risk_command_interception			
+

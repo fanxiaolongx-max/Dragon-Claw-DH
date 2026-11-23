@@ -1,0 +1,21 @@
+﻿表名,分类,子分类,说明
+op_ioc_digital_cert_2026_d_dws,PBI 自动抓取数据源,统计表,被抓取脚本使用：PBI_自动抓取-数字证书
+op_ioc_digital_cert_2026_d_dwd,PBI 自动抓取数据源,详单表,被抓取脚本使用：PBI_自动抓取-数字证书、数字证书L3穿透
+op_ioc_digital_cert_2026_d_dws_snap,PBI 自动抓取数据源,快照表,被抓取脚本使用：PBI_自动抓取-数字证书
+op_ioc_digital_cert_2026_d_dwd_snap,PBI 自动抓取数据源,快照表,被抓取脚本使用：PBI_自动抓取-数字证书
+nc_eos_risk_product_version_dws,PBI 自动抓取数据源,统计表,被抓取脚本使用：PBI_自动抓取-产品EOS风险、PBI_自动抓取-版本EOS风险、PBI_自动抓取-重急EOS风险
+nc_eos_risk_management_dwd,PBI 自动抓取数据源,详单表,被抓取脚本使用：PBI_自动抓取-产品EOS风险、PBI_自动抓取-版本EOS风险、PBI_自动抓取-重急EOS风险、PBI_自动抓取-重急EOS收编、PBI_自动抓取-重疾软件EOS、EOS资产实例穿透
+nc_eos_risk_product_version_dws_snap,PBI 自动抓取数据源,快照表,被抓取脚本使用：PBI_自动抓取-产品EOS风险、PBI_自动抓取-版本EOS风险、PBI_自动抓取-重急EOS风险
+nc_eos_risk_urgent_product_version_dws,PBI 自动抓取数据源,统计表,被抓取脚本使用：PBI_自动抓取-重急EOS收编、PBI_自动抓取-重疾软件EOS
+nc_eos_risk_urgent_product_version_dws_snap,PBI 自动抓取数据源,快照表,被抓取脚本使用：PBI_自动抓取-重急EOS收编
+nc_op_sa_sr_problem_stat_d_dws,PBI 自动抓取数据源,数据表,被抓取脚本使用：PBI_自动抓取-SRFRT-CN
+nc_op_sa_sr_problem_detail_all_bg_dwd,PBI 自动抓取数据源,数据表,被抓取脚本使用：PBI_自动抓取-详单-SR-CN、PBI_自动抓取-详单-SR-ME (Dragon Claw定制版)、网上问题SR全貌
+op_ioc_incident_h_dwd,PBI 自动抓取数据源,数据表,被抓取脚本使用：PBI_自动抓取-事故-CN
+op_ioc_rectify_check_d_dwd_derive,PBI 自动抓取数据源,数据表,被抓取脚本使用：PBI_自动抓取-路由器整改、PBI_自动抓取-数据存储整改
+op_ioc_software_mm_dwd,PBI 自动抓取数据源,数据表,被抓取脚本使用：PBI_自动抓取-软件MM收编/停退
+op_ioc_risk_task_stat_d_dws,PBI 自动抓取数据源,统计表,被抓取脚本使用：PBI_自动抓取-风险详单-CN、PBI_自动抓取-风险详单-DE
+op_ioc_risk_task_dtl_d_dwd,PBI 自动抓取数据源,详单表,被抓取脚本使用：PBI_自动抓取-风险详单-CN、PBI_自动抓取-风险详单-DE
+op_ioc_alarm_d_dws,PBI 自动抓取数据源,统计表,被抓取脚本使用：PBI_自动抓取-详单预警冒泡_026902-CN
+op_ioc_alarm_m_dwd,PBI 自动抓取数据源,详单表,被抓取脚本使用：PBI_自动抓取-详单预警冒泡_026902-CN
+op_ioc_rfc_task_report_dtl_derive_dwd,PBI 自动抓取数据源,数据表,被抓取脚本使用：网络变更RFC全景
+op_ioc_highrisk_commands_d_dwd,PBI 自动抓取数据源,数据表,被抓取脚本使用：高危命令拦截趋势

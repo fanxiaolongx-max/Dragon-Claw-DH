@@ -14,6 +14,7 @@ export function dhError(code, message, extra = {}) {
 export const netcareConfig = () => ({
     enabled: hasBusinessDatasource(),
     businessSchema: config.businessSchema,
+    businessSchemaExplicit: config.businessSchemaExplicit,
     businessDatasourceName: config.businessDatasourceName,
     maxRows: MAX_ROWS,
     updatedAt: '',
@@ -101,6 +102,13 @@ export function quote(value) {
     if (typeof value === 'boolean') return value ? '1' : '0';
     return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
 }
+
+/** 业务库的 information_schema 条件值：显式注入了库名用库名，否则用数据源当前库 */
+export const businessSchemaExpr = () => (config.businessSchemaExplicit ? quote(config.businessSchema) : 'DATABASE()');
+/** 业务表引用：显式注入了库名时带库名前缀，否则直接写表名（数据源当前库） */
+export const businessTableRef = (name) => (config.businessSchemaExplicit ? `${ident(config.businessSchema)}.${ident(name)}` : ident(name));
+/** 给人看的业务库名 */
+export const businessSchemaLabel = () => (config.businessSchemaExplicit ? config.businessSchema : '业务库（数据源当前库）');
 
 export function ident(name) {
     const text = String(name || '');
