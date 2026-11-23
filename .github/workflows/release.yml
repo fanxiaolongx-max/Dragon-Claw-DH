@@ -61,9 +61,6 @@ jobs:
             echo "- \`dragon-claw-dh-${VERSION}.zip\`：完整包（先传这个）"
             echo "- \`dragon-claw-dh-${VERSION}-lite.zip\`：精简包（内网源缺依赖、完整包装不上时用）"
             echo
-            echo "## 数据库脚本检查"
-            node scripts/check-db-upgrade-diff.mjs
-            echo
             echo "## 本次提交"
             echo
             git log -1 --pretty=%B

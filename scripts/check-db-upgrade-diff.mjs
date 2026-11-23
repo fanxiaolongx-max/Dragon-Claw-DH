@@ -19,12 +19,12 @@ export function getDbUpgradeNote() {
         const matches = [...new Set([...addedSql.matchAll(/CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+[`"]?([a-zA-Z0-9_]+)[`"]?/gi)].map((m) => m[1]))];
 
         if (matches.length > 0) {
-            return `⚠️ **数据库变更提示**：本版本新增了数据表（${matches.map((t) => `\`${t}\``).join('、')}），升级前请联系 DBA 在基座库中执行 \`db/upgrade.sql\`。`;
+            return `ℹ️ **数据库变更**：本版本新增了数据表（${matches.map((t) => `\`${t}\``).join('、')}），已包含在 \`db/upgrade.sql\` 中（上传更新包时基座会自动执行，无需手工操作）。`;
         }
 
-        return 'ℹ️ **数据库变更提示**：`db/upgrade.sql` 存在改动，升级前请对照确认是否需要 DBA 导入。';
+        return 'ℹ️ **数据库变更**：`db/upgrade.sql` 存在改动，上传更新包时基座会自动执行。';
     } catch {
-        return '升级前请对照 `db/upgrade.sql` 确认是否有新增的表。';
+        return '✅ 上传更新包时基座会自动执行 `db/upgrade.sql`，无需手工执行。';
     }
 }
 

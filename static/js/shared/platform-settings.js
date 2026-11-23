@@ -5807,10 +5807,13 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
             <input id="dhAdminSearch" autocomplete="off" placeholder="${navEscape(accountText('搜索工号或姓名…', 'Search user ID or name…'))}" style="margin-left:auto;min-width:190px">
         </div>
         <div class="nav-settings-help" style="margin-top:14px">${navEscape(accountText('团队：没有分配的账号都在「默认团队」，看到的是现有的全部数据。新建团队后把账号放进去，同一团队的人共用抓取脚本、数据导入、报表看板、月报等工具页面数据，不同团队互相隔离；新团队从空数据开始。AI 对话、消息、保险箱仍按人私有；模型、页面开放等平台设置由超级管理员统一管理。超级管理员始终在默认团队。', 'Teams: accounts without a team are in the Default team and see all existing data. Accounts in the same team share scraping scripts, data imports, reports, monthly reports and other tool data; teams are isolated and new teams start empty. Chats, messages and vault stay personal; models and page access stay global. Super admins always stay in the Default team.'))}</div>
-        <div class="nav-account-create" style="flex-wrap:wrap;gap:8px;align-items:center">
-            <input id="dhTeamName" autocomplete="off" maxlength="40" placeholder="${navEscape(accountText('新团队名称（如 华东区）', 'New team name'))}" style="min-width:200px">
-            <button type="button" id="dhTeamCreateBtn">${navEscape(accountText('新建团队', 'Create team'))}</button>
-            <span id="dhTeamChips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        <div class="nav-team-panel">
+            <div class="nav-team-toolbar">
+                <input id="dhTeamName" autocomplete="off" maxlength="40" placeholder="${navEscape(accountText('新团队名称（如 华东区）', 'New team name'))}">
+                <button type="button" id="dhTeamCreateBtn">${navEscape(accountText('新建团队', 'Create team'))}</button>
+                <span id="dhTeamSummary" class="nav-team-summary"></span>
+            </div>
+            <div id="dhTeamChips" class="nav-team-chips"></div>
         </div>
         <div id="dhAdminSaveStatus" class="nav-settings-help" style="margin:6px 0 8px"></div>
         <div class="nav-account-table-wrap">
@@ -5837,12 +5840,30 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
     const preRoleSelect = content.querySelector('#dhAdminPreRole');
     const preSaveBtn = content.querySelector('#dhAdminPreSaveBtn');
     const teamChips = content.querySelector('#dhTeamChips');
+    const teamSummary = content.querySelector('#dhTeamSummary');
 
     const teamName = (id) => (id ? (state.teams.find((t) => t.id === id)?.name || id) : accountText('默认团队', 'Default team'));
     function renderTeams() {
-        teamChips.innerHTML = state.teams.filter((t) => t.id).map((t) => `<span class="nav-account-role readonly" style="display:inline-flex;gap:6px;align-items:center">${navEscape(t.name)} · ${t.memberCount || 0}${navEscape(accountText(' 人', ''))}
-            <button type="button" data-dh-team-rename="${navEscape(t.id)}" style="border:0;background:none;cursor:pointer;padding:0" title="${navEscape(accountText('改名', 'Rename'))}">✎</button>
-            <button type="button" data-dh-team-delete="${navEscape(t.id)}" style="border:0;background:none;cursor:pointer;padding:0" title="${navEscape(accountText('删除（需先移走成员，数据保留）', 'Delete (move members first; data kept)'))}">×</button></span>`).join('');
+        const customTeams = state.teams.filter((t) => t.id);
+        const defaultCount = state.users.filter((u) => !u.teamId).length;
+        if (teamSummary) {
+            teamSummary.textContent = customTeams.length
+                ? accountText(`共 ${customTeams.length} 个团队`, `${customTeams.length} custom ${customTeams.length === 1 ? 'team' : 'teams'}`)
+                : accountText('仅默认团队', 'Default team only');
+        }
+        const defaultChip = `<span class="nav-team-chip is-default" title="${navEscape(accountText('默认团队（内置，不可删除）', 'Default team (built-in)'))}">
+            <span class="nav-team-chip-name">${navEscape(accountText('默认团队', 'Default team'))}</span>
+            <span class="nav-team-chip-count">${defaultCount}${navEscape(accountText(' 人', ''))}</span>
+        </span>`;
+        const customHtml = customTeams.map((t) => `<span class="nav-team-chip" title="${navEscape(t.name)}">
+            <span class="nav-team-chip-name">${navEscape(t.name)}</span>
+            <span class="nav-team-chip-count">${t.memberCount || 0}${navEscape(accountText(' 人', ''))}</span>
+            <span class="nav-team-chip-actions">
+                <button type="button" class="nav-team-chip-btn" data-dh-team-rename="${navEscape(t.id)}" title="${navEscape(accountText('改名', 'Rename'))}" aria-label="${navEscape(accountText('改名', 'Rename'))}">✎</button>
+                <button type="button" class="nav-team-chip-btn is-danger" data-dh-team-delete="${navEscape(t.id)}" title="${navEscape(accountText('删除（需先移走成员，数据保留）', 'Delete (move members first; data kept)'))}" aria-label="${navEscape(accountText('删除', 'Delete'))}">×</button>
+            </span>
+        </span>`).join('');
+        teamChips.innerHTML = defaultChip + customHtml;
     }
     async function teamCall(promise, okText) {
         if (statusEl) statusEl.textContent = accountText('正在保存…', 'Saving…');
@@ -5866,6 +5887,12 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         if (!name) return;
         if (await teamCall(API.post('/api/auth/teams', { name }), accountText(`已新建团队「${name}」`, `Team “${name}” created`)) && input) input.value = '';
     });
+    content.querySelector('#dhTeamName')?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            content.querySelector('#dhTeamCreateBtn')?.click();
+        }
+    });
     teamChips?.addEventListener('click', async (event) => {
         const renameId = event.target.closest('[data-dh-team-rename]')?.dataset.dhTeamRename;
         const deleteId = event.target.closest('[data-dh-team-delete]')?.dataset.dhTeamDelete;
@@ -5880,7 +5907,7 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
     });
     async function moveUser(username, teamId) {
         const res = await teamCall(API.put('/api/auth/teams/members/' + encodeURIComponent(username), { teamId }), accountText(`已把 ${username} 移到「${teamName(teamId)}」，对方刷新页面后生效`, `${username} moved to “${teamName(teamId)}”; takes effect after a refresh`));
-        if (res) { const u = state.users.find((x) => x.username === username); if (u) u.teamId = teamId; renderRows(); }
+        if (res) { const u = state.users.find((x) => x.username === username); if (u) u.teamId = teamId; renderTeams(); renderRows(); }
     }
 
     function renderRows() {
