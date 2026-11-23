@@ -39,7 +39,20 @@ export async function start() {
     if (config.baseQueryUrl) startDataWatch();
     // 内置的表字典与看板 SQL：启动后导入一次（内容没变就跳过），失败不影响服务
     if (config.localDevMemory || config.baseQueryUrl) {
-        import('./services/data-dictionary-service.js').then((m) => m.applyBundledDefaults()).catch((error) => pushLog({ level: 'WARN', category: 'DATA_WATCH', message: `导入内置表字典 / 看板 SQL 失败：${error.message}` }));
+        // 基座可能比应用晚就绪（启动时 fetch failed）：失败就隔一段时间再试，直到成功
+        const delays = [15, 60, 300, 900, 1800, 3600].map((sec) => sec * 1000);
+        const attempt = async (n = 0) => {
+            let failed = '';
+            try {
+                const out = await (await import('./services/data-dictionary-service.js')).applyBundledDefaults();
+                failed = Object.entries(out || {}).filter(([, r]) => r?.error).map(([f, r]) => `${f}：${r.error}`).join('；');
+            } catch (error) { failed = error.message; }
+            if (!failed) return;
+            const wait = delays[Math.min(n, delays.length - 1)];
+            pushLog({ level: 'WARN', category: 'DATA_WATCH', message: `导入内置表字典 / 看板 SQL 失败，${Math.round(wait / 1000)} 秒后重试：${failed}` });
+            setTimeout(() => attempt(n + 1), wait).unref?.();
+        };
+        attempt();
     }
     // 启动环境快照也放进调试面板的日志里，管理员不用翻平台日志就能看到
     if (globalThis.__dhBootReport) {
