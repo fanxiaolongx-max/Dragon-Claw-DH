@@ -308,7 +308,7 @@ test('base platform-settings.js renders 01 onboarding card, preserves fields on 
         navT: (k) => k,
         navLocaleText: (zh, en) => zh || en,
         getAuthHeaderForNav: () => ({}),
-        isNavSuperAdmin: () => false,
+        isNavSuperAdmin: () => ctx.__super !== false,
         resolveAiAuthModeForUi: (s) => s?.authMode || 'bearer',
         renderAiUsagePanel: () => '',
         loadAiUsageData: () => {},
@@ -319,6 +319,10 @@ test('base platform-settings.js renders 01 onboarding card, preserves fields on 
     vm.runInContext(src, ctx);
     for (const k of Object.keys(windowObj)) if (!(k in ctx)) ctx[k] = windowObj[k];
 
+    ctx.__super = false;
+    await ctx.renderAiSettings(content);
+    assert.doesNotMatch(content.innerHTML, /01平台接入/, '模型由超级管理员统一配置：其他人看不到 01 平台接入');
+    ctx.__super = true;
     await ctx.renderAiSettings(content);
     assert.match(content.innerHTML, /01平台接入/);
     assert.match(content.innerHTML, /http:\/\/models\.ascend\.huawei\.com\/sign-up\?aff=KizX/);

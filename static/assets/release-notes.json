@@ -1,14 +1,8 @@
 {
   "zh": [
-    "全局设置 → AI 助手新增「01平台接入」：粘贴 API Token 自动测试连接，保存后一键配置并启用全局对话模型（qwen3.8-27b）与生图模型（qwen-image-2.1）。",
-    "模型配置分「对话 / 生图」两类；生图模型支持 OpenAI 兼容接口（/images/generations），测试连接会真正生成一张测试图；对话默认使用对话类模型。",
-    "测试连接因证书策略失败时自动换一种「校验 HTTPS 证书」设置重试，成功后自动保存；切换供应商协议时不再清空已填的接口地址、Token 和模型列表。",
-    "导入的看板 SQL 里如果用了没定义的表别名（例如写了 t.字段，但 FROM 表后面漏了 t），且只有一张表，会自动补上别名并在改写说明里注明。"
+    "「01平台接入」只对超级管理员显示：基座的模型由超级管理员统一配置，其他人看不到这个入口。"
   ],
   "en": [
-    "Global Settings → AI assistant adds 01 Platform quick connect: paste an API token to test it automatically, then save to configure and activate the global chat model (qwen3.8-27b) and image model (qwen-image-2.1).",
-    "Model profiles are split into chat and image; image profiles support OpenAI-compatible endpoints (/images/generations), testing one generates a real test image, and chat uses chat profiles by default.",
-    "When a connection test fails because of the certificate policy, it retries with the other verify-HTTPS setting and saves it on success; switching provider protocols no longer clears the base URL, token or model list you entered.",
-    "Imported dashboard SQL that uses an undefined table alias (for example t.column without the alias after the only FROM table) now gets the alias added automatically, noted in the rewrite notes."
+    "01 Platform quick connect is shown only to super admins: models are configured centrally by the super admin, so other users no longer see the entry."
   ]
 }

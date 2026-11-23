@@ -1000,6 +1000,8 @@ function hasUserAddedAiModels(profiles) {
 }
 
 function renderZeroOneOnboardingCard({ hasOwnModels = false } = {}) {
+    // 基座的模型由超级管理员统一配置，其他人不能改全局模型：「01 平台接入」只给超级管理员看
+    if (typeof isNavSuperAdmin === 'function' && !isNavSuperAdmin()) return '';
     const showCard = !hasOwnModels || navState.aiQuickForceOpen === true;
     if (!showCard) {
         return `<div class="nav-ai-quick-collapsed-bar">
