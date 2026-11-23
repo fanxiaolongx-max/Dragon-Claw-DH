@@ -21,6 +21,8 @@ async function load({ fresh = false } = {}) {
     const data = {
         teams: Array.isArray(raw?.teams) ? raw.teams.filter((t) => t && TEAM_ID_RE.test(String(t.id))) : [],
         members: raw?.members && typeof raw.members === 'object' ? raw.members : {},
+        // 超级管理员临时进入某个团队排障：工号 → 团队（只对仍是管理员的账号生效，见 requestTeamOf）
+        viewing: raw?.viewing && typeof raw.viewing === 'object' ? raw.viewing : {},
     };
     cache = { at: Date.now(), data };
     return data;
@@ -41,6 +43,37 @@ export async function teamOf(username) {
     const { teams, members } = await load();
     const team = members[u] ?? members[stripFirstLetter(u)] ?? '';
     return team && teams.some((t) => t.id === team) ? team : '';
+}
+
+/**
+ * 这次请求按哪个团队读写：成员归属优先；否则是超级管理员正在查看的团队（viewing=true，调用方要确认仍是管理员）。
+ * 返回 { team, viewing }；team 为空 = 默认团队。
+ */
+export async function requestTeamOf(username) {
+    const u = norm(username);
+    if (!u || u === 'default' || u === 'anonymous') return { team: '', viewing: false };
+    const member = await teamOf(u);
+    if (member) return { team: member, viewing: false };
+    const { teams, viewing } = await load();
+    const team = viewing[u] ?? viewing[stripFirstLetter(u)] ?? '';
+    return team && teams.some((t) => t.id === team) ? { team, viewing: true } : { team: '', viewing: false };
+}
+
+/** 超级管理员进入某个团队查看 / 排障（teamId 为空 = 返回默认团队） */
+export async function setAdminViewing(username, teamId = '') {
+    const u = norm(username);
+    const target = String(teamId || '').trim().toLowerCase();
+    const data = await load({ fresh: true });
+    if (target && !data.teams.some((t) => t.id === target)) throw new BusinessError('团队不存在', 404);
+    const viewing = { ...data.viewing };
+    if (target) viewing[u] = target; else delete viewing[u];
+    await save({ ...data, viewing });
+    return { team: target, name: target ? data.teams.find((t) => t.id === target)?.name || target : '' };
+}
+
+export async function teamName(teamId) {
+    if (!teamId) return '默认团队';
+    return (await load()).teams.find((t) => t.id === teamId)?.name || teamId;
 }
 
 /** 在某个账号所在的团队里执行（定时任务等后台代码用） */
@@ -95,7 +128,8 @@ export async function deleteTeam(teamId) {
     if (!data.teams.some((t) => t.id === teamId)) throw new BusinessError('团队不存在', 404);
     const members = Object.entries(data.members).filter(([, t]) => t === teamId).map(([u]) => u);
     if (members.length) throw new BusinessError(`团队里还有成员（${members.join('、')}），先把他们移到其他团队`, 409);
-    await save({ ...data, teams: data.teams.filter((t) => t.id !== teamId) });
+    const viewing = Object.fromEntries(Object.entries(data.viewing || {}).filter(([, t]) => t !== teamId));
+    await save({ ...data, teams: data.teams.filter((t) => t.id !== teamId), viewing });
     return { success: true };
 }
 

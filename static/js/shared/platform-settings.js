@@ -5859,6 +5859,7 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
             <span class="nav-team-chip-name">${navEscape(t.name)}</span>
             <span class="nav-team-chip-count">${t.memberCount || 0}${navEscape(accountText(' 人', ''))}</span>
             <span class="nav-team-chip-actions">
+                <button type="button" class="nav-team-chip-btn" data-dh-team-enter="${navEscape(t.id)}" title="${navEscape(accountText('进入这个团队查看 / 排障，底部提示条可返回', 'Enter this team to view or troubleshoot; use the bottom bar to return'))}" aria-label="${navEscape(accountText('进入团队', 'Enter team'))}">↪</button>
                 <button type="button" class="nav-team-chip-btn" data-dh-team-rename="${navEscape(t.id)}" title="${navEscape(accountText('改名', 'Rename'))}" aria-label="${navEscape(accountText('改名', 'Rename'))}">✎</button>
                 <button type="button" class="nav-team-chip-btn is-danger" data-dh-team-delete="${navEscape(t.id)}" title="${navEscape(accountText('删除（需先移走成员，数据保留）', 'Delete (move members first; data kept)'))}" aria-label="${navEscape(accountText('删除', 'Delete'))}">×</button>
             </span>
@@ -5894,6 +5895,8 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         }
     });
     teamChips?.addEventListener('click', async (event) => {
+        const enterId = event.target.closest('[data-dh-team-enter]')?.dataset.dhTeamEnter;
+        if (enterId) { await switchNavTeam(enterId); return; }
         const renameId = event.target.closest('[data-dh-team-rename]')?.dataset.dhTeamRename;
         const deleteId = event.target.closest('[data-dh-team-delete]')?.dataset.dhTeamDelete;
         if (renameId) {

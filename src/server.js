@@ -13,9 +13,9 @@ import { resolveAdmin, denyReason, isAuthEnforced, authRequiredReason } from './
 import { ok, fail } from './core/response.js';
 import { pushLog } from './core/log-ring.js';
 import { requestContext } from './dao/scoped.js';
-import { teamOf } from './services/team-service.js';
+import { requestTeamOf, teamName } from './services/team-service.js';
 import { healthRoutes, healthHandler } from './routes/health.js';
-import { authRoutes } from './routes/auth.js';
+import { authRoutes, tenantSwitchRoutes } from './routes/auth.js';
 import { debugRoutes } from './routes/debug.js';
 import { aiRoutes, aiSettingsRoutes } from './routes/ai.js';
 import { sharedConversationRoutes } from './routes/shared-conversations.js';
@@ -249,7 +249,14 @@ export async function createServer() {
                 requestContext.run({ requestId, userId: identity.username, teamId: identity.teamId }, done);
             };
             if (!identity.identified) return run('');
-            teamOf(identity.username).then(run, () => run(''));
+            requestTeamOf(identity.username).then(async ({ team, viewing }) => {
+                // 超级管理员进入了某个团队：只有仍是管理员才生效
+                if (viewing) {
+                    if (!(await resolveAdmin(identity).catch(() => false))) return run('');
+                    identity.viewingTeam = { id: team, name: await teamName(team) };
+                }
+                run(team);
+            }, () => run(''));
         };
         if (!needsGuard) return proceed();
         hardenIdentity(req, identity).then(proceed, (err) => {
@@ -437,6 +444,7 @@ export async function createServer() {
     // ── 注册全部 API 路由 ──────────────────────────────────
     await app.register(healthRoutes, { prefix: '/api' });
     await app.register(authRoutes, { prefix: '/api/auth' });
+    await app.register(tenantSwitchRoutes, { prefix: '/api/tenants' });
     await app.register(debugRoutes, { prefix: '/api/debug' });
     await app.register(aiRoutes, { prefix: '/api/ai' });
     await app.register(sharedConversationRoutes, { prefix: '/api/shared-conversations' }); // 共享对话：成员直接进入同一段对话

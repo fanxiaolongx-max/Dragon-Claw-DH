@@ -1988,7 +1988,8 @@ async function switchNavTeam(tenantId) {
     const previous = localStorage.getItem('tools_tenant_id') || 'default';
     if (previous !== tenantId) switchTenantBrowserState(previous, tenantId);
     localStorage.setItem('tools_tenant_id', tenantId);
-    window.location.href = '/';
+    // 基座挂在网关路径前缀下：回首页要带上前缀
+    window.location.href = `${window.DH_BASE || ''}/`;
 }
 if (typeof window !== 'undefined') window.switchNavTeam = switchNavTeam;
 function activeTenantName() { return navState.settings?.platformName || 'Dragon Claw'; }

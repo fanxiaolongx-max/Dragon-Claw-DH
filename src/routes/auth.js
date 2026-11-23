@@ -8,7 +8,7 @@ import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
 import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
 import { listKnownUsers, rememberUser } from '../services/share-service.js';
-import { listTeams, createTeam, renameTeam, deleteTeam, setMemberTeam, teamOf } from '../services/team-service.js';
+import { listTeams, createTeam, renameTeam, deleteTeam, setMemberTeam, teamOf, setAdminViewing } from '../services/team-service.js';
 
 const LOGIN_WINDOW_MS = 8 * 3600_000;
 
@@ -19,8 +19,10 @@ function publicIdentity(id) {
         role: id.role,
         isAdmin: id.isAdmin,
         isSuper: id.isSuper,
-        tenantId: id.tenantId,
-        homeTenantId: id.homeTenantId,
+        // 前端按「团队」切分浏览器本地状态、显示「正在查看团队」提示条
+        tenantId: id.teamId || 'default',
+        homeTenantId: id.viewingTeam ? 'default' : (id.teamId || 'default'),
+        viewingTeam: id.viewingTeam || null,
         lang: id.lang,
         source: id.source,
         identified: id.identified,
@@ -151,5 +153,19 @@ export async function authRoutes(fastify) {
         await recordAudit(req, { actor: me.username, action: 'admins_update', detail: stored.join('、') || '（空）' });
         await pushAdminAlert({ type: 'security', severity: 'warn', title: '管理员名单已更新', message: `${me.username} 把管理员名单改为：${stored.join('、') || '（空）'}`, actor: me.username, objectType: 'admins' });
         return { success: true, ...(await buildAdminsView(me)) };
+    });
+}
+
+// 超级管理员进入某个团队查看 / 排障（与主线版同一个接口，前端共用）：之后按该团队读写工具页面数据，
+// 底部提示条可一键返回。只有管理员能调（非 GET 默认要管理员权限，见 core/access.js）。
+export async function tenantSwitchRoutes(fastify) {
+    fastify.post('/switch', async (req) => {
+        const me = resolveRequestIdentity(req);
+        if (!me.isAdmin) throw new BusinessError('只有超级管理员可以进入其他团队', 403);
+        const raw = String(req.body?.tenantId || '').trim().toLowerCase();
+        const target = raw === 'default' ? '' : raw;
+        const result = await setAdminViewing(me.username, target);
+        await recordAudit(req, { actor: me.username, action: target ? 'team_enter' : 'team_leave', detail: target ? `${result.name}（${target}）` : '返回默认团队' });
+        return { success: true, tenantId: target || 'default', viewingTeam: target ? { id: target, name: result.name } : null };
     });
 }

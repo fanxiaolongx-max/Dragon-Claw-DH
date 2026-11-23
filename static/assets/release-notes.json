@@ -1,10 +1,8 @@
 {
   "zh": [
-    "新增账号绑定团队（仅超级管理员）：在「账号与权限」里新建团队、把账号放进去。同一团队共用抓取脚本、数据导入、报表看板、月报、值班表等工具页面数据，不同团队互相隔离，新团队从空数据开始；没有分配团队的账号都在「默认团队」，看到的就是现有数据。AI 对话、消息、保险箱仍按人私有，模型与页面开放等平台设置由超级管理员统一管理。",
-    "上线前请 DBA 执行 db/upgrade.sql（新增 26 张团队版数据表，只有 CREATE TABLE IF NOT EXISTS，可重复执行）。"
+    "超级管理员可以「进入」某个团队查看和排障：在「账号与权限」的团队标签上点「↪」，之后看到和修改的都是该团队的工具页面数据，页面底部会提示「正在查看团队」，一键返回自己的空间；被撤掉管理员后自动失效。"
   ],
   "en": [
-    "Accounts can be bound to teams (super admin only): create teams in Accounts & permissions and move accounts into them. A team shares scraping scripts, data imports, reports, monthly reports, duty rosters and other tool data; teams are isolated and new teams start empty. Accounts without a team stay in the Default team and see the existing data. Chats, messages and vault stay personal; models and page access stay global.",
-    "Before upgrading, the DBA must run db/upgrade.sql (26 new team tables, CREATE TABLE IF NOT EXISTS only, safe to rerun)."
+    "Super admins can enter a team to view or troubleshoot: click ↪ on a team chip in Accounts & permissions to work with that team's tool data, with a bottom bar showing the team and a one-click way back; it stops applying if the account loses admin rights."
   ]
 }

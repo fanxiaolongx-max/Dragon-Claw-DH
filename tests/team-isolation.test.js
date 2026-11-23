@@ -133,3 +133,31 @@ test('团队版表与原表保持同步（新增工具表后要重新生成）',
         assert.ok(upgrade.includes(`CREATE TABLE IF NOT EXISTS \`${name}\``), `upgrade.sql 缺少 ${name}`);
     }
 });
+
+test('超级管理员进入团队查看：按该团队读写，提示条信息齐全，可返回；普通账号不能进', async () => {
+    const names = async (user) => ((await call(user, 'GET', '/api/uiv/scripts')).data?.scripts || []).map((s) => s.name).sort();
+    assert.equal((await call('carol', 'POST', '/api/tenants/switch', { tenantId: 'east' })).status, 403);
+    assert.equal((await call('boss', 'POST', '/api/tenants/switch', { tenantId: 'nope' })).status, 404);
+
+    const entered = await call('boss', 'POST', '/api/tenants/switch', { tenantId: 'east' });
+    assert.equal(entered.status, 200, JSON.stringify(entered.data));
+    const me = (await call('boss', 'GET', '/api/auth/me')).data;
+    assert.deepEqual([me.tenantId, me.homeTenantId, me.viewingTeam?.id, me.viewingTeam?.name, me.isSuper], ['east', 'default', 'east', '华东', true]);
+    assert.deepEqual(await names('boss'), ['华东脚本'], '进入后看到的是华东的数据');
+    assert.deepEqual(await names('carol'), ['默认团队脚本'], '其他人不受影响');
+
+    // 被撤掉管理员后，“正在查看”自动失效
+    await call('boss', 'PUT', '/api/auth/admins', { users: ['boss', 'dan'] });
+    await call('dan', 'POST', '/api/tenants/switch', { tenantId: 'east' });
+    assert.equal((await call('dan', 'GET', '/api/auth/me')).data.tenantId, 'east');
+    await call('boss', 'PUT', '/api/auth/admins', { users: ['boss'] });
+    const danMe = (await call('dan', 'GET', '/api/auth/me')).data;
+    assert.deepEqual([danMe.tenantId, danMe.viewingTeam], ['default', null]);
+
+    const back = await call('boss', 'POST', '/api/tenants/switch', { tenantId: 'default' });
+    assert.equal(back.data.viewingTeam, null);
+    assert.equal((await call('boss', 'GET', '/api/auth/me')).data.tenantId, 'default');
+    assert.deepEqual(await names('boss'), ['默认团队脚本']);
+    const audit = (await call('boss', 'GET', '/api/auth/audit')).data;
+    assert.ok(JSON.stringify(audit).includes('team_enter'));
+});
