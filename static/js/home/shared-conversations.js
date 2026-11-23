@@ -1211,13 +1211,21 @@ body:not(.dc-chatting) .shc-cap-bar{display:none}
         promptSkillRequest, checkSkillBeforeSend, onSessionDeleted,
         // 侧栏右键「共享」只给 Dragon Claw 自己的对话：第三方 Agent、频道对话不共享
         available: () => state.available !== false,
-        beforeOpen: sessionId => {
+        beforeOpen: async sessionId => {
             // 切换对话先断开旧的实时流；新对话的历史渲染完后由 dragon-claw.js 调 connectLive
             disconnectLive();
-            if (isShared(sessionId)) {
-                return api('POST', `/session/${encodeURIComponent(sessionId)}/sync`).then(() => refreshMine()).catch(() => {});
+            if (!isShared(sessionId)) return;
+            try {
+                const res = await api('POST', `/session/${encodeURIComponent(sessionId)}/sync`);
+                if (res?.result?.closed) {
+                    handleSyncClose(sessionId, res.result);
+                    if (res.result.revoked) throw Object.assign(new Error('SHARE_REVOKED'), { revoked: true });
+                    return;
+                }
+                await refreshMine();
+            } catch (error) {
+                if (error?.revoked) throw error;
             }
-            return Promise.resolve();
         },
         connectLive,
         disconnectLive,

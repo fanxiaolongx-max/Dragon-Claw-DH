@@ -389,6 +389,15 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             break;
         }
 
+        // 工具参数写到一半碰到单次输出上限（长技能全文、长 HTML）：参数是半截 JSON，不执行；
+        // 明确告知模型已被截断、不要原样重试，并调高下一轮输出上限
+        const truncatedArgs = /^(?:length|max_tokens|max_output_tokens)$/i.test(String(res.stopReason || ''))
+            && res.toolCalls.some((c) => Boolean(c.args?.__invalid));
+        if (truncatedArgs) {
+            stepMaxOutput = Math.max(Number(stepMaxOutput) || 2048, 8192);
+            emit({ type: 'status', status: '工具参数超出单次输出上限被截断，已调高上限并提示模型精简重试…' });
+        }
+
         // 工具调用之间的正文之间留一个空行，避免两段话粘在一起
         if (res.text && !/\n\s*$/.test(res.text)) { finalText += '\n\n'; emit({ type: 'delta', delta: '\n\n' }); }
         messages.push({ role: 'assistant', content: res.text, toolCalls: res.toolCalls });
@@ -401,7 +410,16 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             const t0 = Date.now();
             let out;
             if (!tool) out = { ok: false, summary: '未知工具', content: `没有名为 ${call.name} 的工具。可用工具：${tools.map((t) => t.name).join('、')}` };
-            else if (call.args?.__invalid) out = { ok: false, summary: '参数格式错误', content: '工具参数不是合法的 JSON，请重新调用并给出完整参数。' };
+            else if (call.args?.__invalid) {
+                out = truncatedArgs
+                    ? {
+                        ok: false,
+                        isError: true,
+                        summary: '工具参数超出单次输出上限被截断',
+                        content: `错误（AGENT_TOOL_ARGS_TRUNCATED）：工具 ${call.name} 的参数太长，超出了模型单次输出上限在中途被截断，本次操作未执行。不要原样重试相同超长内容（换个写法同样可能截断）：请精简参数内容后再调用${call.name === 'save_skill' ? '，或建议用户直接在「技能广场」导入完整 SKILL.md 文件' : ''}。下一轮输出上限已适当提高。`,
+                    }
+                    : { ok: false, isError: true, summary: '参数格式错误', content: '工具参数不是合法的 JSON，请重新调用并给出完整参数。' };
+            }
             else {
                 try {
                     let allowed = true;

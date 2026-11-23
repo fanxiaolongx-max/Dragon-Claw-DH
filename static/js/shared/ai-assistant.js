@@ -1762,7 +1762,8 @@
             source = escapeHtml(source)
                 .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-                .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+                .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+                .replace(/([0-9#*])\uFE0F?\u20E3/g, '<span class="ai-emoji ai-emoji-keycap">$1\uFE0F\u20E3</span>');
             codeTokens.forEach((html, index) => {
                 source = source.replace(`\u0000CODE${index}\u0000`, () => html);
             });
@@ -1809,6 +1810,7 @@
             const line = lines[index] || '';
             return Boolean(fenceOpen(line))
                 || /^#{1,4}\s+/.test(line)
+                || /^\s*(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(line)
                 || /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)
                 || /^\s*>\s?/.test(line)
                 || (line.includes('|') && isTableSeparator(lines[index + 1] || ''));
@@ -1879,6 +1881,12 @@
             if (heading) {
                 const level = heading[1].length;
                 blocks.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+                index += 1;
+                continue;
+            }
+
+            if (/^\s*(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(line)) {
+                blocks.push('<hr>');
                 index += 1;
                 continue;
             }
@@ -2553,13 +2561,28 @@
     }
 
     // onEvent：接收 delta/status/done/error 之外的事件（工作区模式的 approval / tool_start / tool_result / change 等）。
-    async function requestStreamingChat(payload, { signal, onDelta, onStatus, onEvent }) {
+    async function requestStreamingChat(payload, handlers) {
         const res = await fetch('/api/ai/chat', {
             method: 'POST',
             headers: { ...getAuthHeaders(), Accept: 'application/x-ndjson' },
             body: JSON.stringify({ ...payload, stream: true }),
-            signal
+            signal: handlers.signal
         });
+        return readChatStream(res, handlers);
+    }
+
+    // 接上后台仍在进行的回复（首页多对话并行）：先补放已输出的内容再接着推送；没有进行中的回复返回 null
+    async function requestLiveStream(sessionId, handlers) {
+        const res = await fetch(`/api/ai/sessions/${encodeURIComponent(sessionId)}/live`, {
+            headers: { ...getAuthHeaders(), Accept: 'application/x-ndjson' },
+            signal: handlers.signal
+        });
+        if (res.status === 204) return null;
+        return readChatStream(res, handlers);
+    }
+
+    // run / live：后台回复的编号与开场信息，交给 onMeta，不进 onEvent
+    async function readChatStream(res, { onDelta, onStatus, onEvent, onMeta }) {
         const contentType = String(res.headers.get('content-type') || '');
         if (!res.ok) {
             let message = `${res.status} ${res.statusText}`;
@@ -2591,7 +2614,8 @@
             if (event.type === 'delta') onDelta(event.delta || '');
             else if (event.type === 'status') onStatus?.(event.status || {});
             else if (event.type === 'done') finalPayload = event;
-            else if (event.type === 'error') throw new Error(event.error || 'AI 流式输出失败');
+            else if (event.type === 'error') throw Object.assign(new Error(event.error || 'AI 流式输出失败'), { code: event.code });
+            else if (event.type === 'run' || event.type === 'live') onMeta?.(event);
             else onEvent?.(event);
         };
         while (true) {
@@ -3010,6 +3034,7 @@
         renderMarkdown: renderMarkdownLike,
         renderGrounding,
         requestStreamingChat,
+        requestLiveStream,
         openKnowledgeGraph,
         open: openAssistant,
         ask(prompt, options = {}) {

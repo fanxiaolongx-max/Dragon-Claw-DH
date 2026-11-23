@@ -825,12 +825,28 @@
         const label = tier === 'super' ? t('roleSuperAdmin') : t('roleAdmin');
         return `${ROLE_BADGE_ICONS[tier] || ''}<span>${esc(label)}</span>`;
     };
+    function renderAccountLogo(container, name) {
+        if (!container) return;
+        const img = new Image();
+        img.alt = '';
+        let triedLogo = false;
+        img.addEventListener('error', () => {
+            if (!triedLogo) {
+                triedLogo = true;
+                img.src = '/assets/logo.png';
+            } else {
+                container.textContent = Array.from(name || 'Dragon Claw')[0].toUpperCase();
+            }
+        });
+        container.replaceChildren(img);
+        img.src = '/assets/icon.png';
+    }
     function renderUser() {
         const name = localStorage.getItem('tools_user') || '';
         const tier = userRoleTier();
         applyUserTierClasses($('v2UserBtn'), tier);
         $('v2UserName').textContent = name;
-        if (!$('v2Avatar').firstChild) $('v2Avatar').innerHTML = '<img src="/assets/logo.png" alt="">';
+        if (!$('v2Avatar').firstChild) renderAccountLogo($('v2Avatar'), name);
         $('v2UserMeta').textContent = serviceText();
         $('v2StatusDot').classList.toggle('is-down', serviceDown());
         const crest = $('v2AvatarCrest');
@@ -863,7 +879,7 @@
         const dark = root.getAttribute('data-theme') === 'dark';
         const mac = /Mac/i.test(navigator.platform || '');
         userPop.innerHTML = `
-            <div class="v2-account-card v2-account-head${tierClass}"><span class="v2-avatar-wrap"><span class="v2-avatar v2-avatar-lg"><img src="/assets/logo.png" alt=""></span>${headCrest}</span><div class="v2-account-identity"><strong>${esc(name)}</strong>${headBadge}</div></div>
+            <div class="v2-account-card v2-account-head${tierClass}"><span class="v2-avatar-wrap"><span class="v2-avatar v2-avatar-lg"></span>${headCrest}</span><div class="v2-account-identity"><strong>${esc(name)}</strong>${headBadge}</div></div>
             <div class="v2-account-card v2-account-stats">
                 <div><small>${esc(t('version'))}</small><strong>${esc(versionText() || '—')}</strong></div>
                 <div><small>${esc(t('service'))}</small><button type="button" class="v2-account-service" data-v2-do="serviceStatus" title="${esc(t('serviceStatus'))}" aria-label="${esc(t('serviceStatus'))}"><span class="v2-status-dot${serviceDown() ? ' is-down' : ''}"></span>${esc(serviceText())}</button></div>
@@ -880,6 +896,7 @@
                 <div class="v2-pop-sep"></div>
                 ${rowItem('logout', t('logout'), 'logout')}
             </div>`;
+        renderAccountLogo(userPop.querySelector('.v2-avatar'), name);
         fillIcons(userPop);
     }
     $('v2UserBtn')?.addEventListener('click', event => {

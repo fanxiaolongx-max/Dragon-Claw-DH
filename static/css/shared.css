@@ -33,7 +33,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: 'Segoe UI', Tahoma, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-family: 'Segoe UI', Tahoma, 'PingFang SC', 'Microsoft YaHei', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
     background-color: var(--bg);
     color: var(--text);
     min-height: 100vh;
@@ -4146,11 +4146,23 @@ from { opacity: 0; transform: translateX(-5px); }
     display: inline-flex;
     align-items: center;
     padding: 1px 6px;
+    border: 0;
     border-radius: 999px;
     background: #e2e8f0;
     color: #475569;
     font-size: 11px;
     font-weight: 700;
+    line-height: 1.4;
+}
+
+.nav-team-chip-count.is-clickable {
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-team-chip-count.is-clickable:hover {
+    background: #cbd5e1;
+    color: #1e293b;
 }
 
 .nav-team-chip-actions {

@@ -5853,11 +5853,11 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         }
         const defaultChip = `<span class="nav-team-chip is-default" title="${navEscape(accountText('默认团队（内置，不可删除）', 'Default team (built-in)'))}">
             <span class="nav-team-chip-name">${navEscape(accountText('默认团队', 'Default team'))}</span>
-            <span class="nav-team-chip-count">${defaultCount}${navEscape(accountText(' 人', ''))}</span>
+            <button type="button" class="nav-team-chip-count is-clickable" data-dh-team-members="" title="${navEscape(accountText('点击查看该团队全部成员', 'Click to view all members in this team'))}">${defaultCount}${navEscape(accountText(' 人', ''))}</button>
         </span>`;
         const customHtml = customTeams.map((t) => `<span class="nav-team-chip" title="${navEscape(t.name)}">
             <span class="nav-team-chip-name">${navEscape(t.name)}</span>
-            <span class="nav-team-chip-count">${t.memberCount || 0}${navEscape(accountText(' 人', ''))}</span>
+            <button type="button" class="nav-team-chip-count is-clickable" data-dh-team-members="${navEscape(t.id)}" title="${navEscape(accountText('点击查看该团队全部成员', 'Click to view all members in this team'))}">${t.memberCount || 0}${navEscape(accountText(' 人', ''))}</button>
             <span class="nav-team-chip-actions">
                 <button type="button" class="nav-team-chip-btn" data-dh-team-enter="${navEscape(t.id)}" title="${navEscape(accountText('进入这个团队查看 / 排障，底部提示条可返回', 'Enter this team to view or troubleshoot; use the bottom bar to return'))}" aria-label="${navEscape(accountText('进入团队', 'Enter team'))}">↪</button>
                 <button type="button" class="nav-team-chip-btn" data-dh-team-rename="${navEscape(t.id)}" title="${navEscape(accountText('改名', 'Rename'))}" aria-label="${navEscape(accountText('改名', 'Rename'))}">✎</button>
@@ -5895,6 +5895,20 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         }
     });
     teamChips?.addEventListener('click', async (event) => {
+        const membersBtn = event.target.closest('[data-dh-team-members]');
+        if (membersBtn) {
+            const tid = membersBtn.dataset.dhTeamMembers || '';
+            const members = state.users.filter((u) => (u.teamId || '') === tid);
+            const listText = members.length
+                ? members.map((m) => (m.displayName && m.displayName !== m.username ? `${m.displayName} (${m.username})` : m.username)).join('\n')
+                : accountText('当前暂无成员', 'No members in this team yet');
+            await showPlatformNotice({
+                title: accountText(`团队成员 · ${teamName(tid)}（${members.length} 人）`, `Team members · ${teamName(tid)} (${members.length})`),
+                message: listText,
+                tone: 'info',
+            });
+            return;
+        }
         const enterId = event.target.closest('[data-dh-team-enter]')?.dataset.dhTeamEnter;
         if (enterId) { await switchNavTeam(enterId); return; }
         const renameId = event.target.closest('[data-dh-team-rename]')?.dataset.dhTeamRename;
@@ -5909,8 +5923,29 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         }
     });
     async function moveUser(username, teamId) {
+        const user = state.users.find((x) => x.username === username);
+        const prevTeamId = user?.teamId || '';
+        if (prevTeamId === (teamId || '')) return;
+        if (prevTeamId) {
+            const remaining = state.users.filter((x) => (x.teamId || '') === prevTeamId && x.username !== username);
+            if (remaining.length === 0) {
+                const ok = await showPlatformConfirm({
+                    title: accountText('移出该团队最后一位成员', 'Move sole member out of team'),
+                    message: accountText(
+                        `${username} 是团队「${teamName(prevTeamId)}」当前唯一成员。移入「${teamName(teamId)}」后，原团队将变为 0 人且该账号将切换到新团队的数据空间（原团队历史数据保留，超管可随时进入查看或删除空团队）。确定继续？`,
+                        `${username} is currently the only member of “${teamName(prevTeamId)}”. Moving them to “${teamName(teamId)}” leaves the old team empty and switches this account to the new team’s workspace data. Continue?`
+                    ),
+                    tone: 'warning',
+                    confirmText: accountText('确认移动', 'Move'),
+                });
+                if (!ok) {
+                    renderRows();
+                    return;
+                }
+            }
+        }
         const res = await teamCall(API.put('/api/auth/teams/members/' + encodeURIComponent(username), { teamId }), accountText(`已把 ${username} 移到「${teamName(teamId)}」，对方刷新页面后生效`, `${username} moved to “${teamName(teamId)}”; takes effect after a refresh`));
-        if (res) { const u = state.users.find((x) => x.username === username); if (u) u.teamId = teamId; renderTeams(); renderRows(); }
+        if (res) { if (user) user.teamId = teamId; renderTeams(); renderRows(); }
     }
 
     function renderRows() {

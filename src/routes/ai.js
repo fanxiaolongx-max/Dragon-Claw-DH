@@ -52,6 +52,17 @@ import {
     pushLiveEvent,
     endLiveStream,
 } from '../services/share-service.js';
+import {
+    createRun,
+    bindSession,
+    pushEvent,
+    finishRun,
+    watchRun,
+    findBySession,
+    isRunning,
+    stopRun,
+    runningSessions,
+} from '../services/chat-live-runs.js';
 import { TRANSLATE_SYSTEM_PROMPT } from '../services/business/translate-prompt.js';
 
 export async function aiRoutes(fastify) {
@@ -83,14 +94,42 @@ export async function aiRoutes(fastify) {
     });
 
     fastify.get('/sessions', async (req) => {
+        const owner = ownerOf(req);
         const items = await listSessions({
-            ownerId: ownerOf(req),
+            ownerId: owner,
             archived: false,
             prefArchived: req.query?.archived,
             query: req.query?.query || '',
             limit: req.query?.limit || 50,
             offset: req.query?.offset || 0,
         });
+        for (const item of items) {
+            if (isRunning(item.id, owner)) item.busy = true;
+        }
+        if (!req.query?.query && !Number(req.query?.offset)) {
+            const listed = new Set(items.map((item) => item.id));
+            const fresh = runningSessions(owner)
+                .filter((run) => !listed.has(run.sessionId))
+                .map((run) => {
+                    const ts = new Date(run.startedAt).toISOString().replace('T', ' ').slice(0, 19);
+                    const q = String(run.question || '').replace(/\s+/g, ' ').trim();
+                    return {
+                        id: run.sessionId,
+                        createdAt: ts,
+                        updatedAt: ts,
+                        archived: false,
+                        pinned: false,
+                        messageCount: 0,
+                        title: q.slice(0, 40) || '新对话',
+                        firstQuestion: q.slice(0, 160),
+                        lastQuestion: q.slice(0, 160),
+                        discussionMode: null,
+                        agent: null,
+                        busy: true,
+                    };
+                });
+            items.unshift(...fresh);
+        }
         return { items };
     });
 
@@ -138,8 +177,33 @@ export async function aiRoutes(fastify) {
         const access = await accessSession(req);
         if (!access) return notFound(reply);
         const items = await decorateMessages(await listMessages(req.params.sessionId), { share: access.share, ownerId: access.session.owner, viewer: ownerOf(req) });
-        return { items };
+        return { items, live: isRunning(req.params.sessionId, ownerOf(req)) };
     });
+
+    // 切回后台仍在回复的对话：补放已输出的内容并接着推送；没有进行中的回复返回 204
+    fastify.get('/sessions/:sessionId/live', async (req, reply) => {
+        const run = findBySession(req.params.sessionId, { owner: ownerOf(req), includeDone: true });
+        if (!run) return reply.code(204).send();
+        watchRun(run, reply, {
+            prelude: {
+                type: 'live',
+                runId: run.id,
+                sessionId: run.sessionId,
+                question: run.question,
+                startedAt: run.startedAt,
+                done: run.done,
+            },
+        });
+        return reply;
+    });
+
+    // 停止后台回复：按 runId（新对话还没拿到会话号）或会话号
+    fastify.post('/runs/:runId/stop', async (req) => ({
+        stopped: stopRun({ runId: req.params.runId, owner: ownerOf(req) }),
+    }));
+    fastify.post('/sessions/:sessionId/stop', async (req) => ({
+        stopped: stopRun({ sessionId: req.params.sessionId, owner: ownerOf(req) }),
+    }));
 
     fastify.get('/sessions/:sessionId/export', async (req, reply) => {
         const access = await accessSession(req);
@@ -203,8 +267,30 @@ export async function aiRoutes(fastify) {
             await appendMessage(sessionId, 'user', userText, { author: ownerId, memoryTurn: memorySource.messageId });
         }
 
+        // 首页多对话并行：background:true 的流式请求在进程内后台继续，当前连接只作为第一个观看者，切走不中断
+        const isBackground = body.background === true && stream && Boolean(ownerId);
+        let bgRun = null;
+        if (isBackground) {
+            try {
+                bgRun = createRun({ owner: ownerId, clientRunId: body.clientRunId, question: questionText || userText });
+            } catch (limitErr) {
+                if (sharedTurn) {
+                    endLiveStream(sessionId, {}, ownerId);
+                    await releaseTurn(sessionId, ownerId).catch(() => {});
+                }
+                return reply.code(limitErr.status || 429).send({ code: limitErr.code, limit: limitErr.limit, error: limitErr.message });
+            }
+            if (sessionId) bindSession(bgRun, sessionId);
+            watchRun(bgRun, reply, { prelude: { type: 'run', runId: bgRun.id } });
+        }
+
         const sendDone = (payload) => {
             if (sharedTurn && sessionId) endLiveStream(sessionId, {}, ownerId);
+            if (bgRun) {
+                pushEvent(bgRun, { type: 'done', ...payload });
+                finishRun(bgRun);
+                return reply;
+            }
             if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'done', ...payload })}\n`);
                 reply.raw.end();
@@ -213,7 +299,7 @@ export async function aiRoutes(fastify) {
             return reply.send(payload);
         };
 
-        if (stream) {
+        if (stream && !bgRun) {
             reply.raw.writeHead(200, {
                 'Content-Type': 'application/x-ndjson; charset=utf-8',
                 'Cache-Control': 'no-store, no-transform',
@@ -221,6 +307,7 @@ export async function aiRoutes(fastify) {
             });
         }
 
+        const runTurn = async () => {
         const profiles = await listProfiles();
         const selected = profiles.find((p) => p.id === body.modelId) || profiles.find((p) => p.isActive) || profiles[0];
         if (!selected || !hasUsableCredentials(selected)) {
@@ -232,7 +319,9 @@ export async function aiRoutes(fastify) {
                 '',
                 '不依赖模型的功能可以照常使用：数据抓取、数据导入、报表看板、一键催办、大屏看板、数据探索。',
             ].join('\n');
-            if (stream) {
+            if (bgRun) {
+                pushEvent(bgRun, { type: 'delta', delta: fallbackReply });
+            } else if (stream) {
                 reply.raw.write(`${JSON.stringify({ type: 'delta', delta: fallbackReply })}\n`);
             }
             if (sharedTurn && sessionId) {
@@ -259,12 +348,16 @@ export async function aiRoutes(fastify) {
                 .filter((m) => m.content.trim());
         if (!history.length && userText) history.push({ role: 'user', content: userText });
 
-        // 用户点了停止或断开连接：中止模型请求，不再继续跑工具
-        const abort = new AbortController();
-        const onClose = () => { if (!reply.raw.writableEnded) abort.abort(); };
-        req.raw.on('close', onClose);
+        // 非后台模式：连接关闭时中止模型；后台模式仅显式调用 /stop 时中止
+        const abort = bgRun ? bgRun.abortController : new AbortController();
+        const onClose = () => { if (!bgRun && !reply.raw.writableEnded) abort.abort(); };
+        if (!bgRun) req.raw.on('close', onClose);
         const write = (event) => {
-            if (stream && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`${JSON.stringify(event)}\n`);
+            if (bgRun) {
+                pushEvent(bgRun, event);
+            } else if (stream && !reply.raw.destroyed && !reply.raw.writableEnded) {
+                reply.raw.write(`${JSON.stringify(event)}\n`);
+            }
             if (sharedTurn && sessionId) {
                 if (event.type === 'delta') pushLiveDelta(sessionId, event.delta);
                 else pushLiveEvent(sessionId, event);
@@ -349,7 +442,8 @@ export async function aiRoutes(fastify) {
         } catch (err) {
             if (abort.signal.aborted) {
                 if (sharedTurn && sessionId) endLiveStream(sessionId, {}, ownerId);
-                if (stream && !reply.raw.writableEnded) reply.raw.end();
+                if (bgRun) finishRun(bgRun);
+                else if (stream && !reply.raw.writableEnded) reply.raw.end();
                 return reply;
             }
             const message = err.message || 'AI 对话异常';
@@ -357,15 +451,31 @@ export async function aiRoutes(fastify) {
             if (stream) write({ type: 'error', error: message });
             else if (sharedTurn && sessionId) pushLiveEvent(sessionId, { type: 'error', error: message });
             if (sharedTurn && sessionId) endLiveStream(sessionId, { error: message }, ownerId);
+            if (bgRun) {
+                finishRun(bgRun);
+                return reply;
+            }
             if (stream) {
                 reply.raw.end();
                 return reply;
             }
             return reply.code(err.code >= 400 && err.code < 600 ? err.code : 502).send({ error: message });
         } finally {
-            req.raw.off('close', onClose);
+            if (!bgRun) req.raw.off('close', onClose);
+            if (bgRun && !bgRun.done) finishRun(bgRun);
             if (sharedTurn) await releaseTurn(sessionId, ownerId).catch(() => {});
         }
+        };
+
+        if (bgRun) {
+            // 后台续跑：不阻塞路由返回（连接已由 watchRun 接管）；任何异常均在 runTurn 内兜底
+            runTurn().catch((err) => {
+                pushEvent(bgRun, { type: 'error', error: err?.message || 'AI 对话异常' });
+                finishRun(bgRun);
+            });
+            return reply;
+        }
+        return runTurn();
     });
 
     fastify.post('/compact', async (req, reply) => {

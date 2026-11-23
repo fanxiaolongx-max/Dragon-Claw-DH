@@ -67,3 +67,55 @@ test('取数查询：存进格子的 compute 只是把查询交给平台，模�
     assert.match(html, /CNBG|kit-widget/);
     delete globalThis.AiReportQuery;
 });
+
+test('取数查询：支持月报大纲来源（chapters）与 null 来源明确报错', () => {
+    const reportInput = {
+        r1: {
+            chapters: [
+                {
+                    id: 'ch1',
+                    no: '01',
+                    title: '服务总览',
+                    anchor: '#ch-1',
+                    cells: [
+                        { id: 'c1', title: 'SLA 达成率', anchor: '#cell-1', summary: '整体达标' }
+                    ]
+                },
+                {
+                    id: 'ch2',
+                    no: '02',
+                    title: '重点问题',
+                    anchor: '#ch-2',
+                    cells: []
+                }
+            ]
+        },
+        missingSource: null
+    };
+    const chapters = Q.run({
+        shape: 'rows',
+        from: 'r1',
+        where: [{ field: 'type', op: '=', value: 'chapter' }],
+        columns: { label: 'label', anchor: 'anchor', no: 'no' }
+    }, reportInput);
+    assert.deepEqual(chapters, [
+        { label: '服务总览', anchor: '#ch-1', no: '01' },
+        { label: '重点问题', anchor: '#ch-2', no: '02' }
+    ]);
+
+    const cells = Q.run({
+        shape: 'rows',
+        from: 'r1',
+        where: [{ field: 'type', op: '=', value: 'cell' }],
+        columns: { title: 'label', chapter: 'chapter', summary: 'summary' }
+    }, reportInput);
+    assert.deepEqual(cells, [
+        { title: 'SLA 达成率', chapter: '服务总览', summary: '整体达标' }
+    ]);
+
+    assert.throws(
+        () => Q.run({ shape: 'rows', from: 'missingSource', columns: { a: 'a' } }, reportInput),
+        /数据源「missingSource」本月没有取到数据/
+    );
+    assert.match(Q.GUIDE, /kind "report"/);
+});
