@@ -8,6 +8,7 @@ import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
 import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
 import { listKnownUsers, rememberUser } from '../services/share-service.js';
+import { listTeams, createTeam, renameTeam, deleteTeam, setMemberTeam, teamOf } from '../services/team-service.js';
 
 const LOGIN_WINDOW_MS = 8 * 3600_000;
 
@@ -24,6 +25,7 @@ function publicIdentity(id) {
         source: id.source,
         identified: id.identified,
         devAdmin: Boolean(id.devAdmin),
+        teamId: id.teamId || '',
         identityVerified: Boolean(id.verified),
         appId: id.appId,
         appLevel: id.appLevel,
@@ -42,7 +44,37 @@ export async function authRoutes(fastify) {
         // 刚进来的人马上就能被搜到
         if (!id.devAdmin) await rememberUser(id).catch(() => {});
         if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
-        return publicIdentity(id);
+        const out = publicIdentity(id);
+        if (out.teamId) out.teamName = (await listTeams().catch(() => ({ teams: [] }))).teams.find((t) => t.id === out.teamId)?.name || out.teamId;
+        return out;
+    });
+
+    // ── 账号绑定团队（仅超级管理员；见 core/access.js 的 ADMIN_READS 与默认写权限）──
+    fastify.get('/teams', async () => listTeams());
+    fastify.post('/teams', async (req) => {
+        const me = resolveRequestIdentity(req);
+        const team = await createTeam(req.body || {}, me.username);
+        await recordAudit(req, { actor: me.username, action: 'team_create', detail: `${team.name}（${team.id}）` });
+        return { success: true, team, ...(await listTeams()) };
+    });
+    fastify.put('/teams/:id', async (req) => {
+        const me = resolveRequestIdentity(req);
+        const team = await renameTeam(String(req.params.id || ''), req.body?.name);
+        await recordAudit(req, { actor: me.username, action: 'team_rename', detail: `${team.id} → ${team.name}` });
+        return { success: true, team, ...(await listTeams()) };
+    });
+    fastify.delete('/teams/:id', async (req) => {
+        const me = resolveRequestIdentity(req);
+        await deleteTeam(String(req.params.id || ''));
+        await recordAudit(req, { actor: me.username, action: 'team_delete', detail: String(req.params.id || '') });
+        return { success: true, ...(await listTeams()) };
+    });
+    fastify.put('/teams/members/:username', async (req) => {
+        const me = resolveRequestIdentity(req);
+        const moved = await setMemberTeam(req.params.username, req.body?.teamId || '');
+        await recordAudit(req, { actor: me.username, action: moved.to ? 'user_team_bind' : 'user_team_unbind', detail: `${moved.username}：${moved.from || '默认团队'} → ${moved.to || '默认团队'}` });
+        await pushAdminAlert({ type: 'security', severity: 'info', title: '账号团队已调整', message: `${me.username} 把 ${moved.username} 从「${moved.from || '默认团队'}」移到「${moved.to || '默认团队'}」`, actor: me.username, objectType: 'team' });
+        return { success: true, ...moved, ...(await listTeams()) };
     });
 
     // 底座已完成单点登录：这两个端点只为兼容桌面版前端的调用，不做任何口令校验
@@ -85,6 +117,7 @@ export async function authRoutes(fastify) {
         for (const u of known) upsert(u.username, u.name, u.seenAt);
         if (me?.identified) upsert(me.username, me.displayName, Date.now());
         for (const u of [...env, ...stored]) upsert(u);
+        const teamIds = new Map(await Promise.all([...map.values()].map(async (u) => [u.username.toLowerCase(), await teamOf(u.username).catch(() => '')])));
         const users = [...map.values()]
             .map((u) => {
                 const isEnvAdmin = hasAdminMatch(env, u.username);
@@ -97,6 +130,7 @@ export async function authRoutes(fastify) {
                     isStoredAdmin,
                     isSuper: isEnvAdmin || isStoredAdmin,
                     isSelf: Boolean(me?.identified && isSameUserId(u.username, me.username)),
+                    teamId: teamIds.get(u.username.toLowerCase()) || '',
                 };
             })
             .sort((a, b) => (Number(b.isSuper) - Number(a.isSuper)) || (b.seenAt - a.seenAt) || a.username.localeCompare(b.username));

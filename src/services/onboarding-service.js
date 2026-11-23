@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
-import { kvGet, kvSet, selectTable } from '../dao/scoped.js';
+import { kvGet, kvSet, selectTable, currentTeam, runInTeam } from '../dao/scoped.js';
 import { BusinessError } from '../core/errors.js';
 import {
     listCategories as listSlaCategories,
@@ -195,6 +195,8 @@ export async function applyBundledDefaults({ importScripts = true, importMetricR
 }
 
 export async function ensureQuickStartSeeded() {
+    // 快速开始的示例数据只进默认团队：新团队从空数据开始
+    if (currentTeam()) return runInTeam('', () => ensureQuickStartSeeded());
     const schemaKey = `${config.appSchema || 'default'}:${config.localDevMemory ? 'mem' : 'db'}`;
     if (seededBySchema.get(schemaKey)) return;
     if (inFlightSeeds.has(schemaKey)) return inFlightSeeds.get(schemaKey);

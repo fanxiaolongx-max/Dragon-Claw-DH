@@ -29,7 +29,53 @@ import {
     resetMemoryStore,
 } from './memory-store.js';
 
+import { TEAM_TABLES, teamTableName, TEAM_BIZ_KINDS, isTeamKvKey, teamKvKey } from './team-scope.js';
+
 export { resetMemoryStore, requestContext };
+
+// ============================================================
+// 团队隔离：当前请求所在团队（空 = 默认团队，读写原表和原键）。其他团队的工具页面数据落到
+// 团队版表 team_<表名>（自动按 team_id 过滤 / 填写）和带 team:<团队>: 前缀的键值。
+// services 不感知团队：照常传原表名、原条件。
+// ============================================================
+const TEAM_TABLE_SET = new Set(TEAM_TABLES);
+
+export function currentTeam() {
+    const team = requestContext.getStore()?.teamId;
+    return typeof team === 'string' ? team : '';
+}
+
+/** 在指定团队里执行（定时任务等不在请求里的代码用）；空 = 默认团队 */
+export function runInTeam(teamId, fn) {
+    return requestContext.run({ ...(requestContext.getStore() || {}), teamId: String(teamId || '') }, fn);
+}
+
+/** 键值的实际键名：工具页面的配置在非默认团队下加团队前缀 */
+export function teamScopedKey(key) {
+    const team = currentTeam();
+    return team && isTeamKvKey(key) ? teamKvKey(team, key) : String(key);
+}
+
+function bizKindOf({ row, whereSql }) {
+    if (row && row.kind !== undefined) return String(row.kind);
+    const m = /`kind`\s*=\s*'((?:[^'\\]|\\.)*)'/.exec(String(whereSql || ''));
+    return m ? m[1] : null;
+}
+
+/** 这次操作是否落到团队版表；返回 { team, table } 或 null（用原表） */
+function teamScope(table, hint = {}) {
+    const team = currentTeam();
+    if (!team || !TEAM_TABLE_SET.has(table)) return null;
+    if (table === 'biz_records' && !TEAM_BIZ_KINDS.has(bizKindOf(hint))) return null;
+    return { team, table: teamTableName(table) };
+}
+
+const teamWhere = (scope, whereSql) => (scope ? `\`team_id\` = ${sqlVal(scope.team)}${whereSql && String(whereSql).trim() ? ` AND (${whereSql})` : ''}` : whereSql);
+const teamFilter = (scope, memFilter) => (scope ? (r) => r.team_id === scope.team && (!memFilter || memFilter(r)) : memFilter);
+const stripTeam = (rows) => {
+    for (const r of rows) if (r && typeof r === 'object') delete r.team_id;
+    return rows;
+};
 
 export function isMemoryMode() {
     return Boolean(config.localDevMemory);
@@ -186,8 +232,11 @@ async function selectRaw(table, {
 }
 
 export async function selectTable(table, options = {}) {
-    const rows = await selectRaw(table, options);
-    return isMemoryMode() ? rows : resolveChunks(rows);
+    const scope = teamScope(table, { whereSql: options.whereSql });
+    const opts = scope ? { ...options, whereSql: teamWhere(scope, options.whereSql), memFilter: teamFilter(scope, options.memFilter) } : options;
+    const rows = await selectRaw(scope ? scope.table : table, opts);
+    if (scope && isMemoryMode()) return rows.map((r) => { const { team_id: _t, ...rest } = r; return rest; });
+    return scope ? stripTeam(await (isMemoryMode() ? rows : resolveChunks(rows))) : (isMemoryMode() ? rows : resolveChunks(rows));
 }
 
 // ============================================================
@@ -294,6 +343,44 @@ async function resolveChunks(rows) {
     return rows;
 }
 
+// 每张表的列（读建表脚本），给团队版表的子查询列出与原表一致的列
+const TABLE_COLUMNS = (() => {
+    const map = new Map();
+    try {
+        const sql = fs.readFileSync(path.join(ROOT_DIR, 'db', 'init.sql'), 'utf8');
+        for (const m of sql.matchAll(/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\(([\s\S]*?)\)\s*ENGINE/g)) {
+            map.set(m[1], [...m[2].matchAll(/^\s*`(\w+)`\s+[A-Z]/gm)].map((c) => c[1]));
+        }
+    } catch { /* 读不到时按 * 处理 */ }
+    return map;
+})();
+
+const SUBQUERY_STOP = /^(where|join|on|group|order|limit|left|right|inner|cross|union|having|set|natural|straight_join|window|for|lock)$/i;
+
+/**
+ * 对话里查库工具写的只读 SQL：在非默认团队下，把工具表换成「本团队数据」的子查询（保留原表名或原别名）；
+ * biz_records 换成「平台级种类的原表记录 + 本团队的记录」。字符串字面量里的内容不动。默认团队原样返回。
+ */
+export function teamScopeSql(sql) {
+    const team = currentTeam();
+    if (!team) return sql;
+    const literals = [];
+    let code = String(sql).replace(/'(?:[^'\\]|\\.|'')*'/g, (lit) => { literals.push(lit); return `\u0000${literals.length - 1}\u0000`; });
+    const cols = (table) => (TABLE_COLUMNS.get(table) || []).map((c) => `\`${c}\``).join(', ') || '*';
+    const source = (table) => {
+        const own = `SELECT ${cols(table)} FROM \`${teamTableName(table)}\` WHERE \`team_id\` = ${sqlVal(team)}`;
+        if (table !== 'biz_records') return `(${own})`;
+        return `(SELECT ${cols(table)} FROM \`biz_records\` WHERE \`kind\` NOT IN (${[...TEAM_BIZ_KINDS].map(sqlVal).join(', ')}) UNION ALL ${own})`;
+    };
+    code = code.replace(/\b(FROM|JOIN)(\s+)`?([A-Za-z_]\w*)`?(\s+(?:AS\s+)?`?([A-Za-z_]\w*)`?)?/gi, (all, kw, sp, name, aliasPart, alias) => {
+        const table = name.toLowerCase();
+        if (!TEAM_TABLE_SET.has(table)) return all;
+        const keepAlias = alias && !SUBQUERY_STOP.test(alias);
+        return `${kw}${sp}${source(table)} AS \`${keepAlias ? alias : name}\`${keepAlias ? '' : (aliasPart || '')}`;
+    });
+    return code.replace(/\u0000(\d+)\u0000/g, (_, n) => literals[Number(n)]);
+}
+
 // 覆盖或删除一行之前，记下它名下的旧分片，写成功后回收
 async function existingChunkRefs(table, columns, whereSql) {
     const long = LONG_COLS.get(table);
@@ -314,6 +401,8 @@ async function existingChunkRefs(table, columns, whereSql) {
 }
 
 export async function insertRow(table, row) {
+    const scope = teamScope(table, { row });
+    if (scope) { table = scope.table; row = { ...row, team_id: scope.team }; }
     const keys = Object.keys(row);
     if (!keys.length) return 0;
     if (isMemoryMode()) {
@@ -326,6 +415,13 @@ export async function insertRow(table, row) {
 }
 
 export async function upsertRow(table, row, keyCols = ['id'], updateCols = null) {
+    const scope = teamScope(table, { row });
+    if (scope) {
+        table = scope.table;
+        row = { ...row, team_id: scope.team };
+        keyCols = ['team_id', ...keyCols.filter((k) => k !== 'team_id')];
+        if (updateCols) updateCols = updateCols.filter((k) => k !== 'team_id');
+    }
     const keys = Object.keys(row);
     if (!keys.length) return 0;
     if (isMemoryMode()) {
@@ -353,6 +449,14 @@ export async function updateRows(table, patch, { whereSql, memFilter }) {
     if (!whereSql || !String(whereSql).trim()) {
         throw new DatabaseError('禁止无 WHERE 条件的 UPDATE');
     }
+    const scope = teamScope(table, { whereSql });
+    if (scope) {
+        table = scope.table;
+        whereSql = teamWhere(scope, whereSql);
+        memFilter = teamFilter(scope, memFilter);
+        const { team_id: _ignored, ...rest } = patch;
+        patch = rest;
+    }
     const keys = Object.keys(patch);
     if (!keys.length) return 0;
     if (isMemoryMode()) {
@@ -370,6 +474,12 @@ export async function updateRows(table, patch, { whereSql, memFilter }) {
 export async function deleteRows(table, { whereSql, memFilter }) {
     if (!whereSql || !String(whereSql).trim()) {
         throw new DatabaseError('禁止无 WHERE 条件的 DELETE');
+    }
+    const scope = teamScope(table, { whereSql });
+    if (scope) {
+        table = scope.table;
+        whereSql = teamWhere(scope, whereSql);
+        memFilter = teamFilter(scope, memFilter);
     }
     if (isMemoryMode()) {
         return memDelete(table, memFilter || (() => false));
@@ -406,6 +516,7 @@ export async function modifyMemoryList(key, change) {
 }
 
 export async function kvGet(key, fallback = null) {
+    key = teamScopedKey(key);
     const rows = await selectTable('sys_kv_store', {
         whereSql: `\`kv_key\` = ${sqlVal(key)}`,
         limit: 1,
@@ -416,6 +527,7 @@ export async function kvGet(key, fallback = null) {
 }
 
 export async function kvSet(key, value) {
+    key = teamScopedKey(key);
     const now = Date.now();
     await upsertRow('sys_kv_store', {
         kv_key: String(key),

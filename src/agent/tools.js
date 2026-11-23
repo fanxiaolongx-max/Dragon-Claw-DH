@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from '../config.js';
-import { scopedQuery, selectTable, businessQuery, hasBusinessDatasource, listAppTables, listBusinessTables, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
+import { scopedQuery, teamScopeSql, selectTable, businessQuery, hasBusinessDatasource, listAppTables, listBusinessTables, sqlVal, isMemoryMode, insertRow, updateRows, deleteRows } from '../dao/scoped.js';
 import { listSkills, getSkill, saveSkill, skillFilesNote, readSkillFile } from '../services/skill-service.js';
 import { saveCustomTool, listCustomTools, getCustomTool } from '../services/custom-tool-service.js';
 import { readChatUpload } from '../services/chat-upload-service.js';
@@ -212,7 +212,7 @@ export async function runSelect({ database, sql, limit, offset, explorer = false
         ? guarded.sql
         : `${guarded.sql} LIMIT ${probeCap}${safeOffset > 0 ? ` OFFSET ${safeOffset}` : ''}`;
     try {
-        const rawRows = isApp ? await scopedQuery(finalSql, probeCap) : await businessQuery(finalSql, probeCap);
+        const rawRows = isApp ? await scopedQuery(teamScopeSql(finalSql), probeCap) : await businessQuery(finalSql, probeCap);
         const hasMoreRows = !explorer && !hasExplicitLimit && rawRows.length > cap;
         const pageRows = hasMoreRows ? rawRows.slice(0, cap) : rawRows;
         const shaped = explorer ? shapeRows(pageRows, 500, 600_000) : shapeRows(pageRows);
@@ -271,7 +271,7 @@ async function countWhere(table, where) {
     if (/^\s*(1\s*=\s*1|true)\s*$/i.test(w)) return { error: '不允许对整张表操作' };
     const guarded = guardSelect(`SELECT COUNT(*) AS n FROM \`${table}\` WHERE ${w}`, { appDb: true });
     if (guarded.error) return { error: `where 条件不合法：${guarded.error}` };
-    const rows = await scopedQuery(guarded.sql, 1);
+    const rows = await scopedQuery(teamScopeSql(guarded.sql), 1);
     const count = Number(rows[0]?.n || 0);
     if (count > MAX_WRITE_ROWS) return { error: `符合条件的有 ${count} 行，超过单次上限 ${MAX_WRITE_ROWS} 行，请缩小条件` };
     return { count };

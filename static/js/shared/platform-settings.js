@@ -5557,6 +5557,11 @@ const AUDIT_ACTION_LABELS = {
     team_enter: ['进入团队', 'Enter team'],
     team_leave: ['返回本人空间', 'Back to own space'],
     admins_update: ['修改管理员名单', 'Admin list changed'],
+    team_create: ['新建团队', 'Team created'],
+    team_rename: ['团队改名', 'Team renamed'],
+    team_delete: ['删除团队', 'Team deleted'],
+    user_team_bind: ['账号移入团队', 'Account moved to team'],
+    user_team_unbind: ['账号回到默认团队', 'Account back to default team'],
     vault_reveal: ['查看密钥明文', 'Secret viewed']
 };
 
@@ -5785,9 +5790,11 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         env: Array.isArray(adminsData.env) ? adminsData.env : [],
         stored: Array.isArray(adminsData.stored) ? adminsData.stored : [],
         users: Array.isArray(adminsData.users) ? adminsData.users : [],
+        teams: [],
         query: '',
         saving: false,
     };
+    try { state.teams = (await API.get('/api/auth/teams')).teams || []; } catch { state.teams = []; }
     content.innerHTML = `
         <div class="nav-settings-help">${navEscape(accountText(`当前基座账号：${user}（超级管理员）。基座版与主线版保持一致的两级角色（仅分「超级管理员」与「团队管理员」）：超级管理员拥有全局设置、模型配置、全员开放分发、审计日志、数据库探索、诊断、终端、全局 SLA/数据导入及奖惩审批权；团队管理员可使用所有已「全员开放」的工具/技能与个人及协同业务功能。`, `Signed in via Base SSO as ${user} (Super Admin). Base edition mirrors Mainline’s two-tier model ("Super admin" & "Team admin"): Super Admins manage global settings, models, distribution, audit logs, DB explorer, diagnostics, terminal, global SLA/import, and approvals; Team Admins access shared tools/skills and collaborative workflows.`))}</div>
         <div class="nav-account-create" style="flex-wrap:wrap;gap:8px;align-items:center">
@@ -5799,6 +5806,12 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
             <button type="button" id="dhAdminPreSaveBtn">${navEscape(accountText('添加 / 应用', 'Apply'))}</button>
             <input id="dhAdminSearch" autocomplete="off" placeholder="${navEscape(accountText('搜索工号或姓名…', 'Search user ID or name…'))}" style="margin-left:auto;min-width:190px">
         </div>
+        <div class="nav-settings-help" style="margin-top:14px">${navEscape(accountText('团队：没有分配的账号都在「默认团队」，看到的是现有的全部数据。新建团队后把账号放进去，同一团队的人共用抓取脚本、数据导入、报表看板、月报等工具页面数据，不同团队互相隔离；新团队从空数据开始。AI 对话、消息、保险箱仍按人私有；模型、页面开放等平台设置由超级管理员统一管理。超级管理员始终在默认团队。', 'Teams: accounts without a team are in the Default team and see all existing data. Accounts in the same team share scraping scripts, data imports, reports, monthly reports and other tool data; teams are isolated and new teams start empty. Chats, messages and vault stay personal; models and page access stay global. Super admins always stay in the Default team.'))}</div>
+        <div class="nav-account-create" style="flex-wrap:wrap;gap:8px;align-items:center">
+            <input id="dhTeamName" autocomplete="off" maxlength="40" placeholder="${navEscape(accountText('新团队名称（如 华东区）', 'New team name'))}" style="min-width:200px">
+            <button type="button" id="dhTeamCreateBtn">${navEscape(accountText('新建团队', 'Create team'))}</button>
+            <span id="dhTeamChips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        </div>
         <div id="dhAdminSaveStatus" class="nav-settings-help" style="margin:6px 0 8px"></div>
         <div class="nav-account-table-wrap">
             <table class="nav-account-table">
@@ -5808,6 +5821,7 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
                         <th>${navEscape(accountText('姓名', 'Name'))}</th>
                         <th>${navEscape(accountText('最近登录', 'Last seen'))}</th>
                         <th>${navEscape(accountText('角色权限', 'Role'))}</th>
+                        <th>${navEscape(accountText('团队', 'Team'))}</th>
                     </tr>
                 </thead>
                 <tbody id="dhAdminUserRows"></tbody>
@@ -5822,6 +5836,52 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
     const preUserInput = content.querySelector('#dhAdminPreUser');
     const preRoleSelect = content.querySelector('#dhAdminPreRole');
     const preSaveBtn = content.querySelector('#dhAdminPreSaveBtn');
+    const teamChips = content.querySelector('#dhTeamChips');
+
+    const teamName = (id) => (id ? (state.teams.find((t) => t.id === id)?.name || id) : accountText('默认团队', 'Default team'));
+    function renderTeams() {
+        teamChips.innerHTML = state.teams.filter((t) => t.id).map((t) => `<span class="nav-account-role readonly" style="display:inline-flex;gap:6px;align-items:center">${navEscape(t.name)} · ${t.memberCount || 0}${navEscape(accountText(' 人', ''))}
+            <button type="button" data-dh-team-rename="${navEscape(t.id)}" style="border:0;background:none;cursor:pointer;padding:0" title="${navEscape(accountText('改名', 'Rename'))}">✎</button>
+            <button type="button" data-dh-team-delete="${navEscape(t.id)}" style="border:0;background:none;cursor:pointer;padding:0" title="${navEscape(accountText('删除（需先移走成员，数据保留）', 'Delete (move members first; data kept)'))}">×</button></span>`).join('');
+    }
+    async function teamCall(promise, okText) {
+        if (statusEl) statusEl.textContent = accountText('正在保存…', 'Saving…');
+        try {
+            const res = await promise;
+            state.teams = res.teams || state.teams;
+            if (statusEl) statusEl.textContent = okText;
+            renderTeams();
+            renderRows();
+            window.reloadAuditLogTable?.();
+            return res;
+        } catch (err) {
+            if (statusEl) statusEl.textContent = err.message;
+            await showPlatformNotice({ title: navT('nav.dialog.error'), message: err.message, tone: 'error' });
+            return null;
+        }
+    }
+    content.querySelector('#dhTeamCreateBtn')?.addEventListener('click', async () => {
+        const input = content.querySelector('#dhTeamName');
+        const name = (input?.value || '').trim();
+        if (!name) return;
+        if (await teamCall(API.post('/api/auth/teams', { name }), accountText(`已新建团队「${name}」`, `Team “${name}” created`)) && input) input.value = '';
+    });
+    teamChips?.addEventListener('click', async (event) => {
+        const renameId = event.target.closest('[data-dh-team-rename]')?.dataset.dhTeamRename;
+        const deleteId = event.target.closest('[data-dh-team-delete]')?.dataset.dhTeamDelete;
+        if (renameId) {
+            const values = await showPlatformFormDialog({ title: accountText('团队改名', 'Rename team'), fields: [{ name: 'name', label: accountText('名称', 'Name'), value: teamName(renameId), required: true, maxLength: 40 }], confirmText: accountText('保存', 'Save') });
+            if (values?.name) await teamCall(API.put('/api/auth/teams/' + encodeURIComponent(renameId), { name: values.name }), accountText('已改名', 'Renamed'));
+        }
+        if (deleteId) {
+            const ok = await showPlatformConfirm({ title: accountText('删除团队', 'Delete team'), message: accountText(`删除团队「${teamName(deleteId)}」？团队里要先没有成员；团队的数据不会删除。`, `Delete team “${teamName(deleteId)}”? It must have no members; its data is kept.`), tone: 'danger', confirmText: accountText('删除', 'Delete') });
+            if (ok) await teamCall(API.delete('/api/auth/teams/' + encodeURIComponent(deleteId)), accountText('已删除团队', 'Team deleted'));
+        }
+    });
+    async function moveUser(username, teamId) {
+        const res = await teamCall(API.put('/api/auth/teams/members/' + encodeURIComponent(username), { teamId }), accountText(`已把 ${username} 移到「${teamName(teamId)}」，对方刷新页面后生效`, `${username} moved to “${teamName(teamId)}”; takes effect after a refresh`));
+        if (res) { const u = state.users.find((x) => x.username === username); if (u) u.teamId = teamId; renderRows(); }
+    }
 
     function renderRows() {
         const q = state.query.trim().toLowerCase();
@@ -5848,8 +5908,13 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
                             ${lockNote ? `<span style="font-size:11.5px;opacity:.72">${navEscape(lockNote)}</span>` : ''}
                         </div>
                     </td>
+                    <td>
+                        <select data-dh-team-user="${navEscape(u.username)}" class="nav-settings-input" style="width:auto;min-width:130px;padding:5px 8px;border-radius:8px;font-size:12.5px" ${state.saving || u.isSuper ? 'disabled' : ''} title="${navEscape(u.isSuper ? accountText('超级管理员始终在默认团队', 'Super admins stay in the Default team') : '')}">
+                            ${state.teams.map((t) => `<option value="${navEscape(t.id)}" ${(u.teamId || '') === t.id ? 'selected' : ''}>${navEscape(t.id ? t.name : accountText('默认团队', 'Default team'))}</option>`).join('')}
+                        </select>
+                    </td>
                 </tr>`;
-        }).join('') || `<tr><td colspan="4">${navEscape(accountText('暂无匹配的用户记录', 'No matching users'))}</td></tr>`;
+        }).join('') || `<tr><td colspan="5">${navEscape(accountText('暂无匹配的用户记录', 'No matching users'))}</td></tr>`;
     }
 
     async function updateRole(username, targetRole) {
@@ -5882,6 +5947,8 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         renderRows();
     });
     tbody?.addEventListener('change', (event) => {
+        const teamSelect = event.target.closest('[data-dh-team-user]');
+        if (teamSelect) { moveUser(teamSelect.dataset.dhTeamUser, teamSelect.value); return; }
         const select = event.target.closest('[data-dh-role-user]');
         if (!select) return;
         updateRole(select.dataset.dhRoleUser, select.value);
@@ -5893,6 +5960,7 @@ async function renderBaseAdminsAccountSettings(content, adminsData) {
         updateRole(targetUser, preRoleSelect?.value || 'super');
     });
 
+    renderTeams();
     renderRows();
     window.reloadAuditLogTable();
 }

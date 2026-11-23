@@ -289,17 +289,17 @@ export async function startMockBaseServer() {
             if (body.schema === 'netcare') {
                 return sendJson({ code: 400, message: '基座库 [netcare] 仅允许基础应用查询', data: null });
             }
-            if (REAL_BASE && !/^netcare/.test(String(body.schema || ''))) {
-                const out = await realBase('/query', body);
-                if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
-                return sendJson(out);
-            }
             // 业务数据源（按 datasourceName 查）：测试用 options.businessQuery 提供结果
             if (body.datasourceName && typeof options.businessQuery === 'function') {
                 let rows;
                 // 用例可以抛错模拟业务库报错（无权限、表不存在、超时）
                 try { rows = await options.businessQuery(String(body.sql || ''), body.limit || 200); } catch (err) { return sendJson({ code: 500, message: err.message, data: null }); }
                 return sendJson({ code: 0, message: 'ok', data: { datasourceName: body.datasourceName, rows, rowCount: rows.length } });
+            }
+            if (REAL_BASE && !/^netcare/.test(String(body.schema || ''))) {
+                const out = await realBase('/query', body);
+                if (out.code !== 0) sqlErrors.push({ sql: String(body.sql).slice(0, 400), message: out.message });
+                return sendJson(out);
             }
             try {
                 const rows = queryMockSql(body.sql, body.limit || 200);

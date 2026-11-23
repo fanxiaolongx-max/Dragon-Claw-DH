@@ -10,6 +10,7 @@ import * as parser from '../agent/schedule/parser.js';
 import { runAgent } from '../agent/loop.js';
 import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch, addUsage, hasUsableCredentials } from './ai-service.js';
 import { pushAlert } from './alert-service.js';
+import { runAsUserTeam } from './team-service.js';
 
 const MAX_ACTIVE_PER_USER = 20;
 const RUN_TIMEOUT_MS = 5 * 60_000;
@@ -256,7 +257,8 @@ export async function runDueSchedules(now = new Date()) {
         memSort: (a, b) => a.next_run_at - b.next_run_at,
     });
     const results = [];
-    for (const row of due) results.push(await execute(row, now));
+    // 定时任务不在请求里：按创建人所在的团队执行，读写的是他团队的工具页面数据
+    for (const row of due) results.push(await runAsUserTeam(row.owner_id, () => execute(row, now)));
     return results;
 }
 

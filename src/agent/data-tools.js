@@ -5,7 +5,7 @@
 // - search_my_conversations / read_my_conversation：当前账号自己的历史对话（自己发起的 + 已加入且仍有效的共享对话）。
 //   会话号不是自己的直接拒绝；只返回问题和回答正文，不带工具细节和附件内容。
 // 所有工具结果交给模型前还会再过一遍 redact.js 的统一脱敏。
-import { selectTable, kvGet, sqlVal } from '../dao/scoped.js';
+import { selectTable, kvGet, sqlVal, teamScopedKey, currentTeam } from '../dao/scoped.js';
 import { canAccessAnyPage } from '../services/distribution-service.js';
 import { getSession, listMessages } from '../services/ai-service.js';
 import { memberSessionIds } from '../services/share-service.js';
@@ -72,14 +72,22 @@ function outline(value) {
 async function listConfigs(identity) {
     const keys = PAGE_CONFIGS.filter((c) => c.key).map((c) => c.key);
     const prefixes = PAGE_CONFIGS.filter((c) => c.prefix).map((c) => c.prefix);
+    // 工具页面的配置在非默认团队下存成 team:<团队>:<键>：按实际键名查，列出时还原成原键名
+    const realKeys = keys.map(teamScopedKey);
+    const realPrefixes = prefixes.map((p) => ({ raw: p, real: teamScopedKey(p) }));
     const rows = await selectTable('sys_kv_store', {
         columns: ['kv_key', 'updated_at'],
-        whereSql: `(\`kv_key\` IN (${keys.map(sqlVal).join(', ')})${prefixes.map((p) => ` OR \`kv_key\` LIKE ${sqlVal(`${p}%`)}`).join('')})`,
+        whereSql: `(\`kv_key\` IN (${realKeys.map(sqlVal).join(', ')})${realPrefixes.map((p) => ` OR \`kv_key\` LIKE ${sqlVal(`${p.real}%`)}`).join('')})`,
         limit: 500,
-        memFilter: (r) => keys.includes(r.kv_key) || prefixes.some((p) => String(r.kv_key).startsWith(p)),
+        memFilter: (r) => realKeys.includes(r.kv_key) || realPrefixes.some((p) => String(r.kv_key).startsWith(p.real)),
     });
+    const team = currentTeam();
     const out = [];
     for (const row of rows) {
+        const shown = team && String(row.kv_key).startsWith(`team:${team}:`) ? String(row.kv_key).slice(`team:${team}:`.length) : String(row.kv_key);
+        // 默认团队查原键时，带 team: 前缀的键不会被 IN / LIKE 命中；非默认团队只认本团队前缀
+        if (team && shown === String(row.kv_key) && realKeys.length && !realKeys.includes(row.kv_key)) continue;
+        row.kv_key = shown;
         const spec = specFor(String(row.kv_key));
         if (!(await canRead(spec, identity))) continue;
         out.push({ key: row.kv_key, page: spec.page || '', label: spec.label, updatedAt: row.updated_at ? new Date(Number(row.updated_at)).toISOString() : '' });

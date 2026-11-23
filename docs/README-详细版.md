@@ -275,6 +275,15 @@ tests/                接口、权限、上下文、浏览器端到端
 
 > **规范对应**：§7.3（唯一取数入口）、§7.4（转义、写操作必须带 WHERE、不写 DDL、不依赖 `lastInsertId`）、§8.1/§8.4（统一响应体与错误码）。无 WHERE 的 UPDATE/DELETE 在 `scoped.js` 里直接抛错，不是靠调用方自觉；统一响应体只对声明了 `x-dh-envelope` 的调用方生效，避免桌面版前端大改。三条偏离的处置（§8.4 参数 422、§7.4 统计聚合、§9 健康检查）见 [基座规范对照 第 2 节](基座规范对照.md#2-偏离与部分符合的处置)。
 
+### 8.5 团队隔离（账号绑定团队）
+
+- **默认团队 = 现有数据**：没有分配团队的账号读写原表、原键，上线前的数据零迁移。超级管理员始终在默认团队。
+- **团队归属**：全局键 `dh_teams`（`teams` 列表 + `members` 工号→团队），超级管理员在「账号与权限」里建团队、移账号（`/api/auth/teams`）。请求进来时 `server.js` 查出团队放进 `requestContext`，定时任务按创建人的团队执行。
+- **数据层自动处理**（`dao/team-scope.js` + `dao/scoped.js`）：工具页面的表在非默认团队下改读写团队版表 `team_<表名>`（多一列 `team_id`，主键 / 唯一键带团队），读写改删自动按 `team_id` 过滤或填写，返回给业务层的行不带 `team_id`；`biz_records` 只有工具类种类（值班表、FRT、问卷、奖惩……）分团队；工具配置类键值加 `team:<团队>:` 前缀。services 不感知团队。
+- **对话查库工具**：`teamScopeSql` 把 SQL 里的工具表换成「本团队数据」的子查询。
+- **不分团队**：管理员名单、页面开放、模型配置、对话、消息中心、共享对话、保险箱、审计、数据治理。
+- **建表**：团队版表由 `node scripts/gen-team-tables.mjs` 按 init.sql 生成到 init.sql / upgrade.sql（只有 `CREATE TABLE IF NOT EXISTS`，可重复执行）。**新增工具表时把它加进 `TEAM_TABLES` 并重新生成**；上线前 DBA 执行 `db/upgrade.sql`。
+
 ## 9. 附件、图片与大字段
 
 - 上传：`/api/upload` 支持普通上传和分片上传（start / chunk / complete / cancel），存应用库（`ai_chat_uploads` + `dh_chunks`）。单文件 **20MB**，每人保留最近 **60 个**，只有上传者本人能读（共享成员按会话放行）。

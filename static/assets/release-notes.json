@@ -1,8 +1,10 @@
 {
   "zh": [
-    "「01平台接入」只对超级管理员显示：基座的模型由超级管理员统一配置，其他人看不到这个入口。"
+    "新增账号绑定团队（仅超级管理员）：在「账号与权限」里新建团队、把账号放进去。同一团队共用抓取脚本、数据导入、报表看板、月报、值班表等工具页面数据，不同团队互相隔离，新团队从空数据开始；没有分配团队的账号都在「默认团队」，看到的就是现有数据。AI 对话、消息、保险箱仍按人私有，模型与页面开放等平台设置由超级管理员统一管理。",
+    "上线前请 DBA 执行 db/upgrade.sql（新增 26 张团队版数据表，只有 CREATE TABLE IF NOT EXISTS，可重复执行）。"
   ],
   "en": [
-    "01 Platform quick connect is shown only to super admins: models are configured centrally by the super admin, so other users no longer see the entry."
+    "Accounts can be bound to teams (super admin only): create teams in Accounts & permissions and move accounts into them. A team shares scraping scripts, data imports, reports, monthly reports, duty rosters and other tool data; teams are isolated and new teams start empty. Accounts without a team stay in the Default team and see the existing data. Chats, messages and vault stay personal; models and page access stay global.",
+    "Before upgrading, the DBA must run db/upgrade.sql (26 new team tables, CREATE TABLE IF NOT EXISTS only, safe to rerun)."
   ]
 }

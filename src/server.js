@@ -13,6 +13,7 @@ import { resolveAdmin, denyReason, isAuthEnforced, authRequiredReason } from './
 import { ok, fail } from './core/response.js';
 import { pushLog } from './core/log-ring.js';
 import { requestContext } from './dao/scoped.js';
+import { teamOf } from './services/team-service.js';
 import { healthRoutes, healthHandler } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { debugRoutes } from './routes/debug.js';
@@ -241,7 +242,15 @@ export async function createServer() {
         reply.header('x-request-id', requestId);
         // 开发者会话 / 服务端核验 x-dh-user（只有静态资源以外的请求才需要；核验结果按 Cookie 缓存）
         const needsGuard = !/\.(?:css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|map|webp)$/i.test(String(req.url || '').split('?')[0]);
-        const proceed = () => requestContext.run({ requestId, userId: identity.username }, done);
+        // 账号所在团队放进请求上下文：数据层按它把工具页面数据分团队读写（默认团队 = 空，读写原表）
+        const proceed = () => {
+            const run = (teamId) => {
+                identity.teamId = teamId || '';
+                requestContext.run({ requestId, userId: identity.username, teamId: identity.teamId }, done);
+            };
+            if (!identity.identified) return run('');
+            teamOf(identity.username).then(run, () => run(''));
+        };
         if (!needsGuard) return proceed();
         hardenIdentity(req, identity).then(proceed, (err) => {
             pushLog({ level: 'WARN', category: 'AUTH', message: `身份加固失败：${err?.message || err}`, requestId });

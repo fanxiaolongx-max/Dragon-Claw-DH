@@ -135,7 +135,7 @@ const USER_WRITES = [
     ['POST', /^\/ai-bi\/boards$/], // AI BI 看板与 AI 月报一样由已识别用户共同维护；删除仅管理员（路由内校验）
 ];
 // 数据探索、审计日志只给管理员（基座 Web 版的管理员就是超级管理员，与主线版「仅超级管理员」一致）；对话里的查库工具不受影响
-const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/auth\/audit$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
+const ADMIN_READS = [/^\/debug(?:\/|$)/, /^\/db-explorer(?:\/|$)/, /^\/auth\/admins$/, /^\/auth\/teams(?:\/|$)/, /^\/auth\/audit$/, /^\/platform-metrics\/service-status\/(?:logs|failures)$/];
 const ANON_ALLOWED_APIS = [/^\/auth\/(?:me|logout)$/, /^\/platform-logo\/image$/, /^\/(?:healthz|health|ping)$/];
 
 /** 生产环境（已注入基座 API 且未开启免鉴权/内存模式）强制要求已识别身份。 */

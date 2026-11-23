@@ -9,7 +9,7 @@
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';
-import { kvGet, kvSet, selectTable, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
+import { kvGet, kvSet, selectTable, deleteRows, sqlVal, parseJsonCol, teamScopedKey } from '../dao/scoped.js';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -100,7 +100,8 @@ export async function collectGarbage({ graceMs = GC_GRACE_MS } = {}) {
     return withIndex(async (index) => {
         const stale = Object.entries(index).filter(([hash, meta]) => !refs.has(hash) && Number(meta?.createdAt || 0) < cutoff).map(([hash]) => hash);
         for (let i = 0; i < stale.length; i += DELETE_BATCH) {
-            const keys = stale.slice(i, i + DELETE_BATCH).map((hash) => KEY_PREFIX + hash);
+            // 实际键名带团队前缀（非默认团队），和 kvGet / kvSet 写进去的一致
+            const keys = stale.slice(i, i + DELETE_BATCH).map((hash) => teamScopedKey(KEY_PREFIX + hash));
             await deleteRows('sys_kv_store', { whereSql: `\`kv_key\` IN (${keys.map((key) => sqlVal(key)).join(', ')})`, memFilter: (r) => keys.includes(r.kv_key) });
         }
         for (const hash of stale) delete index[hash];
