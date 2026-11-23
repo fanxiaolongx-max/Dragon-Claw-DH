@@ -105,3 +105,242 @@ test('self-signed HTTPS gateways work by default; ticking certificate verificati
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });
+
+test('dryRun test does not persist probe profile, and image category activates independently + tests /images/generations', async () => {
+    const requests = [];
+    const upstream = http.createServer((req, res) => {
+        let raw = '';
+        req.on('data', (c) => { raw += c; });
+        req.on('end', () => {
+            requests.push({ url: req.url, body: JSON.parse(raw || '{}') });
+            res.writeHead(200, { 'content-type': 'application/json' });
+            if (req.url === '/v1/images/generations') {
+                res.end(JSON.stringify({ data: [{ b64_json: Buffer.from('PNG_OK').toString('base64') }] }));
+                return;
+            }
+            res.end(JSON.stringify({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }));
+        });
+    });
+    await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+    const { createServer } = await import('../src/server.js');
+    const app = await createServer();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const url = `http://127.0.0.1:${app.server.address().port}`;
+    const apiBaseUrl = `http://127.0.0.1:${upstream.address().port}/v1`;
+    const headers = { 'Content-Type': 'application/json', cookie: 'iLearningXUserName=admin01' };
+    try {
+        const before = await (await fetch(`${url}/api/ai-settings`, { headers: { cookie: headers.cookie } })).json();
+        const beforeCount = (before.data || before).profiles.length;
+
+        const dryRes = await fetch(`${url}/api/ai-settings/test`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                dryRun: true,
+                name: '01平台临时测试',
+                category: 'chat',
+                provider: 'openai-compatible',
+                apiBaseUrl,
+                apiKey: 'sk-01-probe-key-123456',
+                model: 'qwen3.8-27b',
+                authMode: 'bearer',
+            }),
+        });
+        assert.equal(dryRes.status, 200);
+        const afterDry = await (await fetch(`${url}/api/ai-settings`, { headers: { cookie: headers.cookie } })).json();
+        assert.equal((afterDry.data || afterDry).profiles.length, beforeCount, 'dryRun must not persist temporary test profile');
+
+        // Save + activate chat (qwen3.8-27b) and image (qwen-image-2.1) independently
+        const chatCreate = await (await fetch(`${url}/api/ai-settings/profiles`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                name: '01 平台 · qwen3.8-27b',
+                category: 'chat',
+                provider: 'openai-compatible',
+                authMode: 'bearer',
+                apiBaseUrl,
+                apiKey: 'sk-01-live-key-123456',
+                model: 'qwen3.8-27b',
+                models: ['qwen3.8-27b'],
+                activate: true,
+            }),
+        })).json();
+        const chatId = (chatCreate.data || chatCreate).createdProfileId;
+
+        const imgCreate = await (await fetch(`${url}/api/ai-settings/profiles`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                name: '01 平台 · qwen-image-2.1',
+                category: 'image',
+                provider: 'openai-compatible',
+                authMode: 'bearer',
+                apiBaseUrl,
+                apiKey: 'sk-01-live-key-123456',
+                model: 'qwen-image-2.1',
+                models: ['qwen-image-2.1'],
+                activate: true,
+            }),
+        })).json();
+        const imgId = (imgCreate.data || imgCreate).createdProfileId;
+
+        const latest = await (await fetch(`${url}/api/ai-settings`, { headers: { cookie: headers.cookie } })).json();
+        const latestData = latest.data || latest;
+        assert.equal(latestData.activeProfileId, chatId);
+        assert.equal(latestData.activeImageProfileId, imgId);
+        assert.equal(latestData.profiles.find((p) => p.id === chatId)?.isActive, true);
+        assert.equal(latestData.profiles.find((p) => p.id === imgId)?.isActive, true);
+
+        const imgTestRes = await fetch(`${url}/api/ai-settings/profiles/${encodeURIComponent(imgId)}/test`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ model: 'qwen-image-2.1' }),
+        });
+        assert.equal(imgTestRes.status, 200);
+        const imgTestBody = await imgTestRes.json();
+        assert.equal((imgTestBody.data || imgTestBody).success, true);
+        assert.equal(requests.some((r) => r.url === '/v1/images/generations' && r.body.model === 'qwen-image-2.1'), true);
+    } finally {
+        await app.close();
+        await new Promise((r) => upstream.close(r));
+    }
+});
+
+test('base platform-settings.js renders 01 onboarding card, preserves fields on provider change, and auto-retries verifySsl', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const vm = await import('node:vm');
+    const src = fs.readFileSync(path.join(process.cwd(), 'static/js/shared/platform-settings.js'), 'utf8');
+    const elements = new Map();
+    const content = {
+        id: 'navSettingsContent',
+        _html: '',
+        set innerHTML(val) {
+            this._html = String(val || '');
+            elements.clear();
+            const tagRe = /<(input|select|textarea|button|div|span|section)\b([^>]*)>/gi;
+            const attrRe = /([a-zA-Z0-9:-]+)(?:="([^"]*)")?/g;
+            let m;
+            while ((m = tagRe.exec(this._html))) {
+                const attrs = {};
+                let a;
+                attrRe.lastIndex = 0;
+                while ((a = attrRe.exec(m[2]))) attrs[a[1]] = a[2] !== undefined ? a[2] : '';
+                if (!attrs.id) continue;
+                elements.set(attrs.id, {
+                    id: attrs.id,
+                    type: attrs.type || 'text',
+                    value: attrs.value || '',
+                    checked: 'checked' in attrs,
+                    hidden: 'hidden' in attrs,
+                    innerHTML: '',
+                    textContent: '',
+                    dataset: {},
+                    style: {},
+                    classList: { toggle() {}, add() {}, remove() {} },
+                    focus() {},
+                    scrollIntoView() {},
+                    setAttribute() {},
+                });
+            }
+        },
+        get innerHTML() { return this._html; },
+    };
+    const calls = [];
+    const store = {
+        activeProfileId: 'default-profile',
+        activeImageProfileId: '',
+        profiles: [{
+            id: 'default-profile', name: '默认模型', category: 'chat', provider: 'openai',
+            authMode: 'bearer', apiBaseUrl: '', model: 'gpt-4o-mini', models: ['gpt-4o-mini'],
+            hasApiKey: false, maskedApiKey: '', apiKeySource: 'none', keyLooksValid: false, isActive: true, verifySsl: false,
+        }],
+    };
+    const fetchMock = async (reqUrl, init = {}) => {
+        const body = init.body ? JSON.parse(init.body) : null;
+        calls.push({ reqUrl, method: init.method || 'GET', body });
+        if (reqUrl === '/api/ai-settings') return new Response(JSON.stringify(store), { status: 200 });
+        if (reqUrl === '/api/ai-settings/test') return new Response(JSON.stringify({ success: true, model: body.model, reply: 'OK' }), { status: 200 });
+        if (reqUrl === '/api/ai-settings/profiles' && init.method === 'POST') {
+            const id = body.category === 'image' ? 'base-img' : 'base-chat';
+            store.profiles.push({ ...body, id, hasApiKey: true, keyLooksValid: true, isActive: false });
+            return new Response(JSON.stringify({ ...store, createdProfileId: id }), { status: 201 });
+        }
+        const act = reqUrl.match(/^\/api\/ai-settings\/profiles\/([^/]+)\/activate$/);
+        if (act) {
+            const id = decodeURIComponent(act[1]);
+            const target = store.profiles.find((p) => p.id === id);
+            store.profiles.forEach((p) => { if ((p.category || 'chat') === (target.category || 'chat')) p.isActive = p.id === id; });
+            if (target.category === 'image') store.activeImageProfileId = id;
+            else store.activeProfileId = id;
+            return new Response(JSON.stringify(store), { status: 200 });
+        }
+        const put = reqUrl.match(/^\/api\/ai-settings\/profiles\/([^/]+)$/);
+        if (put && init.method === 'PUT') {
+            Object.assign(store.profiles.find((p) => p.id === decodeURIComponent(put[1])) || {}, body);
+            return new Response(JSON.stringify(store), { status: 200 });
+        }
+        if (reqUrl.endsWith('/test')) {
+            if (body.verifySsl === false) return new Response(JSON.stringify({ success: false, error: 'Timeout', details: { httpStatus: 504, errorCode: '20', cause: 'This operation was aborted' } }), { status: 504 });
+            return new Response(JSON.stringify({ success: true, model: body.model, reply: 'OK' }), { status: 200 });
+        }
+        return new Response('{}', { status: 404 });
+    };
+    const windowObj = { dispatchEvent() {}, addEventListener() {} };
+    const ctx = {
+        window: windowObj,
+        document: {
+            getElementById: (id) => (id === 'navSettingsContent' ? content : (elements.get(id) || (id === 'navAiModelsList' ? { innerHTML: '' } : null))),
+            querySelector: () => null,
+            querySelectorAll: () => [],
+            createElement: () => ({ style: {}, setAttribute() {}, select() {}, remove() {} }),
+            body: { appendChild() {} },
+        },
+        Event: class Event { constructor(t) { this.type = t; } },
+        fetch: fetchMock,
+        URL,
+        localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        setTimeout: (fn, ms) => globalThis.setTimeout(fn, Math.min(ms, 5)),
+        clearTimeout: (id) => globalThis.clearTimeout(id),
+        navState: { lang: 'zh-CN', aiCategory: 'chat', aiQuickDraftBaseUrl: 'http://models.ascend.huawei.com', aiQuickDraftToken: '' },
+        navEscape: (s) => String(s ?? ''),
+        navT: (k) => k,
+        navLocaleText: (zh, en) => zh || en,
+        getAuthHeaderForNav: () => ({}),
+        isNavSuperAdmin: () => false,
+        resolveAiAuthModeForUi: (s) => s?.authMode || 'bearer',
+        renderAiUsagePanel: () => '',
+        loadAiUsageData: () => {},
+        showPlatformConfirm: async () => true,
+        console,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    for (const k of Object.keys(windowObj)) if (!(k in ctx)) ctx[k] = windowObj[k];
+
+    await ctx.renderAiSettings(content);
+    assert.match(content.innerHTML, /01平台接入/);
+    assert.match(content.innerHTML, /http:\/\/models\.ascend\.huawei\.com\/sign-up\?aff=KizX/);
+
+    elements.get('navAiQuickToken').value = 'sk-base-zeroone-token-1234';
+    await windowObj.saveZeroOneQuickConfig();
+    assert.equal(store.activeProfileId, 'base-chat');
+    assert.equal(store.activeImageProfileId, 'base-img');
+
+    ctx.navState.currentEditingModels = ['deepseek-v4.1-flash', 'qwen3.8-27b'];
+    elements.get('navAiModel').value = 'deepseek-v4.1-flash';
+    elements.get('navAiApiBaseUrl').value = 'http://models.ascend.huawei.com';
+    elements.get('navAiVerifySsl').checked = false;
+    windowObj.handleAiProviderChange();
+    windowObj.handleAiApiBaseUrlInput();
+    assert.equal(elements.get('navAiModel').value, 'deepseek-v4.1-flash');
+    assert.equal(elements.get('navAiVerifySsl').checked, true);
+
+    elements.get('navAiVerifySsl').checked = false;
+    await windowObj.testAiSettingsNow('deepseek-v4.1-flash');
+    const retries = calls.filter((c) => c.reqUrl.endsWith('/test') && c.reqUrl.includes('/profiles/'));
+    assert.equal(retries.length, 2);
+    assert.equal(elements.get('navAiVerifySsl').checked, true);
+});
+

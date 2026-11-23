@@ -64,3 +64,13 @@ test('批量拆分：普通段落和 Excel 复制出来的双引号单元格都�
     assert.match(blocks[1].sql, /from "db"\."s"\."demo_tasks" group by region$/);
     assert.match(datafabToMysql(blocks[1].sql).sql, /from `demo_tasks` group by region/);
 });
+
+test('用了没定义的表别名、且只有一张表：补上别名；有多张表时不猜', () => {
+    const one = datafabToMysql('select id, sum(t.qty) AS q from Demo_Tasks group by id');
+    assert.match(one.sql, /from demo_tasks t group by id/);
+    assert.ok(one.notes.some((n) => /没定义的表别名 t/.test(n)));
+    const two = datafabToMysql('select t.id from a join b on a.id = b.id');
+    assert.doesNotMatch(two.sql, /from a t\b/);
+    const ok = datafabToMysql('select t.id from demo_tasks t');
+    assert.ok(!ok.notes.some((n) => /没定义的表别名/.test(n)));
+});

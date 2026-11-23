@@ -34,7 +34,7 @@ import {
 } from './agent-extras.js';
 import { listSkills } from '../services/skill-service.js';
 import { filterSkillsForUser } from '../services/distribution-service.js';
-import { getAutoSwitch, hasUsableCredentials } from '../services/ai-service.js';
+import { getAutoSwitch, hasUsableCredentials, normalizeProfile, resolveProfileCategory, IMAGE_TEST_MODEL_RE, testAiImageConnection } from '../services/ai-service.js';
 import { formatTestFailure } from '../services/ai-test-diagnostics.js';
 import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
 import { schedulePage, removeSchedule, runScheduleNow, listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
@@ -496,10 +496,11 @@ export async function aiSettingsRoutes(fastify) {
         error: '已取消模型名称映射，对话直接显示真实模型名称',
     }));
 
-    const EDITABLE_PROFILE_KEYS = ['name', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models', 'authMode', 'customAuthHeader', 'verifySsl'];
+    const EDITABLE_PROFILE_KEYS = ['name', 'category', 'activate', 'provider', 'apiBaseUrl', 'baseUrl', 'apiKey', 'clearApiKey', 'headers', 'extraBody', 'temperature', 'maxOutputTokens', 'contextWindowTokens', 'systemPrompt', 'models', 'authMode', 'customAuthHeader', 'verifySsl'];
     const handleProfileTest = async (req, reply) => {
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const paramId = String(req.params?.profileId || body.profileId || '').trim();
+        const dryRun = body.dryRun === true || body.dryRun === 'true';
         const profiles = await listProfiles();
         const existing = paramId ? profiles.find((p) => p.id === paramId) : null;
         const hasEdits = EDITABLE_PROFILE_KEYS.some((k) => body[k] !== undefined);
@@ -507,7 +508,19 @@ export async function aiSettingsRoutes(fastify) {
             return reply.code(404).send({ success: false, error: 'AI 配置方案不存在' });
         }
         let targetProfileId = paramId;
-        if (hasEdits) {
+        let overrideSettings = null;
+        if (dryRun) {
+            const rawKey = body.clearApiKey
+                ? ''
+                : (body.apiKey && body.apiKey !== '***' ? String(body.apiKey).trim() : (existing?.apiKey || ''));
+            overrideSettings = normalizeProfile({
+                ...(existing || {}),
+                ...body,
+                id: paramId || existing?.id || 'dry-run',
+                apiKey: rawKey,
+                apiBaseUrl: body.apiBaseUrl ?? body.baseUrl ?? existing?.apiBaseUrl ?? '',
+            });
+        } else if (hasEdits) {
             // 测试渠道列表里的非主模型时，保留已有主模型，避免误覆盖 ★ 默认主模型
             const keepPrimary = existing && Array.isArray(body.models) && body.model && body.model !== existing.model && body.models.includes(existing.model);
             const saveInput = keepPrimary ? { ...body, model: existing.model } : body;
@@ -516,17 +529,25 @@ export async function aiSettingsRoutes(fastify) {
         } else if (typeof body.autoSwitchEnabled === 'boolean') {
             await saveProfile({ autoSwitchEnabled: body.autoSwitchEnabled, profileId: paramId }, paramId);
         }
-        const res = await callAiCompletion({
-            profileId: targetProfileId,
-            model: String(body.model || '').trim(),
-            messages: [{ role: 'user', content: 'Hi, please reply OK.' }],
-            maxTokens: 16,
-        });
+        const latestProfiles = (!dryRun && hasEdits) ? await listProfiles() : profiles;
+        const effectiveProfile = overrideSettings || latestProfiles.find((p) => p.id === targetProfileId) || existing || {};
+        const targetModel = String(body.model || effectiveProfile.model || '').trim();
+        const targetCategory = resolveProfileCategory({ ...effectiveProfile, category: body.category || effectiveProfile.category, model: targetModel });
+        const isImageTest = (targetCategory === 'image' || IMAGE_TEST_MODEL_RE.test(targetModel)) && String(effectiveProfile.provider || '') !== 'anthropic';
+        const res = isImageTest
+            ? await testAiImageConnection({ profileId: targetProfileId, model: targetModel, overrideSettings })
+            : await callAiCompletion({
+                profileId: targetProfileId,
+                model: targetModel,
+                overrideSettings,
+                messages: [{ role: 'user', content: 'Hi, please reply OK.' }],
+                maxTokens: 16,
+            });
         if (!res.ok) {
             // 失败详情：请求地址、HTTP 状态、上游原文与排查建议（全部脱敏）
-            const profilesNow = await listProfiles();
-            const target = profilesNow.find((p) => p.id === targetProfileId) || profilesNow.find((p) => p.isActive) || {};
-            const secrets = [...profilesNow.map((p) => p.apiKey), config.secretKey].filter(Boolean);
+            const profilesNow = dryRun ? profiles : await listProfiles();
+            const target = overrideSettings || profilesNow.find((p) => p.id === targetProfileId) || profilesNow.find((p) => p.isActive) || {};
+            const secrets = [...profilesNow.map((p) => p.apiKey), overrideSettings?.apiKey, config.secretKey].filter(Boolean);
             return reply.code(400).send(formatTestFailure(res, target, { secrets, request: { model: res.model, maxTokens: 16, stream: false, authMode: target.authMode || 'bearer' } }));
         }
         return { success: true, model: res.model, latencyMs: res.latencyMs, reply: res.text };

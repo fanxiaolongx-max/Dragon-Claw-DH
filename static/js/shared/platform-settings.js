@@ -960,11 +960,103 @@ async function renderPromotionSettings(content) {
     }
 }
 
+function isHttpDomainUrl(url) {
+    const raw = String(url || '').trim();
+    if (!/^http:\/\//i.test(raw)) return false;
+    try {
+        const host = new URL(raw).hostname.toLowerCase();
+        if (!host || host === 'localhost' || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':')) return false;
+        return host.includes('.');
+    } catch {
+        return false;
+    }
+}
+
+function normalizeZeroOneBaseUrl(rawUrl) {
+    const raw = String(rawUrl || '').trim() || 'http://models.ascend.huawei.com';
+    const withProto = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+    const cleaned = withProto.replace(/\/+$/, '').replace(/\/(?:chat\/completions|images\/generations)$/i, '');
+    if (/\/v\d+(?:alpha|beta)?$/i.test(cleaned)) return cleaned;
+    return `${cleaned}/v1`;
+}
+
+function isBuiltInSampleAiProfile(profile) {
+    if (!profile || typeof profile !== 'object') return false;
+    const id = String(profile.id || '').trim();
+    if (!['default', 'default-profile'].includes(id)) return false;
+    if (profile.hasApiKey) return false;
+    if (String(profile.apiBaseUrl || '').trim()) return false;
+    const models = Array.isArray(profile.models) ? profile.models.map(m => String(m || '').trim()).filter(Boolean) : [];
+    const sampleModels = ['gemini-2.5-flash', 'gpt-4o-mini', String(profile.model || '').trim()].filter(Boolean);
+    return !models.length || (models.length === 1 && sampleModels.includes(models[0]));
+}
+
+function hasUserAddedAiModels(profiles) {
+    const list = Array.isArray(profiles) ? profiles : [];
+    const own = list.filter(p => !p.locked);
+    if (!own.length) return false;
+    if (own.length > 1) return true;
+    return !isBuiltInSampleAiProfile(own[0]);
+}
+
+function renderZeroOneOnboardingCard({ hasOwnModels = false } = {}) {
+    const showCard = !hasOwnModels || navState.aiQuickForceOpen === true;
+    if (!showCard) {
+        return `<div class="nav-ai-quick-collapsed-bar">
+            <span>${navEscape(navLocaleText('需要快速接入 01 平台或一键重置文字与生图默认模型？', 'Need quick 01 Platform setup for text & image models?'))}</span>
+            <button type="button" class="nav-settings-add secondary" id="navAiQuickOpenBtn" onclick="toggleZeroOneQuickCard(true)">⚡ ${navEscape(navLocaleText('01平台接入', '01 Platform Setup'))}</button>
+        </div>`;
+    }
+    const statusHtml = navState.aiQuickLastStatus
+        ? `<div id="navAiQuickStatus" class="nav-ai-quick-status ${navEscape(navState.aiQuickLastStatus.tone || '')}" aria-live="polite">${navEscape(navState.aiQuickLastStatus.text || '')}${navState.aiQuickLastStatus.hint ? `<small>${navEscape(navState.aiQuickLastStatus.hint)}</small>` : ''}</div>`
+        : `<div id="navAiQuickStatus" class="nav-ai-quick-status" aria-live="polite" hidden></div>`;
+    return `
+        <section class="nav-ai-quick-card" id="navAiQuickCard">
+            ${!hasOwnModels ? `<div class="nav-ai-quick-guide-banner">${navEscape(navLocaleText('检测到当前仅含系统默认样例配置，尚未新增自定义模型：可直接接入「01平台」，一键自动完成全局文字与生图 AI 模型配置。', 'No custom models added yet (only the built-in sample exists). Connect to 01 Platform below to configure both global text and image models automatically.'))}</div>` : ''}
+            <div class="nav-ai-quick-head">
+                <div class="nav-ai-quick-title">
+                    <span class="nav-ai-quick-badge">01</span>
+                    <strong>${navEscape(navLocaleText('01平台接入', '01 Platform Quick Connect'))}</strong>
+                </div>
+                <div class="nav-ai-quick-head-actions">
+                    <button type="button" class="nav-settings-add" id="navAiQuickTestBtn" onclick="testZeroOneQuickConfig()">${navEscape(navLocaleText('测试连接', 'Test connection'))}</button>
+                    ${hasOwnModels ? `<button type="button" class="nav-settings-add secondary" id="navAiQuickHideBtn" onclick="toggleZeroOneQuickCard(false)">${navEscape(navLocaleText('收起', 'Hide'))}</button>` : ''}
+                </div>
+            </div>
+            <div class="nav-ai-quick-row">
+                <label class="nav-ai-quick-token-label" for="navAiQuickToken">${navEscape(navLocaleText('API TOKEN · default 分组', 'API TOKEN · default group'))}</label>
+                <div class="nav-ai-quick-input-group">
+                    <input id="navAiQuickToken" type="${navState.aiQuickShowToken ? 'text' : 'password'}" class="nav-settings-input nav-ai-quick-token-input" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" value="${navEscape(navState.aiQuickDraftToken || '')}" placeholder="${navEscape(navLocaleText('粘贴 API Token（输入后自动测试连接）', 'Paste API Token (auto-tests after input)'))}" oninput="handleZeroOneTokenInput()" onpaste="setTimeout(handleZeroOneTokenInput, 20)" onkeydown="if(event.key==='Enter'){event.preventDefault();testZeroOneQuickConfig();}">
+                    <button type="button" class="nav-ai-quick-eye" id="navAiQuickEyeBtn" aria-pressed="${navState.aiQuickShowToken ? 'true' : 'false'}" aria-label="${navEscape(navLocaleText('显示或隐藏 API Token', 'Show or hide API Token'))}" title="${navEscape(navLocaleText('显示/隐藏密钥', 'Show/Hide'))}" onclick="toggleZeroOneTokenVisibility()">👁</button>
+                    <button type="button" class="nav-settings-add" id="navAiQuickSaveBtn" onclick="saveZeroOneQuickConfig()">${navEscape(navLocaleText('保存', 'Save'))}</button>
+                    <button type="button" class="nav-settings-add secondary" id="navAiQuickClearBtn" onclick="clearZeroOneQuickConfig()">${navEscape(navLocaleText('清空', 'Clear'))}</button>
+                </div>
+            </div>
+            <div class="nav-ai-quick-steps">
+                <a href="http://models.ascend.huawei.com/sign-up?aff=KizX" target="_blank" rel="noopener noreferrer">${navEscape(navLocaleText('点这里注册', 'Sign up here'))}</a>
+                <span>${navEscape(navLocaleText(' → 登录① 点击「API 密钥」② 创建 API 密钥，分组选 default③ 复制粘贴到上方', ' → Sign in ① Click “API Keys” ② Create API key in group “default” ③ Paste above'))}</span>
+            </div>
+            ${statusHtml}
+            <div class="nav-ai-quick-url-row">
+                <label for="navAiQuickBaseUrl">${navEscape(navLocaleText('平台地址', 'Platform URL'))}</label>
+                <input id="navAiQuickBaseUrl" type="text" class="nav-settings-input" value="${navEscape(navState.aiQuickDraftBaseUrl || 'http://models.ascend.huawei.com')}" placeholder="http://models.ascend.huawei.com" oninput="navState.aiQuickDraftBaseUrl = this.value">
+                <small>${navEscape(navLocaleText('平台地址填到域名即可，不用带 /v1（接口路径已内置；带了也会自动兼容）', 'Enter the platform domain only without /v1 (built in; trailing /v1 is also compatible)'))}</small>
+            </div>
+            <div class="nav-ai-quick-models-preview">
+                <span>${navEscape(navLocaleText('保存后将自动配置并启用全局设置：', 'Saving automatically activates global settings:'))}</span>
+                <code>💬 qwen3.8-27b</code>
+                <code>🎨 qwen-image-2.1</code>
+            </div>
+        </section>
+    `;
+}
+
 async function renderAiSettings(content) {
     content.innerHTML = `<div class="nav-settings-empty">${navEscape(navT('nav.ai.empty'))}</div>`;
     try {
         const settingsStore = await fetchAiSettingsForNav();
         const allProfiles = Array.isArray(settingsStore.profiles) ? settingsStore.profiles : [];
+        const hasOwnModels = hasUserAddedAiModels(allProfiles);
         // Two categories as tabs: 文心 (chat models) and 丹青 (image models); each lists, creates and activates its own.
         const picked = allProfiles.find(item => item.id === navState.aiSelectedProfileId);
         const category = navState.aiCategory || picked?.category || 'chat';
@@ -983,8 +1075,9 @@ async function renderAiSettings(content) {
             <button type="button" role="tab" class="nav-ai-tab ${isImage ? '' : 'is-active'}" aria-selected="${!isImage}" onclick="switchAiCategory('chat')"><span class="nav-ai-tab-icon">${navEscape(navT('nav.ai.chatIcon'))}</span><span><b>${navEscape(navT('nav.ai.chatTitle'))}</b><small>${navEscape(navT('nav.ai.chatSummary', { count: chatCount }))}</small></span></button>
             <button type="button" role="tab" class="nav-ai-tab ${isImage ? 'is-active' : ''}" aria-selected="${isImage}" onclick="switchAiCategory('image')"><span class="nav-ai-tab-icon">${navEscape(navT('nav.ai.imageIcon'))}</span><span><b>${navEscape(navT('nav.ai.imageTitle'))}</b><small>${navEscape(navT('nav.ai.imageSummary', { count: imageCount }))}</small></span></button>
         </div>`;
+        const quickCardHtml = renderZeroOneOnboardingCard({ hasOwnModels });
         if (!settings) {
-            content.innerHTML = `${tabs}<div class="nav-ai-tab-empty"><strong>${navEscape(navT('nav.ai.imageEmpty'))}</strong><span>${navEscape(navT('nav.ai.imageEmptyHelp'))}</span><button type="button" class="nav-settings-add" onclick="createAiProfile()">${navEscape(navT('nav.ai.imageNew'))}</button></div>`;
+            content.innerHTML = `${tabs}${quickCardHtml}<div class="nav-ai-tab-empty"><strong>${navEscape(navT('nav.ai.imageEmpty'))}</strong><span>${navEscape(navT('nav.ai.imageEmptyHelp'))}</span><button type="button" class="nav-settings-add" onclick="createAiProfile()">${navEscape(navT('nav.ai.imageNew'))}</button></div>`;
             return;
         }
         const effectiveAuthMode = resolveAiAuthModeForUi(settings);
@@ -993,6 +1086,7 @@ async function renderAiSettings(content) {
             : (effectiveAuthMode === 'none' ? navT('nav.ai.plhTokenNone') : navT('nav.ai.plhToken'));
         content.innerHTML = `
             ${tabs}
+            ${quickCardHtml}
             <div class="nav-settings-help">${isImage ? navT('nav.ai.imageHelp') : navEscape(navT('nav.ai.help'))}</div>
             <section class="nav-ai-profile-panel">
                 <div class="nav-ai-profile-head">
@@ -1099,10 +1193,10 @@ async function renderAiSettings(content) {
                 </label>
                 <label class="nav-ai-field nav-ai-field-wide">
                     <span>${navEscape(navT('nav.ai.lblApiUrl'))}</span>
-                    <input id="navAiApiBaseUrl" class="nav-settings-input" value="${navEscape(settings.apiBaseUrl || '')}" placeholder="${navEscape(navT('nav.ai.plhApiUrl'))}" oninput="scheduleAiSettingsSave()">
+                    <input id="navAiApiBaseUrl" class="nav-settings-input" value="${navEscape(settings.apiBaseUrl || '')}" placeholder="${navEscape(navT('nav.ai.plhApiUrl'))}" oninput="handleAiApiBaseUrlInput()">
                 </label>
                 <label class="nav-settings-check nav-ai-verify-ssl-check nav-ai-field-wide">
-                    <input id="navAiVerifySsl" type="checkbox" ${settings.verifySsl === true ? 'checked' : ''} onchange="scheduleAiSettingsSave()">
+                    <input id="navAiVerifySsl" type="checkbox" ${settings.verifySsl === true ? 'checked' : ''} onchange="this.dataset.userTouched='1';scheduleAiSettingsSave()">
                     <span><b>${navEscape(navT('nav.ai.verifySslLabel'))}</b><small>${navEscape(navT('nav.ai.verifySslHelp'))}</small></span>
                 </label>
                 <label class="nav-ai-field nav-ai-field-wide">
@@ -1210,6 +1304,7 @@ function collectAiSettingsPayload(options = {}) {
     const primaryModel = document.getElementById('navAiModel')?.value || models[0] || 'gemini-2.5-flash';
     const payload = {
         profileId: navState.aiSelectedProfileId,
+        category: currentAiProfile()?.category || navState.aiCategory || 'chat',
         name: document.getElementById('navAiProfileName')?.value || 'AI 配置',
         provider,
         authMode,
@@ -1499,12 +1594,29 @@ window.handleAiAuthModeChange = function () {
     scheduleAiSettingsSave();
 };
 
+window.handleAiApiBaseUrlInput = function () {
+    const apiBaseUrlInput = document.getElementById('navAiApiBaseUrl');
+    const verifySslInput = document.getElementById('navAiVerifySsl');
+    const urlVal = apiBaseUrlInput?.value?.trim() || '';
+    if (verifySslInput && isHttpDomainUrl(urlVal) && !verifySslInput.checked && verifySslInput.dataset.userTouched !== '1') {
+        verifySslInput.checked = true;
+        const indicator = document.getElementById('navSettingsSaveState');
+        if (indicator) indicator.textContent = navLocaleText('已为 HTTP 域名自动启用「校验 HTTPS 证书」', 'Auto-enabled certificate verification for HTTP domain');
+    }
+    scheduleAiSettingsSave();
+};
+
 window.handleAiProviderChange = function () {
     const provider = document.getElementById('navAiProvider')?.value || 'gemini';
     const modelInput = document.getElementById('navAiModel');
     const authSelect = document.getElementById('navAiAuthMode');
     if (authSelect) {
-        authSelect.value = provider === 'gemini' ? 'x-goog-api-key' : 'bearer';
+        const currentAuth = String(authSelect.value || '').trim().toLowerCase();
+        if (provider === 'gemini' && (!currentAuth || currentAuth === 'bearer')) {
+            authSelect.value = 'x-goog-api-key';
+        } else if (provider !== 'gemini' && currentAuth === 'x-goog-api-key') {
+            authSelect.value = 'bearer';
+        }
     }
     syncAiAuthModeControls();
     const defaults = {
@@ -1514,15 +1626,21 @@ window.handleAiProviderChange = function () {
         minimax: 'MiniMax-M2.7-highspeed',
         'openai-compatible': 'gpt-4o-mini'
     };
-    if (defaults[provider]) {
+    const defaultValues = new Set(Object.values(defaults));
+    const currentModels = getNavAiEditingModels();
+    const apiBaseUrlInput = document.getElementById('navAiApiBaseUrl');
+    const hasCustomUrl = Boolean(apiBaseUrlInput?.value?.trim());
+    const savedProfile = currentAiProfile();
+    const hasStoredOrTypedKey = Boolean(savedProfile?.hasApiKey || document.getElementById('navAiApiKey')?.value?.trim());
+    const hasCustomModels = currentModels.length > 1 || (currentModels[0] && !defaultValues.has(currentModels[0]));
+    // 切换供应商协议时不清空用户已填写的模型、地址或密钥；仅在全新空白默认样例状态时替换默认模型名
+    if (defaults[provider] && !hasCustomModels && !hasCustomUrl && !hasStoredOrTypedKey) {
         navState.currentEditingModels = [defaults[provider]];
         if (modelInput) modelInput.value = defaults[provider];
         renderNavAiModelChips();
     }
-    const apiBaseUrlInput = document.getElementById('navAiApiBaseUrl');
-    if (apiBaseUrlInput) {
-        if (provider === 'minimax') apiBaseUrlInput.value = 'https://api.minimax.io/v1';
-        if (['gemini', 'openai', 'anthropic'].includes(provider)) apiBaseUrlInput.value = '';
+    if (apiBaseUrlInput && provider === 'minimax' && !hasCustomUrl) {
+        apiBaseUrlInput.value = 'https://api.minimax.io/v1';
     }
     scheduleAiSettingsSave();
 };
@@ -1661,6 +1779,62 @@ window.copyAiTestFailureDetails = async function (btn) {
     }
 };
 
+function buildAiTestHttpError(res, rawText, payload, startedAt) {
+    let data = {};
+    if (rawText) {
+        try { data = JSON.parse(rawText); } catch { data = {}; }
+    }
+    const err = new Error(data.error || `HTTP ${res.status}${res.statusText ? ` (${res.statusText})` : ''}`);
+    err.details = data.details || {
+        provider: payload.provider,
+        model: payload.model,
+        endpoint: payload.apiBaseUrl || '',
+        httpStatus: res.status,
+        upstreamStatusText: res.statusText || '',
+        durationMs: Date.now() - startedAt,
+        contentType: res.headers?.get?.('content-type') || '',
+        hint: navLocaleText('服务端返回了非预期错误或非 JSON 响应，请展开查看返回细节。', 'Unexpected server error or non-JSON response. Expand details below to inspect.'),
+        rawDetail: rawText ? rawText.slice(0, 4000) : '',
+        timestamp: new Date().toISOString()
+    };
+    return { err, data };
+}
+
+async function runSingleAiTestRequest(profileId, payload, startedAt) {
+    const res = await fetch(`/api/ai-settings/profiles/${encodeURIComponent(profileId)}/test`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaderForNav()
+        },
+        body: JSON.stringify(payload)
+    });
+    const rawText = await res.text().catch(() => '');
+    const parsed = buildAiTestHttpError(res, rawText, payload, startedAt);
+    if (!res.ok || !parsed.data.success) {
+        throw parsed.err;
+    }
+    return parsed.data;
+}
+
+function getAutoRetryVerifySslTarget(payload, err) {
+    const d = err?.details || {};
+    const combined = `${err?.message || ''} ${d.errorCode || ''} ${d.cause || ''} ${d.rawDetail || ''} ${d.hint || ''}`;
+    const isHttpTimeoutOrAbort = Number(d.httpStatus) === 504
+        || Number(d.errorCode) === 20
+        || /超时|timeout|aborted|REQUEST_TIMEOUT|UND_ERR_|fetch failed|ECONNRESET/i.test(combined);
+    const isTlsError = /ERR_TLS_|CERT_|SELF_SIGNED|UNABLE_TO_VERIFY|DEPTH_ZERO_SELF_SIGNED/i.test(combined);
+    const hasHttpAuthOrRoutingStatus = [400, 401, 403, 404, 422, 429].includes(Number(d.upstreamStatus || d.httpStatus));
+    if (hasHttpAuthOrRoutingStatus && !isTlsError) return null;
+    if (payload.verifySsl === false && (isHttpDomainUrl(payload.apiBaseUrl) || isHttpTimeoutOrAbort || isTlsError)) {
+        return true;
+    }
+    if (payload.verifySsl === true && isTlsError) {
+        return false;
+    }
+    return null;
+}
+
 window.testAiSettingsNow = async function (specificModel) {
     const resultEl = document.getElementById('navAiTestResult');
     const indicator = document.getElementById('navSettingsSaveState');
@@ -1679,43 +1853,44 @@ window.testAiSettingsNow = async function (specificModel) {
         const profileId = navState.aiSelectedProfileId;
         payload = collectAiSettingsPayload();
         if (specificModel) payload.model = specificModel;
-        const res = await fetch(`/api/ai-settings/profiles/${encodeURIComponent(profileId)}/test`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...getAuthHeaderForNav()
-            },
-            body: JSON.stringify(payload)
-        });
-        const rawText = await res.text().catch(() => '');
-        let data = {};
-        if (rawText) {
-            try { data = JSON.parse(rawText); } catch { data = {}; }
-        }
-        if (!res.ok || !data.success) {
-            const err = new Error(data.error || `HTTP ${res.status}${res.statusText ? ` (${res.statusText})` : ''}`);
-            err.details = data.details || {
-                provider: payload.provider,
-                model: payload.model,
-                endpoint: payload.apiBaseUrl || '',
-                httpStatus: res.status,
-                upstreamStatusText: res.statusText || '',
-                durationMs: Date.now() - startedAt,
-                contentType: res.headers?.get?.('content-type') || '',
-                hint: navLocaleText('服务端返回了非预期错误或非 JSON 响应，请展开查看返回细节。', 'Unexpected server error or non-JSON response. Expand details below to inspect.'),
-                rawDetail: rawText ? rawText.slice(0, 4000) : '',
-                timestamp: new Date().toISOString()
-            };
-            throw err;
+        let data = null;
+        let autoAdjustedVerifySsl = null;
+        try {
+            data = await runSingleAiTestRequest(profileId, payload, startedAt);
+        } catch (firstErr) {
+            const retryVerifySsl = getAutoRetryVerifySslTarget(payload, firstErr);
+            if (retryVerifySsl === null) throw firstErr;
+            const retryHint = retryVerifySsl
+                ? navLocaleText('连接失败，正在自动勾选「校验 HTTPS 证书」重试测试…', 'Initial test failed; retrying with certificate verification enabled…')
+                : navLocaleText('证书校验失败，正在自动关闭「校验 HTTPS 证书」重试测试…', 'Certificate check failed; retrying with certificate verification disabled…');
+            if (resultEl) {
+                resultEl.className = 'nav-ai-test-result testing';
+                resultEl.textContent = retryHint;
+            }
+            if (indicator) indicator.textContent = retryHint;
+            const retryPayload = { ...payload, verifySsl: retryVerifySsl };
+            data = await runSingleAiTestRequest(profileId, retryPayload, Date.now());
+            autoAdjustedVerifySsl = retryVerifySsl;
+            const verifyBox = document.getElementById('navAiVerifySsl');
+            if (verifyBox) {
+                verifyBox.checked = retryVerifySsl;
+                verifyBox.dataset.userTouched = '1';
+            }
+            await saveAiSettingsNow().catch(() => {});
         }
         const reply = data.reply ? `：${data.reply}` : '';
         const modelTag = data.model ? `[${data.model}] ` : '';
         const durationTag = Number.isFinite(Number(data.durationMs)) ? ` (${data.durationMs}ms)` : '';
+        const autoNote = autoAdjustedVerifySsl === null
+            ? ''
+            : (autoAdjustedVerifySsl
+                ? navLocaleText(' · 已自动勾选并保存「校验 HTTPS 证书」', ' · Auto-enabled & saved certificate verification')
+                : navLocaleText(' · 已自动关闭并保存「校验 HTTPS 证书」', ' · Auto-disabled & saved certificate verification'));
         if (resultEl) {
             resultEl.className = 'nav-ai-test-result ok';
-            resultEl.textContent = `${modelTag}${navT('nav.ai.testOk')}${reply}${durationTag}`;
+            resultEl.textContent = `${modelTag}${navT('nav.ai.testOk')}${reply}${durationTag}${autoNote}`;
         }
-        if (indicator) indicator.textContent = `${modelTag}${navT('nav.ai.testOk')}${durationTag}`;
+        if (indicator) indicator.textContent = `${modelTag}${navT('nav.ai.testOk')}${durationTag}${autoNote}`;
     } catch (e) {
         const modelTag = targetModel ? `[${targetModel}] ` : '';
         const fallbackDetails = e.details || {
@@ -1733,6 +1908,222 @@ window.testAiSettingsNow = async function (specificModel) {
         }
         if (indicator) indicator.textContent = `${modelTag}${navT('nav.ai.testFail')}${e.message}`;
     }
+};
+
+function renderZeroOneQuickStatus({ tone = '', text = '', hint = '' } = {}) {
+    navState.aiQuickLastStatus = text ? { tone, text, hint } : null;
+    const statusEl = document.getElementById('navAiQuickStatus');
+    if (!statusEl) return;
+    if (!text) {
+        statusEl.hidden = true;
+        statusEl.className = 'nav-ai-quick-status';
+        statusEl.innerHTML = '';
+        return;
+    }
+    statusEl.hidden = false;
+    statusEl.className = `nav-ai-quick-status ${tone || ''}`.trim();
+    statusEl.innerHTML = `${navEscape(text)}${hint ? `<small>${navEscape(hint)}</small>` : ''}`;
+}
+
+window.toggleZeroOneQuickCard = function (open) {
+    navState.aiQuickForceOpen = Boolean(open);
+    const content = document.getElementById('navSettingsContent');
+    if (content) renderAiSettings(content);
+};
+
+window.toggleZeroOneTokenVisibility = function () {
+    navState.aiQuickShowToken = !navState.aiQuickShowToken;
+    const input = document.getElementById('navAiQuickToken');
+    const btn = document.getElementById('navAiQuickEyeBtn');
+    if (input) input.type = navState.aiQuickShowToken ? 'text' : 'password';
+    if (btn) btn.setAttribute('aria-pressed', navState.aiQuickShowToken ? 'true' : 'false');
+};
+
+window.handleZeroOneTokenInput = function () {
+    const input = document.getElementById('navAiQuickToken');
+    const token = input ? input.value : '';
+    navState.aiQuickDraftToken = token;
+    clearTimeout(navState.aiQuickAutoTestTimer);
+    const trimmed = token.trim();
+    if (!trimmed) {
+        renderZeroOneQuickStatus({});
+        return;
+    }
+    if (trimmed.length >= 12) {
+        navState.aiQuickAutoTestTimer = setTimeout(() => {
+            const latest = document.getElementById('navAiQuickToken')?.value?.trim() || '';
+            if (latest && latest === trimmed && !navState.aiQuickTesting) {
+                testZeroOneQuickConfig({ autoTriggered: true });
+            }
+        }, 350);
+    }
+};
+
+window.testZeroOneQuickConfig = async function () {
+    const tokenInput = document.getElementById('navAiQuickToken');
+    const urlInput = document.getElementById('navAiQuickBaseUrl');
+    const token = (tokenInput?.value ?? navState.aiQuickDraftToken ?? '').trim();
+    const rawBaseUrl = (urlInput?.value ?? navState.aiQuickDraftBaseUrl ?? 'http://models.ascend.huawei.com').trim();
+    navState.aiQuickDraftToken = tokenInput ? tokenInput.value : token;
+    navState.aiQuickDraftBaseUrl = rawBaseUrl || 'http://models.ascend.huawei.com';
+    if (!token) {
+        renderZeroOneQuickStatus({
+            tone: 'fail',
+            text: navLocaleText('请先填写 API TOKEN（default 分组）后再测试', 'Please enter your API TOKEN (default group) first')
+        });
+        if (tokenInput) tokenInput.focus();
+        return false;
+    }
+    const apiBaseUrl = normalizeZeroOneBaseUrl(rawBaseUrl);
+    const verifySsl = isHttpDomainUrl(apiBaseUrl);
+    navState.aiQuickTesting = true;
+    renderZeroOneQuickStatus({
+        tone: 'testing',
+        text: navLocaleText('正在测试 01 平台连接（qwen3.8-27b）…', 'Testing 01 Platform connection (qwen3.8-27b)…')
+    });
+    try {
+        const res = await fetch('/api/ai-settings/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaderForNav()
+            },
+            body: JSON.stringify({
+                dryRun: true,
+                name: '01平台临时测试',
+                category: 'chat',
+                provider: 'openai-compatible',
+                authMode: 'bearer',
+                apiBaseUrl,
+                apiKey: token,
+                model: 'qwen3.8-27b',
+                models: ['qwen3.8-27b'],
+                verifySsl
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        renderZeroOneQuickStatus({
+            tone: 'ok',
+            text: navLocaleText('连接成功 · Token 验证通过', 'Connected · Token verified'),
+            hint: navLocaleText('点击「保存」将自动配置并启用全局对话模型 qwen3.8-27b 与生图模型 qwen-image-2.1。', 'Click “Save” to activate global chat model (qwen3.8-27b) and image model (qwen-image-2.1).')
+        });
+        return true;
+    } catch (err) {
+        renderZeroOneQuickStatus({
+            tone: 'fail',
+            text: navLocaleText(`测试未通过：${err.message}`, `Test failed: ${err.message}`),
+            hint: navLocaleText('请检查 Token 是否来自 default 分组，以及当前网络是否能访问 01 平台地址。', 'Verify the Token belongs to group “default” and the platform URL is reachable.')
+        });
+        return false;
+    } finally {
+        navState.aiQuickTesting = false;
+    }
+};
+
+async function upsertAndActivateQuickProfile(existingProfiles, spec) {
+    const existing = (Array.isArray(existingProfiles) ? existingProfiles : [])
+        .find(p => !p.locked && (p.category || 'chat') === spec.category && p.name === spec.name);
+    const url = existing
+        ? `/api/ai-settings/profiles/${encodeURIComponent(existing.id)}`
+        : '/api/ai-settings/profiles';
+    const method = existing ? 'PUT' : 'POST';
+    const res = await requestAiProfile(url, {
+        method,
+        body: JSON.stringify(spec)
+    });
+    const profileId = existing?.id
+        || res.createdProfileId
+        || (res.profiles || []).find(p => !p.locked && (p.category || 'chat') === spec.category && p.name === spec.name)?.id
+        || '';
+    if (!profileId) {
+        throw new Error(navLocaleText(`保存 ${spec.name} 后未返回配置 ID`, `Missing profile ID after saving ${spec.name}`));
+    }
+    return requestAiProfile(`/api/ai-settings/profiles/${encodeURIComponent(profileId)}/activate`, { method: 'POST' })
+        .then(activated => ({ profileId, settings: activated }));
+}
+
+window.saveZeroOneQuickConfig = async function () {
+    const tokenInput = document.getElementById('navAiQuickToken');
+    const urlInput = document.getElementById('navAiQuickBaseUrl');
+    const token = (tokenInput?.value ?? navState.aiQuickDraftToken ?? '').trim();
+    const rawBaseUrl = (urlInput?.value ?? navState.aiQuickDraftBaseUrl ?? 'http://models.ascend.huawei.com').trim();
+    if (!token) {
+        renderZeroOneQuickStatus({
+            tone: 'fail',
+            text: navLocaleText('请先粘贴 API Token 后再保存', 'Please paste your API Token before saving')
+        });
+        if (tokenInput) tokenInput.focus();
+        return;
+    }
+    navState.aiQuickDraftToken = token;
+    navState.aiQuickDraftBaseUrl = rawBaseUrl || 'http://models.ascend.huawei.com';
+    const apiBaseUrl = normalizeZeroOneBaseUrl(rawBaseUrl);
+    const verifySsl = isHttpDomainUrl(apiBaseUrl);
+    renderZeroOneQuickStatus({
+        tone: 'testing',
+        text: navLocaleText('正在保存并启用全局文字（qwen3.8-27b）与生图（qwen-image-2.1）模型…', 'Saving and activating global text (qwen3.8-27b) & image (qwen-image-2.1) models…')
+    });
+    const indicator = document.getElementById('navSettingsSaveState');
+    try {
+        const currentProfiles = navState.aiSettings?.profiles || [];
+        const chatRes = await upsertAndActivateQuickProfile(currentProfiles, {
+            name: '01 平台 · qwen3.8-27b',
+            category: 'chat',
+            provider: 'openai-compatible',
+            authMode: 'bearer',
+            apiBaseUrl,
+            apiKey: token,
+            model: 'qwen3.8-27b',
+            models: ['qwen3.8-27b'],
+            verifySsl,
+            activate: true,
+            isActive: true
+        });
+        const imgRes = await upsertAndActivateQuickProfile(chatRes.settings?.profiles || currentProfiles, {
+            name: '01 平台 · qwen-image-2.1',
+            category: 'image',
+            provider: 'openai-compatible',
+            authMode: 'bearer',
+            apiBaseUrl,
+            apiKey: token,
+            model: 'qwen-image-2.1',
+            models: ['qwen-image-2.1'],
+            verifySsl,
+            activate: true,
+            isActive: true
+        });
+        navState.aiSettings = imgRes.settings;
+        navState.aiCategory = 'chat';
+        navState.aiSelectedProfileId = chatRes.profileId;
+        navState.aiQuickForceOpen = false;
+        navState.aiQuickLastStatus = {
+            tone: 'ok',
+            text: navLocaleText('连接成功 · Token 验证通过', 'Connected · Token verified'),
+            hint: navLocaleText('已自动配置并启用全局文字（qwen3.8-27b）与生图（qwen-image-2.1）模型。', 'Configured & activated global text (qwen3.8-27b) and image (qwen-image-2.1) models.')
+        };
+        if (indicator) indicator.textContent = navT('nav.ai.saved');
+        await renderAiSettings(document.getElementById('navSettingsContent'));
+    } catch (err) {
+        renderZeroOneQuickStatus({
+            tone: 'fail',
+            text: navLocaleText(`保存失败：${err.message}`, `Save failed: ${err.message}`)
+        });
+    }
+};
+
+window.clearZeroOneQuickConfig = function () {
+    clearTimeout(navState.aiQuickAutoTestTimer);
+    navState.aiQuickDraftToken = '';
+    navState.aiQuickDraftBaseUrl = 'http://models.ascend.huawei.com';
+    navState.aiQuickLastStatus = null;
+    const tokenInput = document.getElementById('navAiQuickToken');
+    const urlInput = document.getElementById('navAiQuickBaseUrl');
+    if (tokenInput) tokenInput.value = '';
+    if (urlInput) urlInput.value = 'http://models.ascend.huawei.com';
+    renderZeroOneQuickStatus({});
 };
 
 async function saveAiSettingsNow(options = {}) {

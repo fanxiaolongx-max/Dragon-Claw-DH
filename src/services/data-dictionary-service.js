@@ -294,7 +294,12 @@ export function resolveDefs(defs) {
     return new Map(defs.map((d) => [d.id, visit(d, [])]));
 }
 
-const withResolution = (defs) => {
+const withResolution = (rawDefs) => {
+    // DataFab 写法的派生表每次都从原文按最新的改写规则重新改写：改写器修了问题，已导入的不用重新导入
+    const defs = rawDefs.map((d) => {
+        if (d.dialect !== 'datafab' || !d.sourceSql) return d;
+        try { const c = datafabToMysql(d.sourceSql); return { ...d, sql: c.sql, dialectNotes: c.notes }; } catch { return d; }
+    });
     const resolved = resolveDefs(defs);
     return defs.map((d) => {
         const r = resolved.get(d.id) || {};

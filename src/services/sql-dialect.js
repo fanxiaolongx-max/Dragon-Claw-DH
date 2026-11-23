@@ -156,6 +156,31 @@ function aliasSubqueries(code, notes) {
     return out;
 }
 
+const ALIAS_KEYWORDS = /^(where|group|order|limit|having|union|join|left|right|inner|cross|on|window|as)$/i;
+/**
+ * 用了没定义的表别名（如 t.col，但 FROM 表后面没写 t）：查询里只有一张表时把别名补上。
+ * 原始 SQL 本身的笔误，DataFab 上同样会报错；这里只在能唯一确定的情况下修。
+ */
+function fixMissingAlias(code, notes) {
+    const bare = code.replace(/`[^`]*`/g, '``');
+    const used = new Set([...bare.matchAll(/(?<![\w.`])([A-Za-z_]\w*)\.(?=[A-Za-z_`])/g)].map((m) => m[1]));
+    if (!used.size) return code;
+    const fromRefs = [...code.matchAll(/\b(from|join)\s+(`?[\w$]+`?)(\s+(?:as\s+)?([A-Za-z_]\w*))?/gi)];
+    const defined = new Set();
+    for (const m of fromRefs) {
+        defined.add(m[2].replace(/`/g, ''));
+        if (m[4] && !ALIAS_KEYWORDS.test(m[4])) defined.add(m[4]);
+    }
+    for (const m of code.matchAll(/\)\s*(?:as\s+)?([A-Za-z_]\w*)/gi)) if (!ALIAS_KEYWORDS.test(m[1])) defined.add(m[1]);
+    const missing = [...used].filter((q) => !defined.has(q) && !/^(dv_sub\d+)$/.test(q));
+    const plain = fromRefs.filter((m) => !m[4] || ALIAS_KEYWORDS.test(m[4]));
+    if (missing.length !== 1 || fromRefs.length !== 1 || plain.length !== 1) return code;
+    const m = plain[0];
+    const at = m.index + m[1].length + m[0].slice(m[1].length).indexOf(m[2]) + m[2].length;
+    notes.push(`SQL 里用了没定义的表别名 ${missing[0]}，已补在 ${m[2].replace(/`/g, '')} 后面（原 SQL 的笔误）`);
+    return `${code.slice(0, at)} ${missing[0]}${code.slice(at)}`;
+}
+
 export function looksLikeDataFab(sql) {
     return /"[^"\n]+"\s*\.\s*"|\bdivide\s*\(|\bdate_trunc\s*\(|\bnulls\s+(last|first)\b|::\s*\w+/i.test(String(sql || ''));
 }
@@ -200,6 +225,7 @@ export function datafabToMysql(input) {
     code = code.replace(/::\s*(numeric|decimal|int|integer|bigint|text|varchar|date|timestamp)\b/gi, '');
     if (code !== casted) notes.push('去掉了 :: 类型转换');
     code = aliasSubqueries(code, notes);
+    code = fixMissingAlias(code, notes);
     code = inlineAliases(code, notes);
     return { sql: restore(code, strings), notes };
 }

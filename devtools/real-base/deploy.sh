@@ -34,7 +34,7 @@ if [ "${USE_PUBLIC_REGISTRY:-1}" = 1 ]; then
 fi
 docker run --rm -v "$APP:/app" -w /app $NODE_IMG sh -c 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund 2>&1 | tail -1'
 
-cp "$HERE/server.mjs" "$HERE/package.json" "$ROOT/base/"; cp "$APP/db/init.sql" "$ROOT/base/init.sql"
+cp "$HERE/server.mjs" "$HERE/package.json" "$HERE/business-seed.sql" "$ROOT/base/"; cp "$APP/db/init.sql" "$ROOT/base/init.sql"
 docker run --rm -v "$ROOT/base:/base" -w /base $NODE_IMG sh -c 'npm install --omit=dev --no-audit --no-fund 2>&1 | tail -1'
 
 docker run -d --name dh-base --restart unless-stopped --network dh-net -p ${DH_PORT}:5401 -v "$ROOT/base:/base" -w /base \
@@ -48,6 +48,7 @@ docker run -d --name dh-base --restart unless-stopped --network dh-net -p ${DH_P
 docker run -d --name dh-web --restart unless-stopped --network dh-net -v "$APP:/app" -w /app \
   -e PORT=5400 -e APP_UUID="$UUID" -e APP_SCHEMA="$SCHEMA" -e APP_DATASOURCE_ID=2 \
   -e BASE_QUERY_URL=http://dh-base:5401/query -e BASE_EXECUTE_URL=http://dh-base:5401/execute \
+  -e BUSINESS_DATASOURCE_NAME="${BUSINESS_DATASOURCE_NAME:-datafab-demo}" \
   ${DH_ADMIN_USERS:+-e DH_ADMIN_USERS="$DH_ADMIN_USERS"} $NODE_IMG node -r ./dh-identity-loader.js run.js >/dev/null
 
 for i in $(seq 1 60); do curl -sf -m 3 "http://127.0.0.1:${DH_PORT}/digital-human/dh/${UUID}/api/healthz" >/dev/null 2>&1 && break; sleep 2; done

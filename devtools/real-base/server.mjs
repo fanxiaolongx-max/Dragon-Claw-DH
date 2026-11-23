@@ -16,6 +16,10 @@ const PAGE_CAP = Number(env.BASE_PAGE_CAP || 1000);
 const MAX_SQL_BYTES = Number(env.BASE_MAX_SQL_BYTES || 1024 * 1024);
 const INIT_SQL = env.INIT_SQL || '/init.sql';
 // 额外的库（自动化测试用，可通过 /_base/reset 清空重建）；主库永远不会被重置
+// 业务数据源（只读）：应用按 datasourceName 查，这里统一落到一个业务库；启动时执行造数脚本（有就执行，表是 DROP 后重建）
+const BUSINESS_SCHEMA = env.BUSINESS_SIM_SCHEMA || 'dh_business';
+const BUSINESS_NAME = env.BUSINESS_DATASOURCE_NAME || 'datafab-demo';
+const BUSINESS_SEED = env.BUSINESS_SEED || '/base/business-seed.sql';
 const TEST_SCHEMAS = String(env.TEST_SCHEMAS || 'dh_test').split(',').map((s) => s.trim()).filter((s) => /^[a-z0-9_]+$/i.test(s) && s !== SCHEMA);
 
 const conn = {
@@ -56,6 +60,18 @@ async function applyInitSql(schema, { reset = false } = {}) {
     return rows[0].n;
 }
 
+async function applyBusinessSeed() {
+    const c = await mysql.createConnection({ ...conn, multipleStatements: true });
+    await c.query(`CREATE DATABASE IF NOT EXISTS \`${BUSINESS_SCHEMA}\` DEFAULT CHARSET utf8mb4`);
+    if (fs.existsSync(BUSINESS_SEED)) {
+        await c.query(`USE \`${BUSINESS_SCHEMA}\``);
+        await c.query(fs.readFileSync(BUSINESS_SEED, 'utf8'));
+    }
+    const [rows] = await c.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [BUSINESS_SCHEMA]);
+    await c.end();
+    console.log(`业务库 ${BUSINESS_SCHEMA}（数据源 ${BUSINESS_NAME}）现有 ${rows[0].n} 张表${fs.existsSync(BUSINESS_SEED) ? '，已按造数脚本重建' : ''}`);
+}
+
 const pools = new Map();
 const poolFor = (schema) => {
     if (!pools.has(schema)) pools.set(schema, mysql.createPool({ ...conn, database: schema, connectionLimit: 6, multipleStatements: false }));
@@ -85,14 +101,18 @@ function sqlFailure(kind, sql, error) {
 
 async function handleBase(pathname, method, body) {
     if (pathname === '/query/datasources') {
-        return { code: 0, message: 'ok', data: { items: [{ id: 2, name: 'netcare-digital-human-app', schema: SCHEMA }] } };
+        return { code: 0, message: 'ok', data: { items: [{ id: 2, name: 'netcare-digital-human-app', schema: SCHEMA }, { id: 3, name: BUSINESS_NAME, schema: BUSINESS_SCHEMA, readOnly: true }] } };
     }
     if (pathname === '/query' || pathname === '/execute') {
         const sql = String(body.sql || '').trim();
         if (!sql) return { code: 400, message: 'sql 不能为空', data: null };
         if (Buffer.byteLength(sql) > MAX_SQL_BYTES) return { code: 413, message: `SQL 超过 ${MAX_SQL_BYTES} 字节`, data: null };
-        const schema = body.schema || SCHEMA;
-        if (schema !== SCHEMA && !TEST_SCHEMAS.includes(schema)) return { code: 400, message: `schema [${schema}] 不属于本应用`, data: null };
+        // 业务数据源：只读，只能查
+        const business = Boolean(body.datasourceName);
+        if (business && pathname !== '/query') return { code: 403, message: '业务数据源只读', data: null };
+        if (business && body.datasourceName !== BUSINESS_NAME) return { code: 404, message: `没有业务数据源 [${body.datasourceName}]`, data: null };
+        const schema = business ? BUSINESS_SCHEMA : (body.schema || SCHEMA);
+        if (!business && schema !== SCHEMA && !TEST_SCHEMAS.includes(schema)) return { code: 400, message: `schema [${schema}] 不属于本应用`, data: null };
         const pool = poolFor(schema);
         const head = sql.replace(/^\(+/, '').slice(0, 12).toUpperCase();
         if (pathname === '/query') {
@@ -187,4 +207,5 @@ const server = http.createServer(async (req, res) => {
 
 await waitForMysql();
 await applyInitSql(SCHEMA);
+await applyBusinessSeed().catch((e) => console.log(`业务库造数失败：${e.message}`));
 server.listen(PORT, '0.0.0.0', () => console.log(`真库基座已启动 :${PORT}  门户 /  应用 ${PREFIX}/  上游 ${UPSTREAM.origin}`));

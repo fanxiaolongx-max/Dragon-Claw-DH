@@ -14,10 +14,19 @@ export const aiDispatcherFor = (settings) => (settings?.verifySsl === true ? aiS
 
 const CONVERSATION_LIST_KEY_PREFIX = 'ai_conversation_list:';
 const DEFAULT_PROFILE_ID = 'default-profile';
+export const IMAGE_TEST_MODEL_RE = /(?:^|[/:_-])(imagen|dall-e|gpt-image|qwen-image|flux|sdxl|stable-diffusion|midjourney|kling|cogview|kolors)(?:[/:_-]|$)|image-generation/i;
+
+export function resolveProfileCategory(raw = {}) {
+    const explicit = String(raw.category || '').trim().toLowerCase();
+    if (explicit === 'image' || explicit === 'chat') return explicit;
+    if (IMAGE_TEST_MODEL_RE.test(String(raw.model || ''))) return 'image';
+    return 'chat';
+}
 
 const DEFAULT_MODEL_SETTINGS = {
     id: DEFAULT_PROFILE_ID,
     name: '默认模型',
+    category: 'chat',
     provider: 'openai',
     anthropicAuthType: 'ANTHROPIC_AUTH_TOKEN',
     apiBaseUrl: config.aiApiBaseUrl,
@@ -70,12 +79,13 @@ function maskSecret(val) {
     return `${s.slice(0, 4)}***${s.slice(-4)}`;
 }
 
-function normalizeProfile(raw = {}) {
+export function normalizeProfile(raw = {}) {
     return {
         ...DEFAULT_MODEL_SETTINGS,
         ...raw,
         id: String(raw.id || crypto.randomUUID()),
         name: String(raw.name || raw.model || '模型配置').trim(),
+        category: resolveProfileCategory(raw),
         provider: String(raw.provider || 'openai').trim().toLowerCase(),
         apiBaseUrl: String(raw.apiBaseUrl || raw.baseUrl || '').trim().replace(/\/+$/, ''),
         model: String(raw.model || 'gpt-4o-mini').trim(),
@@ -140,16 +150,20 @@ export async function listProfiles() {
 
 export async function getActiveSettings() {
     const profiles = await listProfiles();
-    const active = profiles.find((p) => p.isActive) || profiles[0];
+    const active = profiles.find((p) => p.isActive && (p.category || 'chat') !== 'image') || profiles.find((p) => p.isActive) || profiles[0];
     return normalizeProfile(active);
 }
 
 export async function getPublicSettings() {
     const profiles = await listProfiles();
-    const active = profiles.find((p) => p.isActive) || profiles[0];
+    const chatProfiles = profiles.filter((p) => (p.category || 'chat') !== 'image');
+    const imageProfiles = profiles.filter((p) => (p.category || 'chat') === 'image');
+    const active = chatProfiles.find((p) => p.isActive) || profiles.find((p) => p.isActive) || profiles[0];
+    const activeImage = imageProfiles.find((p) => p.isActive) || imageProfiles[0] || null;
     return {
         ...publicProfile(active),
         activeProfileId: active.id,
+        activeImageProfileId: activeImage?.id || '',
         profiles: profiles.map(publicProfile),
         modelAliases: (await kvGet('ai_model_aliases', {})) || {},
         autoSwitchEnabled: await getAutoSwitch(),
@@ -177,13 +191,15 @@ export async function saveProfile(input = {}, idOverride = '') {
     let keepKey = !input.apiKey && baseProfile ? baseProfile.apiKey : (input.apiKey || '');
     if (input.clearApiKey) keepKey = '';
     const activeInput = input.isActive !== undefined ? input.isActive : input.activate;
+    const targetCategory = resolveProfileCategory({ ...(baseProfile || {}), ...input });
     const merged = normalizeProfile({
         ...(baseProfile || {}),
         ...input,
+        category: targetCategory,
         id: targetId,
         apiKey: keepKey === '***' && baseProfile ? baseProfile.apiKey : keepKey,
         apiKeySource: keepKey ? 'stored' : 'none',
-        isActive: activeInput !== undefined ? Boolean(activeInput) : (existing ? existing.isActive : (sourceProfile ? false : existingList.every((x) => !x.isActive || x.id === DEFAULT_PROFILE_ID))),
+        isActive: activeInput !== undefined ? Boolean(activeInput) : (existing ? existing.isActive : (sourceProfile ? false : existingList.filter((x) => (x.category || 'chat') === targetCategory).every((x) => !x.isActive || x.id === DEFAULT_PROFILE_ID))),
     });
     const now = Date.now();
     await upsertRow('ai_settings_profiles', {
@@ -197,7 +213,7 @@ export async function saveProfile(input = {}, idOverride = '') {
     }, ['id']);
     if (merged.isActive) {
         for (const p of existingList) {
-            if (p.id === merged.id || !p.isActive) continue;
+            if (p.id === merged.id || !p.isActive || (p.category || 'chat') !== (merged.category || 'chat')) continue;
             await upsertRow('ai_settings_profiles', {
                 id: p.id,
                 name: p.name,
@@ -214,7 +230,11 @@ export async function saveProfile(input = {}, idOverride = '') {
 
 export async function activateProfile(profileId) {
     const profiles = await listProfiles();
+    const target = profiles.find((p) => p.id === profileId);
+    if (!target) return getPublicSettings();
+    const targetCategory = target.category || 'chat';
     for (const p of profiles) {
+        if ((p.category || 'chat') !== targetCategory) continue;
         const active = p.id === profileId;
         if (Boolean(p.isActive) === active) continue;
         await upsertRow('ai_settings_profiles', {
@@ -294,9 +314,9 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
     };
 }
 
-export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens, timeoutMs = 90_000 } = {}) {
-    const profiles = await listProfiles();
-    const baseSettings = (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
+export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens, timeoutMs = 90_000, overrideSettings = null } = {}) {
+    const profiles = overrideSettings ? [] : await listProfiles();
+    const baseSettings = overrideSettings || (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
     const modelOverride = String(model || '').trim();
     const settings = modelOverride ? { ...baseSettings, model: modelOverride } : baseSettings;
     const provider = settings.provider || 'openai';
@@ -407,6 +427,119 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
             provider: reqSpec.provider,
             latencyMs: Date.now() - started,
             diagnostics: { endpoint: reqSpec.url, causeCode: String(error.cause?.code || error.code || ''), causeMessage: String(error.cause?.message || ''), isTimeout: error.name === 'TimeoutError' || error.name === 'AbortError' },
+        };
+    }
+}
+
+export async function testAiImageConnection({ profileId = '', model = '', timeoutMs = 90_000, overrideSettings = null } = {}) {
+    const profiles = overrideSettings ? [] : await listProfiles();
+    const baseSettings = overrideSettings || (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
+    const modelOverride = String(model || '').trim();
+    const settings = modelOverride ? { ...baseSettings, model: modelOverride } : baseSettings;
+    const provider = settings.provider || 'openai-compatible';
+    if (!hasUsableCredentials(settings)) {
+        return {
+            ok: false,
+            text: '',
+            error: '未配置 API Key，请在左下角头像 →「全局设置」→「AI 助手」中配置模型网关和密钥。',
+            model: settings.model,
+            provider,
+            latencyMs: 0,
+        };
+    }
+    const base = String(settings.apiBaseUrl || (provider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.openai.com/v1'))
+        .trim()
+        .replace(/\/(?:chat\/completions|images\/generations)$/i, '')
+        .replace(/\/+$/, '');
+    const isNativeGemini = provider === 'gemini' && !/\/openai$/i.test(base);
+    const endpoint = isNativeGemini
+        ? `${base}/models/${encodeURIComponent(settings.model)}:generateContent`
+        : `${base}/images/generations`;
+    const headers = {
+        'Content-Type': 'application/json',
+        ...authHeaders(isNativeGemini && !settings.authMode ? { ...settings, authMode: 'x-goog-api-key' } : settings),
+        ...(settings.headers || {}),
+    };
+    const body = isNativeGemini
+        ? {
+            contents: [{ role: 'user', parts: [{ text: 'Draw a minimalist blue geometric circle on white background.' }] }],
+            generationConfig: { responseModalities: ['IMAGE'] },
+        }
+        : {
+            ...(settings.extraBody || {}),
+            model: settings.model,
+            prompt: 'A minimalist blue geometric circle on white background',
+            n: 1,
+            size: '1024x1024',
+        };
+    const started = Date.now();
+    const clampedTimeout = Math.max(1000, Math.min(300_000, Number(timeoutMs) || 90_000));
+    try {
+        const resp = await undiciFetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            dispatcher: aiDispatcherFor(settings),
+            signal: AbortSignal.timeout(clampedTimeout),
+        });
+        const raw = await resp.text();
+        let data = null;
+        try { data = JSON.parse(raw); } catch { data = null; }
+        if (/<!doctype|<html/i.test(raw)) {
+            const preview = raw.replace(/\s+/g, ' ').slice(0, 220);
+            return {
+                ok: false,
+                status: resp.status,
+                error: `生图接口返回了 HTML 页面（HTTP ${resp.status}），并非标准 API。返回片段：${preview}`,
+                model: settings.model,
+                provider,
+                latencyMs: Date.now() - started,
+                diagnostics: { endpoint, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: 'HTML response' },
+            };
+        }
+        if (!resp.ok) {
+            const nested = data?.error && typeof data.error === 'object' ? data.error : null;
+            const message = String(nested?.message || nested?.msg || data?.message || data?.msg || data?.detail || (typeof data?.error === 'string' ? data.error : '') || `生图接口 HTTP ${resp.status}: ${raw.slice(0, 200)}`).trim();
+            const code = String(nested?.code ?? nested?.type ?? data?.code ?? data?.type ?? '').trim();
+            return {
+                ok: false,
+                status: resp.status,
+                error: message,
+                model: settings.model,
+                provider,
+                latencyMs: Date.now() - started,
+                diagnostics: { endpoint, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: message, providerCode: code },
+            };
+        }
+        const firstImg = Array.isArray(data?.data) ? data.data[0] : null;
+        const hasOpenAiImage = Boolean(firstImg?.b64_json || firstImg?.url);
+        const hasGeminiImage = Boolean(data?.candidates?.[0]?.content?.parts?.some((p) => p?.inlineData?.data || p?.inline_data?.data));
+        if (!hasOpenAiImage && !hasGeminiImage) {
+            return {
+                ok: false,
+                status: 502,
+                error: '生图接口未返回有效图片数据',
+                model: settings.model,
+                provider,
+                latencyMs: Date.now() - started,
+                diagnostics: { endpoint, upstreamStatus: resp.status, upstreamStatusText: resp.statusText || '', contentType: resp.headers.get('content-type') || '', rawBody: raw.slice(0, 4000), providerMessage: 'Empty image payload' },
+            };
+        }
+        return {
+            ok: true,
+            text: 'OK (image generated)',
+            model: settings.model,
+            provider,
+            latencyMs: Date.now() - started,
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            error: error.message || '生图接口请求失败',
+            model: settings.model,
+            provider,
+            latencyMs: Date.now() - started,
+            diagnostics: { endpoint, causeCode: String(error.cause?.code || error.code || ''), causeMessage: String(error.cause?.message || ''), isTimeout: error.name === 'TimeoutError' || error.name === 'AbortError' },
         };
     }
 }

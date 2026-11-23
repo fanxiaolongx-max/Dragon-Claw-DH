@@ -1,18 +1,8 @@
 {
   "zh": [
-    "数据探索新增「数据治理」：按可配周期巡检业务库每张表的行数，发现突增、突降、变空、从空变有、新表、表消失或查询开始失败时，同一轮的变化聚合成一条消息发给管理员。",
-    "数据治理可一键收集每张业务表的前 N 行和字段结构；没有数据的表也收，并说明原因（真的没数据、同族分区有数据、无权限、表不存在、超时、视图出错等），可整份导出。",
-    "表目录与字典：以实际查到的业务库为准，按分类展示，支持导入 Excel / CSV / JSON 表字典（中文名、英文名、分类、看板、源表、字段中英文映射），点开单表可改字典、看行数趋势和样例。",
-    "派生表：用只读 SQL 从业务表（或别的派生表）算出新表，结果存应用库；源表变化时自动联动重算。支持一键导入看板 SQL，DataFab（Gauss）写法自动改写成 MySQL。",
-    "内置需求整理好的表字典和看板 SQL，启动时自动导入并生效。",
-    "修复：业务库没有单独配置库名时，NetCare 查表、数据探索统一按数据源当前库查询；业务库字段结构不再只取前 1000 行。"
+    "导入的看板 SQL 里如果用了没定义的表别名（例如写了 t.字段，但 FROM 表后面漏了 t），且只有一张表，会自动补上别名并在改写说明里注明；改写规则更新后，已导入的看板不用重新导入就按新规则计算。"
   ],
   "en": [
-    "Data Explorer adds Data Governance: business tables are row-counted on a configurable schedule, and spikes, drops, tables emptied or filled, new or vanished tables and new query failures found in one run are sent to admins as a single message.",
-    "Data Governance can collect the first N rows and the columns of every business table in one click; empty tables are collected too, with the reason (really empty, data in a sibling partition, no permission, missing table, timeout, broken view), and the whole set can be exported.",
-    "Table catalog and dictionary follow the tables actually found in the business database, grouped by category; import an Excel / CSV / JSON dictionary (Chinese and English names, category, dashboard, upstream tables, column mappings) and open any table to edit it, see its row-count trend and sample rows.",
-    "Derived tables: compute a new table from business tables (or other derived tables) with read-only SQL, stored in the app database and recomputed when the sources change. Dashboard SQL can be imported in bulk, with DataFab (Gauss) syntax rewritten to MySQL automatically.",
-    "Ships the prepared table dictionary and dashboard SQL, imported automatically on startup.",
-    "Fix: without an explicit business schema, NetCare table tools and Data Explorer query the data source's current database; business columns are no longer cut off after 1000 rows."
+    "Imported dashboard SQL that uses an undefined table alias (for example t.column without the alias after the only FROM table) now gets the alias added automatically, noted in the rewrite notes; imported dashboards follow updated rewrite rules without being re-imported."
   ]
 }
