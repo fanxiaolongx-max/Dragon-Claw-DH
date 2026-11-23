@@ -62,7 +62,13 @@ a.act.primary { color: #fff; }
 .gov-cats button.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .gov-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .gov-main input[type=search] { flex: 1; min-width: 220px; max-width: 420px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; }
+.gov-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .gov-filters { align-self: flex-start; flex-wrap: wrap; }
+.gov-dict-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink2); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s, color .15s; }
+.gov-dict-toggle:hover { background: var(--soft); color: var(--ink); }
+.gov-dict-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.gov-dict-toggle i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .45; flex: none; }
+.gov-dict-toggle[aria-pressed="true"] i { opacity: 1; }
 .gov-list { max-height: 60vh; }
 
 .gov-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }

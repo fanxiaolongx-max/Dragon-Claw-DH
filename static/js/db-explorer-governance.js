@@ -50,7 +50,7 @@
     const SAMPLE = { ok: '已收样例', empty: '无数据', error: '收集失败', inconsistent: '取样为空' };
     const REFRESH = { linked: '源表变化即联动', interval: '按间隔', manual: '只手动' };
 
-    const state = { tab: 'anomalies', status: null, catalog: null, derived: [], category: '', filter: 'all', q: '', poll: 0, shown: false };
+    const state = { tab: 'anomalies', status: null, catalog: null, derived: [], category: '', filter: 'all', dictOnly: false, q: '', poll: 0, shown: false };
     let root;
 
     function mount() {
@@ -185,6 +185,7 @@
     function filtered() {
         const q = state.q.trim().toLowerCase();
         return (state.catalog?.tables || []).filter((t) => {
+            if (state.dictOnly && !t.inDictionary) return false;
             if (state.category && t.category !== state.category) return false;
             if (state.filter === 'anomaly' && t.status !== 'anomaly') return false;
             if (state.filter === 'empty' && t.status !== 'empty') return false;
@@ -197,18 +198,53 @@
         });
     }
 
+    function catalogCategories(view) {
+        if (!state.dictOnly) return view.categories;
+        const map = new Map();
+        for (const t of view.tables) {
+            if (!t.inDictionary) continue;
+            const name = t.category || '未分类';
+            let entry = map.get(name);
+            if (!entry) {
+                entry = { name, total: 0, anomalies: 0, errors: 0, sub: {} };
+                map.set(name, entry);
+            }
+            entry.total += 1;
+            if (t.status === 'anomaly') entry.anomalies += 1;
+            else if (t.status === 'error') entry.errors += 1;
+            if (t.subCategory) entry.sub[t.subCategory] = (entry.sub[t.subCategory] || 0) + 1;
+        }
+        return view.categories.map((c) => map.get(c.name)).filter(Boolean);
+    }
+
     function renderCatalog(body) {
         const view = state.catalog;
+        const dictCount = view.tables.filter((t) => t.inDictionary).length;
+        const visibleCats = catalogCategories(view);
+        if (state.category && !visibleCats.some((c) => c.name === state.category)) state.category = '';
+        const totalForCats = state.dictOnly ? dictCount : view.tables.length;
         const cats = el('nav', { class: 'gov-cats' }, [
-            el('button', { type: 'button', class: !state.category ? 'is-on' : '', onclick: () => { state.category = ''; renderTab(); } }, [el('span', { text: '全部分类' }), el('b', { text: fmt(view.tables.length) })]),
-            ...view.categories.map((c) => el('button', { type: 'button', class: state.category === c.name ? 'is-on' : '', title: Object.entries(c.sub).map(([k, n]) => `${k} ${n}`).join('\n'), onclick: () => { state.category = c.name; renderTab(); } }, [
+            el('button', { type: 'button', class: !state.category ? 'is-on' : '', onclick: () => { state.category = ''; renderTab(); } }, [el('span', { text: '全部分类' }), el('b', { text: fmt(totalForCats) })]),
+            ...visibleCats.map((c) => el('button', { type: 'button', class: state.category === c.name ? 'is-on' : '', title: Object.entries(c.sub).map(([k, n]) => `${k} ${n}`).join('\n'), onclick: () => { state.category = c.name; renderTab(); } }, [
                 el('span', { text: c.name }),
                 c.anomalies ? el('i', { class: 'dot bad', title: `${c.anomalies} 张异常` }) : c.errors ? el('i', { class: 'dot warn', title: `${c.errors} 张查询失败` }) : null,
                 el('b', { text: fmt(c.total) }),
             ])),
         ]);
         const search = el('input', { type: 'search', placeholder: '搜索英文表名、中文名、英文名、说明', value: state.q, oninput: (e) => { state.q = e.target.value; drawList(); } });
-        const filters = el('div', { class: 'tabs gov-filters' }, [['all', '全部'], ['anomaly', '异常'], ['empty', '空表'], ['error', '查询失败'], ['nodict', '未入字典'], ['noname', '缺中文名'], ['derived', '有派生'], ...(view.stats.missing ? [['missing', `库里没有 ${view.stats.missing}`]] : [])].map(([id, label]) => el('button', { type: 'button', 'aria-selected': String(state.filter === id), onclick: () => { state.filter = id; renderTab(); } }, label)));
+        const filters = el('div', { class: 'tabs gov-filters' }, [['all', '全部'], ['anomaly', '异常'], ['empty', '空表'], ['error', '查询失败'], ['nodict', '未入字典'], ['noname', '缺中文名'], ['derived', '有派生'], ...(view.stats.missing ? [['missing', `库里没有 ${view.stats.missing}`]] : [])].map(([id, label]) => el('button', { type: 'button', 'aria-selected': String(state.filter === id), onclick: () => { state.filter = id; if (id === 'nodict') state.dictOnly = false; renderTab(); } }, label)));
+        const dictToggle = el('button', {
+            type: 'button',
+            class: 'gov-dict-toggle',
+            'aria-pressed': String(state.dictOnly),
+            title: '一键过滤掉所有「非字典」表，只看已在表字典中登记的表（可与其他筛选条件组合）',
+            onclick: () => {
+                state.dictOnly = !state.dictOnly;
+                if (state.dictOnly && state.filter === 'nodict') state.filter = 'all';
+                renderTab();
+            },
+        }, [el('i'), el('span', { text: `只看字典表 (${fmt(dictCount)}/${fmt(view.tables.length)})` })]);
+        const filterRow = el('div', { class: 'gov-filter-row' }, [filters, dictToggle]);
         const fileInput = el('input', { type: 'file', accept: '.xlsx,.csv,.json,.txt', hidden: true, onchange: (e) => importDictionary(e.target.files[0], e.target) });
         const tools = el('div', { class: 'bar' }, [search, el('span', { class: 'grow' }),
             el('button', { class: 'act', type: 'button', title: '支持 Excel / CSV / JSON；表头自动识别：表名、中文名、英文名、分类、子分类、分层、说明、字段名、字段中文名', onclick: () => fileInput.click() }, '导入表字典'),
@@ -233,7 +269,7 @@
             if (list.length > 800) listBox.append(el('p', { class: 'gov-note', text: `只显示前 800 张，共 ${list.length} 张，请用搜索缩小范围` }));
         }
         drawList();
-        body.replaceChildren(el('div', { class: 'gov-catalog' }, [cats, el('div', { class: 'gov-main' }, [tools, filters, listBox])]));
+        body.replaceChildren(el('div', { class: 'gov-catalog' }, [cats, el('div', { class: 'gov-main' }, [tools, filterRow, listBox])]));
     }
 
     async function importDictionary(file, input) {
