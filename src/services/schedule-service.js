@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { BusinessError, NotFoundError } from '../core/errors.js';
 import { pushLog } from '../core/log-ring.js';
 import { resolveAdmin } from '../core/access.js';
-import { selectTable, insertRow, updateRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
+import { selectTable, insertRow, updateRows, deleteRows, sqlVal, parseJsonCol } from '../dao/scoped.js';
 import * as parser from '../agent/schedule/parser.js';
 import { runAgent } from '../agent/loop.js';
 import { listProfiles, getSession, saveSession, appendMessage, getAutoSwitch, addUsage, hasUsableCredentials } from './ai-service.js';
@@ -64,6 +64,37 @@ export async function listSchedules(owner, { since = '' } = {}) {
     return { items, active: rows.filter((r) => ['active', 'running'].includes(r.status)).length, serverTime: new Date().toISOString() };
 }
 
+export async function schedulePage(owner, { page, q, status }) {
+    if (!Number.isSafeInteger(page) || page < 1 || page > 10000000) throw new BusinessError('页码无效');
+    const filters = [`owner_id = ${sqlVal(owner)}`];
+    if (status) filters.push(`status = ${sqlVal(status)}`);
+    if (q) filters.push(`LOCATE(LOWER(${sqlVal(q)}), LOWER(instruction)) > 0`);
+    const rank = { running: 0, active: 1 };
+    const rows = await selectTable('agent_schedules', {
+        whereSql: filters.join(' AND '), limit: 9, offset: (page - 1) * 8,
+        orderBySql: "CASE status WHEN 'running' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, CASE WHEN status = 'active' THEN next_run_at END, updated_at DESC, id",
+        memFilter: r => r.owner_id === owner && (!status || r.status === status) && (!q || r.instruction.toLowerCase().includes(q.toLowerCase())),
+        memSort: (a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2) || (a.status === 'active' ? a.next_run_at - b.next_run_at : 0) || b.updated_at - a.updated_at || a.id.localeCompare(b.id),
+    });
+    return { items: rows.slice(0, 8).map(toItem), hasMore: rows.length > 8 };
+}
+
+function ownedSchedule(id, owner) {
+    return { whereSql: `id = ${sqlVal(id)} AND owner_id = ${sqlVal(owner)}`, memFilter: r => r.id === id && r.owner_id === owner, limit: 1 };
+}
+
+export async function removeSchedule(id, owner) {
+    const scope = ownedSchedule(id, owner);
+    const changed = await deleteRows('agent_schedules', {
+        whereSql: scope.whereSql + " AND status <> 'running'",
+        memFilter: r => scope.memFilter(r) && r.status !== 'running',
+    });
+    if (!changed) {
+        if (!(await selectTable('agent_schedules', scope)).length) throw new NotFoundError('定时任务不存在');
+        throw new BusinessError('任务正在执行', 409);
+    }
+}
+
 export async function createSchedule({ owner, text, sessionId = '', timezone = '', modelId = '' }) {
     if (!owner || owner === 'anonymous') throw new BusinessError('需要先登录数字人门户才能创建定时任务', 401);
     let parsed;
@@ -102,13 +133,14 @@ export async function createSchedule({ owner, text, sessionId = '', timezone = '
 }
 
 export async function cancelSchedule(id, owner) {
-    const row = (await rowsOf(owner)).find((r) => r.id === String(id));
+    const [row] = await selectTable('agent_schedules', ownedSchedule(id, owner));
     if (!row) throw new NotFoundError('定时任务不存在');
     if (row.status !== 'active') throw new BusinessError('该任务已结束，无需取消');
-    await updateRows('agent_schedules', { status: 'cancelled', next_run_at: null, updated_at: Date.now() }, {
+    const changed = await updateRows('agent_schedules', { status: 'cancelled', next_run_at: null, updated_at: Date.now() }, {
         whereSql: `\`id\` = ${sqlVal(row.id)} AND \`owner_id\` = ${sqlVal(owner)} AND \`status\` = 'active'`,
         memFilter: (r) => r.id === row.id && r.owner_id === owner && r.status === 'active',
     });
+    if (!changed) throw new BusinessError('任务状态已变更', 409);
     return toItem({ ...row, status: 'cancelled', next_run_at: null, updated_at: Date.now() });
 }
 
@@ -120,24 +152,48 @@ function contextNote(item, firedAt) {
     ].join('\n');
 }
 
-async function execute(row, firedAt) {
+async function execute(row, firedAt, manual = false) {
     const item = toItem(row);
-    const next = row.kind === 'recurring' ? parser.nextRecurring(item.rule, firedAt, item.timezone) : null;
+    let next = null;
+    if (row.kind === 'recurring' && row.status === 'active') {
+        next = manual && Number(row.next_run_at) > firedAt.getTime() ? new Date(Number(row.next_run_at)) : parser.nextRecurring(item.rule, firedAt, item.timezone);
+    }
     // 抢占：只有把 next_run_at 从旧值改掉的那个实例才执行
+    const started = Date.now();
     const claimed = await updateRows('agent_schedules', {
         next_run_at: next ? next.getTime() : null,
-        status: row.kind === 'once' ? 'running' : 'active',
-        updated_at: Date.now(),
+        status: 'running',
+        updated_at: started,
     }, {
-        whereSql: `\`id\` = ${sqlVal(row.id)} AND \`status\` = 'active' AND \`next_run_at\` = ${Number(row.next_run_at)}`,
-        memFilter: (r) => r.id === row.id && r.status === 'active' && Number(r.next_run_at) === Number(row.next_run_at),
+        whereSql: `\`id\` = ${sqlVal(row.id)} AND \`status\` = ${sqlVal(row.status)} AND \`next_run_at\` ${row.next_run_at == null ? 'IS NULL' : '= ' + Number(row.next_run_at)} AND run_count = ${Number(row.run_count)}`,
+        memFilter: (r) => r.id === row.id && r.status === row.status && Number(r.next_run_at) === Number(row.next_run_at) && Number(r.run_count) === Number(row.run_count),
     });
     if (!claimed) return { skipped: true };
 
+    const completion = finishRun(row, item, firedAt, started);
+    if (!manual) return completion;
+    completion.catch(error => pushLog({ level: 'ERROR', category: 'SCHEDULE', message: error.message }));
+    return { item: { ...item, status: 'running', nextRunAt: next?.toISOString() || null } };
+}
+
+export async function runScheduleNow(id, owner, expectedCount, expectedStatus) {
+    const [row] = await selectTable('agent_schedules', ownedSchedule(id, owner));
+    if (!row) throw new NotFoundError('定时任务不存在');
+    if (row.status === 'running' || row.status !== expectedStatus || Number(row.run_count) !== expectedCount) throw new BusinessError('任务状态已变更，请刷新', 409);
+    const result = await execute(row, new Date(), true);
+    if (result.skipped) throw new BusinessError('任务状态已变更，请刷新', 409);
+    return result;
+}
+
+async function finishRun(row, item, firedAt, started) {
+    const nextStatus = terminal => {
+        if (row.status === 'cancelled') return 'cancelled';
+        return row.status === 'active' && row.kind === 'recurring' ? 'active' : terminal;
+    };
     let sessionId = item.sessionId;
     const finish = async (patch) => updateRows('agent_schedules', { ...patch, session_id: sessionId || '', last_run_at: Date.now(), run_count: (Number(row.run_count) || 0) + 1, updated_at: Date.now() }, {
-        whereSql: `\`id\` = ${sqlVal(row.id)}`,
-        memFilter: (r) => r.id === row.id,
+        whereSql: `id = ${sqlVal(row.id)} AND status = 'running' AND updated_at = ${started}`,
+        memFilter: r => r.id === row.id && r.status === 'running' && Number(r.updated_at) === started,
     });
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), RUN_TIMEOUT_MS);
@@ -167,14 +223,14 @@ async function execute(row, firedAt) {
             unattended: true,
         });
         await appendMessage(sessionId, 'model', res.text, { modelName: res.model?.model || settings.model, ...(res.events.length ? { events: res.events } : {}) });
-        await finish({ last_status: 'ok', last_error: '', last_reply: res.text.slice(0, 600), status: row.kind === 'once' ? 'done' : 'active' });
+        await finish({ last_status: 'ok', last_error: '', last_reply: res.text.slice(0, 600), status: nextStatus('done') });
         addUsage(res.usage, res.model || settings);
         await pushAlert(row.owner_id, { type: 'system', severity: 'info', title: `定时任务已完成：${item.instruction.slice(0, 40)}`, message: res.text.slice(0, 600), actor: 'schedule', objectType: 'schedule', objectId: row.id });
         pushLog({ level: 'INFO', category: 'SCHEDULE', userId: row.owner_id, message: `定时任务 ${row.id} 执行完成` });
         return { ran: true };
     } catch (error) {
         const message = abort.signal.aborted ? '执行超时（5 分钟）' : String(error.message || error);
-        await finish({ last_status: 'failed', last_error: message.slice(0, 500), status: row.kind === 'once' ? 'failed' : 'active' }).catch(() => {});
+        await finish({ last_status: 'failed', last_error: message.slice(0, 500), status: nextStatus('failed') }).catch(() => {});
         await pushAlert(row.owner_id, { type: 'system', severity: 'warn', title: `定时任务执行失败：${item.instruction.slice(0, 40)}`, message, actor: 'schedule', objectType: 'schedule', objectId: row.id });
         pushLog({ level: 'WARN', category: 'SCHEDULE', userId: row.owner_id, message: `定时任务 ${row.id} 执行失败：${message}` });
         return { failed: true, error: message };
@@ -185,6 +241,13 @@ async function execute(row, firedAt) {
 
 /** 执行所有到期的任务（每次最多 5 个，避免一次占用太久） */
 export async function runDueSchedules(now = new Date()) {
+    const stale = now.getTime() - RUN_TIMEOUT_MS - 60_000;
+    for (const resume of [false, true]) {
+        await updateRows('agent_schedules', { status: resume ? 'active' : 'failed', last_status: 'failed', last_error: '执行过程中服务重启', updated_at: now.getTime() }, {
+            whereSql: `status = 'running' AND next_run_at IS ${resume ? 'NOT NULL' : 'NULL'} AND updated_at < ${stale}`,
+            memFilter: r => r.status === 'running' && (r.next_run_at != null) === resume && r.updated_at < stale,
+        });
+    }
     const due = await selectTable('agent_schedules', {
         whereSql: `\`status\` = 'active' AND \`next_run_at\` IS NOT NULL AND \`next_run_at\` <= ${now.getTime()}`,
         orderBySql: '`next_run_at` ASC',

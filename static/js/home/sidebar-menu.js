@@ -12,6 +12,11 @@
         ['promotions', 'compass', '平台推广', 'Promotions']
     ];
     const defaults = () => ({ primary: entries.slice(0, 5).map(item => item[0]), more: entries.slice(5).map(item => item[0]) });
+    // 数字人 Web 版还没有后端支撑的入口（与 css/dh-web-trim.css 一致）：导航里不论放在哪组都隐藏，
+    // 自定义窗口里单独列在“开发中”，置灰、不能拖动；保存时原样带回它们在服务器上的位置。
+    const unavailable = new Set(document.documentElement.classList.contains('dh-web') ? ['channels', 'library', 'opsDrafts', 'links', 'promotions'] : []);
+    const usable = layoutValue => ({ primary: layoutValue.primary.filter(id => !unavailable.has(id)), more: layoutValue.more.filter(id => !unavailable.has(id)) });
+    const withUnavailable = value => ({ primary: [...value.primary, ...layout.primary.filter(id => unavailable.has(id))], more: [...value.more, ...layout.more.filter(id => unavailable.has(id))] });
     const L = (zh, en) => window.ToolsI18n?.getLanguage?.() === 'en-US' ? en : zh;
     const label = id => { const item = entries.find(item => item[0] === id); return L(item[2], item[3]); };
     const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -63,6 +68,7 @@
             button.classList.add('v2-pop-item'); button.setAttribute('role', 'menuitem');
             stash.append(button);
         });
+        unavailable.forEach(id => { const button = buttons.get(id); if (button) { button.hidden = true; button.style.display = 'none'; } });
         const inboxButton = nav.querySelector('#v2InboxBtn');
         if (inboxButton) {
             // Keep extension items anchored after the user's primary order instead of letting applyLayout strand them at index 1.
@@ -102,6 +108,16 @@
                         <button type="button" data-menu-move="group" aria-label="${esc(label(id) + ' · ' + (group === 'primary' ? L('移到更多', 'Move to More') : L('移到一级菜单', 'Move to main menu')))}">${group === 'primary' ? '−' : '+'}</button>
                     </span>
                     <button type="button" class="v2-menu-handle" data-menu-handle aria-label="${esc(label(id) + ' · ' + L('拖动排序，方向键调整位置', 'Drag to reorder, or use arrow keys'))}">⠿</button>
+                </div>`;
+            }).join('');
+        }
+        const off = overlay.querySelector('[data-menu-unavailable]');
+        if (off) {
+            off.hidden = !unavailable.size;
+            off.querySelector('.v2-menu-list').innerHTML = [...unavailable].map(id => {
+                const item = entries.find(item => item[0] === id);
+                return `<div class="v2-menu-row is-unavailable" aria-disabled="true" title="${esc(L('开发中，暂未开放', 'In development'))}">
+                    <span class="v2-ico" data-icon="${item[1]}"></span><span class="v2-menu-label">${esc(label(id))}</span><small>${esc(L('开发中', 'Coming soon'))}</small>
                 </div>`;
             }).join('');
         }
@@ -209,6 +225,7 @@
             <fieldset aria-label="${L('菜单配置', 'Menu layout')}">
                 <section><h3>${L('一级菜单', 'Main menu')}</h3><div class="v2-menu-row is-fixed"><span class="v2-ico" data-icon="chatPlus"></span><span class="v2-menu-label">${L('新建对话', 'New chat')}</span><small>${L('固定', 'Fixed')}</small></div><div class="v2-menu-list" data-menu-list="primary"></div></section>
                 <section><h3>${L('更多', 'More')}</h3><div class="v2-menu-list" data-menu-list="more"></div></section>
+                <section data-menu-unavailable hidden><h3>${L('开发中', 'In development')}</h3><div class="v2-menu-list"></div></section>
             </fieldset><div class="v2-menu-status" role="status" aria-live="polite" data-menu-status></div>
             <footer><button type="button" data-menu-reset>${L('恢复默认', 'Reset')}</button><span></span><button type="button" data-menu-close>${L('取消', 'Cancel')}</button><button type="button" class="is-primary" data-menu-save>${L('保存', 'Save')}</button></footer>
         </section>`;
@@ -216,7 +233,7 @@
         overlay.addEventListener('click', event => {
             if (dragging || suppressDragClick) { event.preventDefault(); return; }
             if (event.target === overlay || event.target.closest('[data-menu-close]')) { close(); return; }
-            if (event.target.closest('[data-menu-reset]') && !busy) { draft = defaults(); renderLists(); return; }
+            if (event.target.closest('[data-menu-reset]') && !busy) { draft = usable(defaults()); renderLists(); return; }
             const action = event.target.closest('[data-menu-move]');
             if (action && !busy) move(action.closest('[data-menu-id]').dataset.menuId, action.dataset.menuMove);
             if (event.target.closest('[data-menu-save]')) void save();
@@ -272,11 +289,11 @@
         window.HomeShell?.closePop();
         if (overlay) return;
         createDialog();
-        draft = structuredClone(layout); renderLists();
+        draft = usable(layout); renderLists();
         overlay.querySelector('[data-menu-close]').focus();
         if (!loaded) {
             setBusy(true); status(L('正在读取服务器配置…', 'Loading your saved layout…'));
-            try { await load(); draft = structuredClone(layout); renderLists(); status(''); }
+            try { await load(); draft = usable(layout); renderLists(); status(''); }
             catch { status(L('读取失败，请关闭后重新打开重试。', 'Could not load. Close and reopen to retry.'), true); }
             finally { setBusy(false); }
         }
@@ -285,7 +302,7 @@
         if (busy || !loaded || dragging) return;
         setBusy(true); status(L('正在保存…', 'Saving…'));
         try {
-            layout = await request('PUT', draft); applyLayout();
+            layout = await request('PUT', withUnavailable(draft)); applyLayout();
             setBusy(false); close();
             window.showToast?.(L('菜单配置已保存到服务器', 'Menu layout saved to the server'));
         } catch { setBusy(false); status(L('保存失败，调整仍保留在此窗口，请重试。', 'Could not save. Your changes are still here. Try again.'), true); }

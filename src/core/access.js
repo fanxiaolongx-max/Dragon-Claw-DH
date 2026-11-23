@@ -112,6 +112,8 @@ const USER_WRITES = [
     ['POST', /^\/custom-tools$/], // 普通用户发布的工具只有自己可见
     ['POST', /^\/custom-tools\/[^/]+\/bridge$/], // 自定义 HTML 工具只读数据桥（路由内校验可见性与只读 SQL）
     ['POST', /^\/agent-workspace\/approvals\/[^/]+$/], // 只能批自己发起的（路由内校验）
+    ['POST', /^\/ai\/schedules\/[^/]+\/run$/],
+    ['DELETE', /^\/ai\/schedules\/[^/]+\/record$/],
     ['*', /^\/ai\/schedules(?:\/[^/]+)?$/], // 定时任务只属于创建者（服务内校验）
     ['DELETE', /^\/custom-tools\/[^/]+$/], // 路由内校验归属
     ['PATCH', /^\/custom-tools\/[^/]+\/name$/], // 改名：路由内校验归属

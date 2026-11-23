@@ -37,7 +37,7 @@ import { filterSkillsForUser } from '../services/distribution-service.js';
 import { getAutoSwitch, hasUsableCredentials } from '../services/ai-service.js';
 import { formatTestFailure } from '../services/ai-test-diagnostics.js';
 import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
-import { listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
+import { schedulePage, removeSchedule, runScheduleNow, listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
 import {
     sessionAccess,
@@ -380,7 +380,9 @@ export async function aiRoutes(fastify) {
     });
 
     // 定时任务：只能查看 / 创建 / 取消自己的
-    fastify.get('/schedules', async (req) => listSchedules(ownerOf(req), { since: typeof req.query?.since === 'string' ? req.query.since : '' }));
+    fastify.get('/schedules', async (req) => req.query?.page !== undefined
+        ? schedulePage(ownerOf(req), { page: Number(req.query.page), q: String(req.query.q || '').trim().slice(0, 4000), status: String(req.query.status || '') })
+        : listSchedules(ownerOf(req), { since: typeof req.query?.since === 'string' ? req.query.since : '' }));
     fastify.post('/schedules', async (req, reply) => reply.code(201).send({ item: await createSchedule({
         owner: ownerOf(req),
         text: String(req.body?.text || '').slice(0, 4200),
@@ -388,6 +390,11 @@ export async function aiRoutes(fastify) {
         timezone: typeof req.body?.timezone === 'string' ? req.body.timezone.slice(0, 64) : '',
         modelId: req.body?.modelId,
     }) }));
+    fastify.post('/schedules/:id/run', async (req, reply) => reply.code(202).send(await runScheduleNow(req.params.id, ownerOf(req), req.body?.runCount, req.body?.status)));
+    fastify.delete('/schedules/:id/record', async (req, reply) => {
+        await removeSchedule(req.params.id, ownerOf(req));
+        return reply.code(204).send();
+    });
     fastify.delete('/schedules/:id', async (req) => ({ item: await cancelSchedule(req.params.id, ownerOf(req)) }));
 
     // 增强提示词：兼容前端 { text, modelId, uiLanguage } 与旧版 { prompt }，返回 { prompt, enhanced, changed }

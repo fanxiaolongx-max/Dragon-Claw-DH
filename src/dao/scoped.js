@@ -145,9 +145,12 @@ async function selectRaw(table, {
     whereSql = '',
     orderBySql = '',
     limit = 1000,
+    offset,
     memFilter = null,
     memSort = null,
 } = {}) {
+    if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > PAGE)) throw new DatabaseError('分页参数无效');
+    if (isMemoryMode() && offset !== undefined) return memSelect(table, memFilter, { orderBy: memSort, limit: offset + limit }).slice(offset);
     if (isMemoryMode()) {
         return memSelect(table, memFilter, { orderBy: memSort, limit });
     }
@@ -155,6 +158,7 @@ async function selectRaw(table, {
     const whereClause = whereSql ? ` WHERE ${whereSql}` : '';
     const orderClause = orderBySql ? ` ORDER BY ${orderBySql}` : '';
     const sql = `SELECT ${cols} FROM ${ident(table)}${whereClause}${orderClause}`;
+    if (offset !== undefined) return queryAppSchema(`${sql} LIMIT ${limit} OFFSET ${offset}`, limit);
     const want = Number(limit) || PAGE;
     if (want < PAGE) return queryAppSchema(sql, want);
     // 调用方要“全部”或 ≥ 单页上限：首页拿满就继续翻页，避免超过 1000 行时被静默截断

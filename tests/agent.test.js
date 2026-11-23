@@ -538,6 +538,23 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.equal(daily.kind, 'recurring');
         assert.equal((await fetch(`${url}/api/ai/schedules/${daily.id}`, { method: 'DELETE', headers: as('alice') })).status, 404);
         assert.equal((await (await fetch(`${url}/api/ai/schedules/${daily.id}`, { method: 'DELETE', headers: as('bob') })).json()).item.status, 'cancelled');
+        const findPage = async () => (await (await fetch(`${url}/api/ai/schedules?page=1&q=待办&status=cancelled`, { headers: as('bob') })).json()).items;
+        assert.deepEqual((await findPage()).map(item => item.id), [daily.id]);
+        const runOnce = () => fetch(`${url}/api/ai/schedules/${daily.id}/run`, { method: 'POST', headers: json(as('bob')), body: JSON.stringify({ status: 'cancelled', runCount: 0 }) });
+        mock.aiScript.push({ text: '待办已汇总。' });
+        assert.equal((await runOnce()).status, 202);
+        assert.equal((await runOnce()).status, 409);
+        let completed;
+        for (let attempt = 0; attempt < 100; attempt++) {
+            [completed] = await findPage();
+            if (completed?.runCount === 1) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(completed?.nextRunAt, null);
+        assert.equal(completed?.runCount, 1);
+        assert.equal((await fetch(`${url}/api/ai/schedules/${daily.id}/record`, { method: 'DELETE', headers: as('alice') })).status, 404);
+        assert.equal((await fetch(`${url}/api/ai/schedules/${daily.id}/record`, { method: 'DELETE', headers: as('bob') })).status, 204);
+        assert.deepEqual(await findPage(), []);
         const bad = await fetch(`${url}/api/ai/schedules`, { method: 'POST', headers: json(as('bob')), body: JSON.stringify({ text: '有空的时候 看看' }) });
         assert.equal(bad.status, 400);
         assert.match((await bad.json()).error, /没认出时间/);
