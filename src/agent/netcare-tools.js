@@ -145,6 +145,20 @@ async function findTables(args) {
     return { content: lines.join('\n'), summary: `找到 ${scored.length} 张表` };
 }
 
+/** 系统提示词里的业务表速查：中文叫法 / 看板 → 表名（只列带来源标识的表），让模型知道这些说法指的是业务库 */
+export async function businessTableHints(max = 60) {
+    const index = await dictIndex();
+    const items = [];
+    for (const [key, info] of index) {
+        if (!info.origin) continue;
+        const d = info.entry || {};
+        const label = [d.nameCn, d.category && d.category !== d.nameCn ? d.category : ''].filter(Boolean).join('/');
+        items.push(`${d.key || key}${label ? `=${label}` : ''}`);
+        if (items.length >= max) break;
+    }
+    return items.join('；');
+}
+
 // ── 看板指标：数据治理里的派生表（看板 SQL 按源表变化联动重算，结果存在应用库） ──
 async function matchBoards(words, limit) {
     const { listDerived, boardTitle } = await dataDict();

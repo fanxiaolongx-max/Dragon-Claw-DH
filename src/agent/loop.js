@@ -9,6 +9,7 @@ import { selectMemoriesForPrompt } from '../services/memory-service.js';
 import { compactLoopMessages } from '../services/conversation-service.js';
 import { windowFor, compactThreshold, estimateRequest, fitMessages } from './context-stats.js';
 import { followupPrompt } from '../services/followup-service.js';
+import { businessTableHints } from './netcare-tools.js';
 import { streamModel } from './provider.js';
 import { redactText } from './redact.js';
 import { requestApproval } from './approvals.js';
@@ -25,7 +26,7 @@ const KEEP_IMAGE_MESSAGES = 2;
 const MAX_COMPACTIONS = 3;
 const MAX_EMPTY_NUDGES = 2;
 
-function buildSystemPrompt({ identity, language, catalog, loaded, extra, memories, summary, historyEvidence = '', followups = '', isShared = false, availableFiles = [], sharedCapabilities = null, netcareSelected = false }) {
+function buildSystemPrompt({ identity, language, catalog, loaded, extra, memories, summary, historyEvidence = '', followups = '', isShared = false, availableFiles = [], sharedCapabilities = null, netcareSelected = false, businessHints = '' }) {
     const en = String(language || '').startsWith('en');
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -68,7 +69,7 @@ ${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@n
     if (hasBusinessDatasource()) {
         parts.push(`## NetCare 业务数据说明
 平台给本应用授权了业务库（${config.businessSchemaExplicit ? config.businessSchema : '数据源当前库'}，只读；以实际查到的表为准）。
-涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
+涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。${businessHints ? `\n业务库表速查（中文叫法 / 看板 → 表名；用户这样说时就是指业务库的这些表，直接用 netcare_tables 查，不要反问是哪个库）：${businessHints}` : ''}`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录
@@ -148,7 +149,8 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         ? '用户询问个人记忆时使用 memory 工具。出处用 source 和已有编号（缺编号先 list）；保存、更正或忘记必须以工具实际结果为准。' : '';
     const demoNote = readOnlyDemo ? '本轮是新手引导的只读演示。基于已入库的报表和催办快照给出简明结果，只准备催办草稿，不创建或发送消息。' : '';
     const availableFiles = [...new Set(history.flatMap((m) => [...String(m?.content || '').matchAll(/uploads\/[a-z0-9]{8,40}\/[^)>\s\]]+/gi)].map((x) => x[0])))].slice(0, 24);
-    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, historyEvidence, followups, isShared: Boolean(isShared), sharedCapabilities, availableFiles, netcareSelected: loaded.some((s) => s.id === 'netcare-data'), extra: [String(settings.systemPrompt || '').trim(), demoNote, memoryGuide].filter(Boolean).join('\n\n') });
+    const businessHints = hasBusinessDatasource() ? await businessTableHints().catch(() => '') : '';
+    const system = buildSystemPrompt({ identity, language, catalog, loaded, memories, summary, historyEvidence, followups, isShared: Boolean(isShared), sharedCapabilities, availableFiles, netcareSelected: loaded.some((s) => s.id === 'netcare-data'), businessHints, extra: [String(settings.systemPrompt || '').trim(), demoNote, memoryGuide].filter(Boolean).join('\n\n') });
     let messages = history.map((m, i) => ({
         role: m.role === 'assistant' ? 'assistant' : 'user',
         content: i === history.length - 1 ? String(m.content || '') : clip(String(m.content || ''), MAX_HISTORY_MSG),
