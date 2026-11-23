@@ -191,7 +191,10 @@ test('派生表：只读 SQL 计算、识别源表，源表变化后联动重算
     assert.match(after.lastReason, /源表有变化：tickets/);
 
     const view = await dict.catalogView();
-    assert.deepEqual(view.tables.find((x) => x.key === 'tickets').derivedBy.map((d) => d.name), ['ticket_by_region']);
+    const tk = view.tables.find((x) => x.key === 'tickets');
+    assert.deepEqual(tk.derivedBy.map((d) => d.name), ['ticket_by_region']);
+    assert.deepEqual([tk.origin, tk.reprocess], ['datafab', true], '被 SQL 计算引用的源表 = DataFab + 二次加工');
+    assert.equal(view.stats.reprocess >= 1, true);
 });
 
 test('派生表两层：看板 SQL 引用新表，展开成 CTE 在业务库只读执行；循环引用被拒', async () => {
@@ -248,9 +251,23 @@ test('接口：一键体检后台执行、状态可查、表字典可导出', as
     assert.ok(status.state.nextCheckAt);
     const settings = await app.inject({ method: 'PUT', url: '/api/db-explorer/governance/settings', payload: { intervalMinutes: 5, collectRows: 500 } });
     assert.deepEqual([JSON.parse(settings.body).intervalMinutes, JSON.parse(settings.body).collectRows], [15, 200], '周期和行数有上下限');
-    const csv = await app.inject({ method: 'GET', url: '/api/db-explorer/governance/dictionary/export' });
-    assert.equal(csv.statusCode, 200);
-    assert.match(csv.headers['content-disposition'], /table-dictionary/);
+    const xlsx = await app.inject({ method: 'GET', url: '/api/db-explorer/governance/dictionary/export' });
+    assert.equal(xlsx.statusCode, 200);
+    assert.match(xlsx.headers['content-disposition'], /table-dictionary-.*\.xlsx/);
+    assert.equal(xlsx.rawPayload.subarray(0, 2).toString(), 'PK');
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(xlsx.rawPayload);
+    const sheet = wb.getWorksheet('表字典');
+    const header = sheet.getRow(3).values.slice(1);
+    assert.deepEqual(header.slice(0, 4), ['表名', '表来源', '二次加工', '中文名']);
+    assert.ok(header.includes('体检状态') && header.includes('行数'), '带最新体检结果列');
+    assert.ok(wb.getWorksheet('体检汇总'));
+    const dict = await import('../src/services/data-dictionary-service.js');
+    const back = await dict.parseDictionary({ filename: 'x.xlsx', contentBase64: xlsx.rawPayload.toString('base64') });
+    assert.ok(back.some((e) => e.key === 'tickets' && e.nameCn === '工单表' && e.columns.some((c) => c.name === 'region' && c.nameCn === '地区')), '导出的 Excel 能原样导回');
+    const csv = await app.inject({ method: 'GET', url: '/api/db-explorer/governance/dictionary/export?format=csv' });
+    assert.match(csv.headers['content-disposition'], /\.csv/);
     const catalog = JSON.parse((await app.inject({ method: 'GET', url: '/api/db-explorer/governance/catalog' })).body);
     assert.ok(catalog.tables.length >= 7);
 });

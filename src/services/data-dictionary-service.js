@@ -238,6 +238,173 @@ export async function exportDictionaryCsv() {
     return `﻿${lines.join('\r\n')}`;
 }
 
+/**
+ * 字典导出成 Excel：一张「表字典」（字段级，也能直接改了再导入）+ 一张「体检汇总」。
+ * 列分四组、各一种颜色：表标识（NetCare / DataFab / 二次加工）、表字典、最新一键体检（状态 / 行数 / 异常 / 样例）、字段明细。
+ * 注意：表头、分组标题、汇总页都不能用导入时会被认成表头的词（表名在第 3 行；「表」「字段」「说明」「备注」等别名只出现在真正的表头行）。
+ */
+export async function exportDictionaryXlsx() {
+    let ExcelJS;
+    try { ExcelJS = (await import('exceljs')).default; } catch { return null; }
+    const view = await catalogView();
+    const dict = await dictionaryMap();
+    const tz = 'Asia/Shanghai';
+    const stamp = (iso) => (iso ? new Date(iso).toLocaleString('zh-CN', { timeZone: tz, hour12: false }) : '—');
+    const run = view.lastRun, coll = view.lastCollection;
+
+    const C = {
+        ink: 'FF0F172A', ink2: 'FF475569', ink3: 'FF94A3B8', line: 'FFE2E8F0', white: 'FFFFFFFF', band: 'FFF8FAFC',
+        idHead: 'FF6D28D9', idSoft: 'FFF5F3FF',
+        dictHead: 'FF1D4ED8', dictSoft: 'FFEFF6FF',
+        checkHead: 'FF047857', checkSoft: 'FFECFDF5',
+        colHead: 'FF475569', colSoft: 'FFF1F5F9',
+        netcare: ['FFCCFBF1', 'FF0F766E'], datafab: ['FFFFEDD5', 'FFC2410C'], other: ['FFF1F5F9', 'FF64748B'], reprocess: ['FFFCE7F3', 'FFBE185D'],
+        ok: ['FFDCFCE7', 'FF15803D'], warn: ['FFFEF3C7', 'FFB45309'], bad: ['FFFEE2E2', 'FFB91C1C'], mute: ['FFF1F5F9', 'FF64748B'],
+    };
+    const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+    const thin = { style: 'thin', color: { argb: C.line } };
+    const border = { top: thin, left: thin, bottom: thin, right: thin };
+    const STATUS_LABEL = { ok: '正常', empty: '空表', anomaly: '异常', error: '查询失败', unchecked: '未巡检', missing: '库里没有' };
+    const STATUS_TONE = { ok: C.ok, empty: C.warn, anomaly: C.bad, error: C.bad, unchecked: C.mute, missing: C.mute };
+    const SAMPLE_LABEL = { ok: '已收样例', empty: '无数据', error: '收集失败', inconsistent: '取样为空' };
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Dragon Claw DH';
+    wb.created = new Date();
+    const ws = wb.addWorksheet('表字典', { views: [{ state: 'frozen', xSplit: 1, ySplit: 3, showGridLines: false }], properties: { outlineProperties: { summaryBelow: false } } });
+    const groups = [
+        { title: '表标识', head: C.idHead, soft: C.idSoft, cols: [['表名', 34, 'key'], ['表来源', 11, 'origin'], ['二次加工', 10, 'reprocess']] },
+        { title: '表字典', head: C.dictHead, soft: C.dictSoft, cols: [['中文名', 24], ['英文名', 22], ['分类', 16], ['子分类', 14], ['分层', 9], ['说明', 40]] },
+        { title: '最新一键体检', head: C.checkHead, soft: C.checkSoft, cols: [['体检状态', 11], ['行数', 12], ['异常情况', 30], ['样例收集', 22], ['下游派生表', 26]] },
+        { title: '字段明细', head: C.colHead, soft: C.colSoft, cols: [['字段名', 24], ['字段中文名', 22], ['字段类型', 14]] },
+    ];
+    const cols = groups.flatMap((g) => g.cols.map(([name, width]) => ({ name, width, g })));
+    ws.columns = cols.map((c) => ({ width: c.width }));
+    const last = cols.length;
+
+    // 第 1 行：标题 + 体检时间
+    ws.mergeCells(1, 1, 1, last);
+    const title = ws.getCell(1, 1);
+    title.value = {
+        richText: [
+            { text: '业务库表字典与体检结果', font: { bold: true, size: 14, color: { argb: C.ink } } },
+            { text: `    导出 ${stamp(new Date().toISOString())} · 最新巡检 ${run ? stamp(run.finishedAt) : '还没有'} · 最新收集 ${coll ? stamp(coll.finishedAt) : '还没有'} · 共 ${view.tables.length} 张（NetCare ${view.stats.netcare} · DataFab ${view.stats.datafab} · 其中二次加工 ${view.stats.reprocess}）`, font: { size: 10, color: { argb: C.ink2 } } },
+        ],
+    };
+    title.alignment = { vertical: 'middle' };
+    ws.getRow(1).height = 30;
+    // 第 2 行：分组标题；第 3 行：列名（导入时认这一行）
+    let at = 1;
+    for (const g of groups) {
+        const end = at + g.cols.length - 1;
+        if (end > at) ws.mergeCells(2, at, 2, end);
+        const cell = ws.getCell(2, at);
+        cell.value = g.title;
+        cell.font = { bold: true, color: { argb: C.white } };
+        cell.fill = fill(g.head);
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        at = end + 1;
+    }
+    ws.getRow(2).height = 20;
+    const head = ws.getRow(3);
+    cols.forEach((c, i) => {
+        const cell = head.getCell(i + 1);
+        cell.value = c.name;
+        cell.font = { bold: true, color: { argb: c.g.head } };
+        cell.fill = fill(c.g.soft);
+        cell.border = { ...border, bottom: { style: 'medium', color: { argb: c.g.head } } };
+        cell.alignment = { vertical: 'middle', wrapText: true };
+    });
+    head.height = 22;
+    ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: last } };
+
+    const tone = (cell, [bg, fg], bold = true) => { cell.fill = fill(bg); cell.font = { bold, color: { argb: fg } }; cell.alignment = { horizontal: 'center', vertical: 'top' }; };
+    const ordered = [...view.tables].sort((a, b) => ({ netcare: 0, datafab: 1, '': 2 }[a.origin] - { netcare: 0, datafab: 1, '': 2 }[b.origin]) || Number(b.reprocess) - Number(a.reprocess) || a.key.localeCompare(b.key));
+    ordered.forEach((t, ti) => {
+        const fields = dict.get(t.key.toLowerCase())?.columns || [];
+        const band = ti % 2 ? C.band : C.white;
+        const originLabel = ORIGIN_LABEL[t.origin];
+        const check = [
+            STATUS_LABEL[t.status] || t.status,
+            t.count ?? (t.status === 'error' ? '失败' : ''),
+            t.anomaly?.text || t.error || '',
+            t.sample ? (t.sample.status === 'ok' ? `${t.sample.sampled} 行` : (t.sample.reason || SAMPLE_LABEL[t.sample.status] || '')) : '',
+            t.derivedBy.map((d) => d.nameCn || d.name).join('、'),
+        ];
+        const dictCells = [t.nameCn, t.nameEn, t.category, t.subCategory, t.layer, t.description];
+        const lines = Math.max(1, fields.length);
+        for (let i = 0; i < lines; i += 1) {
+            const f = fields[i];
+            const first = i === 0;
+            // 表名、表来源、二次加工每行都带上（Excel 里筛选时字段行不会掉）；表字典和体检只写在第一行
+            const values = [t.key, originLabel, t.reprocess ? '二次加工' : '', ...(first ? dictCells : dictCells.map(() => '')), ...(first ? check : check.map(() => '')), f?.name || '', f?.nameCn || '', f?.type || ''];
+            const row = ws.addRow(values);
+            if (!first) row.outlineLevel = 1;
+            row.eachCell({ includeEmpty: true }, (cell, col) => {
+                if (col > last) return;
+                cell.border = border;
+                cell.fill = fill(band);
+                cell.alignment = { vertical: 'top', wrapText: [9, 12, 13, 14].includes(col) };
+                cell.font = { color: { argb: first ? C.ink : C.ink3 } };
+            });
+            row.getCell(1).font = { name: 'Menlo', size: 10, bold: first, color: { argb: first ? C.ink : C.ink3 } };
+            tone(row.getCell(2), t.origin === 'netcare' ? C.netcare : t.origin === 'datafab' ? C.datafab : C.other, first);
+            if (t.reprocess) tone(row.getCell(3), C.reprocess, first);
+            if (first) {
+                tone(row.getCell(10), STATUS_TONE[t.status] || C.mute);
+                const n = row.getCell(11);
+                if (typeof n.value === 'number') { n.numFmt = '#,##0'; n.alignment = { horizontal: 'right', vertical: 'top' }; }
+                if (t.status === 'anomaly' || t.status === 'error') row.getCell(12).font = { color: { argb: C.bad[1] } };
+                if (!t.inLive) row.getCell(1).font = { name: 'Menlo', size: 10, bold: true, strike: true, color: { argb: C.ink3 } };
+            }
+            if (f) row.getCell(15).font = { name: 'Menlo', size: 10, color: { argb: C.ink } };
+        }
+    });
+
+    // 体检汇总：总览数字 + 颜色图例
+    const sum = wb.addWorksheet('体检汇总', { views: [{ showGridLines: false }] });
+    sum.columns = [{ width: 22 }, { width: 16 }, { width: 60 }];
+    const h = sum.addRow(['业务库体检汇总']);
+    h.getCell(1).font = { bold: true, size: 14 };
+    sum.addRow([`导出 ${stamp(new Date().toISOString())}`]).getCell(1).font = { color: { argb: C.ink2 } };
+    sum.addRow([]);
+    const section = (text, argb) => { const r = sum.addRow([text]); sum.mergeCells(r.number, 1, r.number, 3); r.getCell(1).font = { bold: true, color: { argb: C.white } }; r.getCell(1).fill = fill(argb); };
+    const kv = (k, v, note = '', colors = null) => {
+        const r = sum.addRow([k, v, note]);
+        r.eachCell({ includeEmpty: true }, (cell) => { cell.border = border; cell.alignment = { vertical: 'top', wrapText: true }; });
+        r.getCell(2).alignment = { horizontal: 'right' };
+        if (typeof v === 'number') r.getCell(2).numFmt = '#,##0';
+        if (colors) tone(r.getCell(1), colors);
+        r.getCell(3).font = { color: { argb: C.ink2 } };
+    };
+    section('最新一键体检', C.checkHead);
+    kv('巡检完成时间', run ? stamp(run.finishedAt) : '还没有', run ? `用时 ${Math.round((run.durationMs || 0) / 1000)} 秒 · 对比基线 ${run.baseline ? '上一轮' : '无（首轮）'}` : '在页面上点「一键体检」');
+    kv('收集完成时间', coll ? stamp(coll.finishedAt) : '还没有', coll ? `每张表收前 ${coll.rows || ''} 行` : '');
+    kv('业务库表数', view.stats.tables, view.liveError ? `实查失败：${view.liveError}` : '以实际查到的业务库为准');
+    if (run) kv('总行数', run.totalRows || 0);
+    kv('正常', view.tables.filter((t) => t.status === 'ok').length, '', C.ok);
+    kv('空表', view.stats.empty, '库里有这张表但 0 行', C.warn);
+    kv('异常', view.stats.anomalies, '和上一轮相比突增、突降、变空等', C.bad);
+    kv('查询失败', view.stats.errors, '没权限、表坏了或超时', C.bad);
+    kv('未巡检', view.stats.unchecked, '', C.mute);
+    if (view.stats.missing) kv('库里没有', view.stats.missing, '只在字典里登记，业务库里查不到', C.mute);
+    sum.addRow([]);
+    section('表来源', C.idHead);
+    kv('NetCare', view.stats.netcare, 'NetCare 业务表（抓取脚本等使用的源表）', C.netcare);
+    kv('DataFab', view.stats.datafab, 'DataFab 看板表（需求 #769 看板清单与看板 SQL 引用的表）', C.datafab);
+    kv('二次加工', view.stats.reprocess, '被看板 SQL 计算引用的表，叠加在 DataFab 标识上', C.reprocess);
+    kv('其他', view.tables.filter((t) => !t.origin).length, '不在以上清单里的业务库表', C.other);
+    sum.addRow([]);
+    section('使用提示', C.colHead);
+    for (const text of ['「表字典」页可以直接修改中文名、分类、字段中文名等，保存后在页面「导入表字典」导回（表标识和体检列导入时会忽略）。', '字段行默认展开，可用 Excel 左侧的分级按钮收起，只看表级信息。', '表名带删除线 = 字典里有、业务库里查不到。']) {
+        const r = sum.addRow([text]);
+        sum.mergeCells(r.number, 1, r.number, 3);
+        r.getCell(1).alignment = { wrapText: true };
+        r.height = 30;
+    }
+    return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 // ── 派生表 ──
 /** SQL 里 FROM / JOIN 后面引用的表（按原样写法，CTE 名除外） */
 export function parseRefs(sql) {
@@ -522,6 +689,26 @@ async function afterRun({ results, previous }) {
 watch.onRunFinished(afterRun);
 watch.onLinkTick(() => linkCheck());
 
+// ── 表来源：NetCare 业务表 / DataFab 表；DataFab 里被看板 SQL 计算引用的表再叠一个「二次加工」 ──
+// 名单来自需求 #769 随包带的两份清单（netcare-script-tables.csv、board-tables.txt）；看板 SQL（及其他派生表）引用到的源表都算二次加工，
+// 不在 NetCare 清单里的源表也归 DataFab。
+let originCache = null;
+function bundledOrigins() {
+    if (originCache) return originCache;
+    const keysOf = (file) => {
+        try { return new Set(rowsToEntries(parseCsv(fs.readFileSync(new URL(file, BUNDLE_DIR), 'utf8'))).map((e) => e.key.toLowerCase())); } catch { return new Set(); }
+    };
+    originCache = { netcare: keysOf('netcare-script-tables.csv'), datafab: keysOf('board-tables.txt') };
+    return originCache;
+}
+function tableOrigin(key, origins, reprocessed) {
+    const k = String(key).toLowerCase();
+    const reprocess = reprocessed.has(k);
+    const origin = origins.netcare.has(k) ? 'netcare' : origins.datafab.has(k) || reprocess ? 'datafab' : '';
+    return { origin, reprocess };
+}
+export const ORIGIN_LABEL = { netcare: 'NetCare', datafab: 'DataFab', '': '其他' };
+
 // ── 治理总览：业务库所有表 × 字典 × 巡检 × 收集 × 派生表 ──
 export async function catalogView() {
     const settings = await watch.getSettings();
@@ -539,6 +726,8 @@ export async function catalogView() {
     const catMap = new Map((cat?.tables || []).map((t) => [normalizeKey(t.name), t]));
     const dependents = new Map();
     for (const d of derived) for (const k of d.sources) dependents.set(k, [...(dependents.get(k) || []), { id: d.id, name: d.name, nameCn: d.nameCn }]);
+    const reprocessed = new Set(derived.flatMap((d) => d.sources.map((k) => String(k).toLowerCase())));
+    const origins = bundledOrigins();
     // 表清单以实际查到的业务库为准：上一轮巡检看到的表；还没巡检过就现查一次库里有哪些表
     const keys = new Set([...results.keys()]);
     let liveError = '';
@@ -569,6 +758,7 @@ export async function catalogView() {
             sample: s ? { status: s.status, sampled: s.sampled, reason: s.reason, errorKind: s.errorKind, columns: s.columns } : null,
             inLive,
             derivedBy: dependents.get(key) || [],
+            ...tableOrigin(key, origins, reprocessed),
         };
     });
     const categories = {};
@@ -595,6 +785,9 @@ export async function catalogView() {
             empty: tables.filter((t) => t.status === 'empty').length,
             errors: tables.filter((t) => t.status === 'error').length,
             unchecked: tables.filter((t) => t.status === 'unchecked').length,
+            netcare: tables.filter((t) => t.origin === 'netcare').length,
+            datafab: tables.filter((t) => t.origin === 'datafab').length,
+            reprocess: tables.filter((t) => t.reprocess).length,
             derived: derived.length,
             derivedErrors: derived.filter((d) => d.status === 'error').length,
         },

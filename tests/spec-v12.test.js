@@ -82,7 +82,7 @@ test('Spec §7.2 + §12.5: 基座请求注入 x-app-id，且 /api/auth/me 与权
         assert.equal(exportOk.status, 200);
         assert.notEqual(exportOk.headers.get('x-dh-envelope'), '1');
         assert.match(exportOk.headers.get('content-disposition') || '', /attachment; filename="table-dictionary-/);
-        assert.match(await exportOk.text(), /表名,中文名,英文名/);
+        assert.equal(Buffer.from(await exportOk.arrayBuffer()).subarray(0, 2).toString(), 'PK', '默认导出 Excel');
 
         // 验证 /custom-tools 经过 /api/custom-tools/:slug/{meta,raw,bridge} 对非管理员本人工具可用
         const created = await (await fetch(`${url}/api/custom-tools`, {

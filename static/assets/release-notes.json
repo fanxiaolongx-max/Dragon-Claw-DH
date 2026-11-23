@@ -1,8 +1,10 @@
 {
   "zh": [
-    "数据库升级不再需要 DBA：基座更新应用时会自动在应用库执行 db/upgrade.sql（只建缺少的表，不动已有数据）。诊断台的建表检查也覆盖了团队版表，缺表时提示重新上传最新安装包即可补齐。"
+    "数据探索 → 业务库巡检与表字典：表名旁新增来源标识。NetCare 业务表标为青色「NetCare」，DataFab 看板表标为橙色「DataFab」；被看板 SQL 计算引用的表再叠加粉色「二次加工」。表目录里可以按来源一键筛选。",
+    "「导出字典 / 模板」改为导出 Excel，共两张表：表字典分「表标识 / 表字典 / 最新一键体检 / 字段明细」四组，各用一种颜色；来源、二次加工、体检状态按颜色区分，并带上行数、异常情况和样例收集结果。另附一张体检汇总页。导出的文件改完可以直接导回。"
   ],
   "en": [
-    "Database upgrades no longer need a DBA: the platform runs db/upgrade.sql in the app schema on every update (creating only missing tables, leaving data untouched). The diagnostics schema check now covers team tables and, if any are missing, says to re-upload the latest package."
+    "Data explorer → business DB watch & dictionary: tables now carry source badges next to their names: NetCare (teal), DataFab (orange), plus a pink Reprocessed badge for tables used by board SQL. The table catalog can be filtered by source.",
+    "Export dictionary / template now downloads an Excel workbook. Its dictionary sheet has colour-coded groups: identity, dictionary, latest health check and fields. Source, Reprocessed and check status are highlighted, with row counts, anomalies and sample results. A summary sheet is included, and the file can be edited and imported back."
   ]
 }

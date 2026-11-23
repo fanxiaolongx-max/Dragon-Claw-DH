@@ -114,7 +114,14 @@ export async function dbExplorerRoutes(fastify) {
         g.get('/tables/:key', async (req) => dataDict.tableDetail(req.params.key));
         g.put('/dictionary/:key', async (req) => dataDict.saveDictionaryEntry(req.params.key, req.body || {}, actor(req)));
         g.post('/dictionary/import', async (req) => dataDict.importDictionary(req.body || {}, { actor: actor(req), mode: req.body?.mode === 'replace' ? 'replace' : 'merge' }));
-        g.get('/dictionary/export', async (_req, reply) => {
+        // 默认导出 Excel（表标识 / 字典 / 最新体检 / 字段分组上色）；?format=csv 或安装包没有 Excel 组件时退回 CSV
+        g.get('/dictionary/export', async (req, reply) => {
+            const xlsx = req.query?.format === 'csv' ? null : await dataDict.exportDictionaryXlsx();
+            if (xlsx) {
+                reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                reply.header('Content-Disposition', `attachment; filename="${fileName('table-dictionary', 'xlsx')}"`);
+                return reply.send(xlsx);
+            }
             reply.header('Content-Type', 'text/csv; charset=utf-8');
             reply.header('Content-Disposition', `attachment; filename="${fileName('table-dictionary', 'csv')}"`);
             return dataDict.exportDictionaryCsv();

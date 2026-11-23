@@ -50,7 +50,13 @@
     const SAMPLE = { ok: '已收样例', empty: '无数据', error: '收集失败', inconsistent: '取样为空' };
     const REFRESH = { linked: '源表变化即联动', interval: '按间隔', manual: '只手动' };
 
-    const state = { tab: 'anomalies', status: null, catalog: null, derived: [], category: '', filter: 'all', dictOnly: false, q: '', poll: 0, shown: false };
+    const state = { tab: 'anomalies', status: null, catalog: null, derived: [], category: '', filter: 'all', origin: 'all', dictOnly: false, q: '', poll: 0, shown: false };
+    // 表来源标识：NetCare 业务表 / DataFab 表；DataFab 里被看板 SQL 计算引用的再叠「二次加工」
+    const ORIGIN = { netcare: ['NetCare', 'NetCare 业务表'], datafab: ['DataFab', 'DataFab 看板表'] };
+    const originBadges = (t) => (t ? [
+        ORIGIN[t.origin] ? el('span', { class: `gov-origin o-${t.origin}`, text: ORIGIN[t.origin][0], title: ORIGIN[t.origin][1] }) : null,
+        t.reprocess ? el('span', { class: 'gov-origin o-reprocess', text: '二次加工', title: `被看板 SQL 计算引用：${(t.derivedBy || []).map((d) => d.nameCn || d.name).slice(0, 6).join('、')}${(t.derivedBy || []).length > 6 ? ' …' : ''}` }) : null,
+    ] : []);
     let root;
 
     function mount() {
@@ -157,7 +163,7 @@
     const tableByKey = (key) => state.catalog?.tables.find((t) => t.key === key);
     const nameCell = (key) => {
         const t = tableByKey(key);
-        return el('div', { class: 'gov-name' }, [el('code', { text: key.split('.').slice(1).join('.') || key }), t?.nameCn ? el('span', { text: t.nameCn }) : el('span', { class: 'is-muted', text: '未命名' })]);
+        return el('div', { class: 'gov-name' }, [el('div', { class: 'gov-key' }, [el('code', { text: key.split('.').slice(1).join('.') || key }), ...originBadges(t)]), t?.nameCn ? el('span', { text: t.nameCn }) : el('span', { class: 'is-muted', text: '未命名' })]);
     };
 
     // ── 本轮异常 ──
@@ -187,6 +193,7 @@
         return (state.catalog?.tables || []).filter((t) => {
             if (state.dictOnly && !t.inDictionary) return false;
             if (state.category && t.category !== state.category) return false;
+            if (state.origin === 'reprocess' ? !t.reprocess : state.origin === 'other' ? Boolean(t.origin) : state.origin !== 'all' && t.origin !== state.origin) return false;
             if (state.filter === 'anomaly' && t.status !== 'anomaly') return false;
             if (state.filter === 'empty' && t.status !== 'empty') return false;
             if (state.filter === 'error' && t.status !== 'error') return false;
@@ -244,11 +251,16 @@
                 renderTab();
             },
         }, [el('i'), el('span', { text: `只看字典表 (${fmt(dictCount)}/${fmt(view.tables.length)})` })]);
-        const filterRow = el('div', { class: 'gov-filter-row' }, [filters, dictToggle]);
+        const s = view.stats;
+        const otherCount = view.tables.filter((t) => !t.origin).length;
+        const originFilters = el('div', { class: 'gov-origin-filters', role: 'group', 'aria-label': '按表来源筛选' }, [
+            ['all', '全部来源', view.tables.length], ['netcare', 'NetCare', s.netcare], ['datafab', 'DataFab', s.datafab], ['reprocess', '二次加工', s.reprocess], ['other', '其他', otherCount],
+        ].filter(([id, , n]) => id === 'all' || n).map(([id, label, n]) => el('button', { type: 'button', class: `o-${id}`, 'aria-pressed': String(state.origin === id), onclick: () => { state.origin = id; drawList(); originFilters.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.classList.contains(`o-${state.origin}`)))); } }, [el('span', { text: label }), el('b', { text: fmt(n) })])));
+        const filterRow = el('div', { class: 'gov-filter-row' }, [filters, dictToggle, originFilters]);
         const fileInput = el('input', { type: 'file', accept: '.xlsx,.csv,.json,.txt', hidden: true, onchange: (e) => importDictionary(e.target.files[0], e.target) });
         const tools = el('div', { class: 'bar' }, [search, el('span', { class: 'grow' }),
             el('button', { class: 'act', type: 'button', title: '支持 Excel / CSV / JSON；表头自动识别：表名、中文名、英文名、分类、子分类、分层、说明、字段名、字段中文名', onclick: () => fileInput.click() }, '导入表字典'),
-            el('a', { class: 'act', href: `${API}/dictionary/export`, download: '' }, '导出字典 / 模板'), fileInput]);
+            el('a', { class: 'act', href: `${API}/dictionary/export`, download: '', title: '导出 Excel：表标识（NetCare / DataFab / 二次加工）、表字典、最新一键体检结果、字段明细分组上色；改完可直接用「导入表字典」导回' }, '导出字典 / 模板'), fileInput]);
         const listBox = el('div', { class: 'grid gov-list' });
         function drawList() {
             const list = filtered();
@@ -256,7 +268,7 @@
                 el('thead', null, [el('tr', null, ['', '英文表名', '中文名', '英文名', '分类 / 子分类', '分层', '行数', '样例', '下游'].map((h) => el('th', { text: h })))]),
                 el('tbody', null, list.slice(0, 800).map((t) => el('tr', { onclick: () => openTable(t.key), class: t.status === 'anomaly' ? 'sev-error' : '' }, [
                     el('td', null, [el('i', { class: `dot s-${t.status}`, title: STATUS[t.status] + (t.anomaly ? `：${t.anomaly.text}` : t.error ? `：${t.error}` : '') })]),
-                    el('td', null, [el('code', { text: t.name }), t.type === 'view' ? el('span', { class: 'gov-tag', text: '视图' }) : null]),
+                    el('td', null, [el('div', { class: 'gov-key' }, [el('code', { text: t.name }), ...originBadges(t), t.type === 'view' ? el('span', { class: 'gov-tag', text: '视图' }) : null])]),
                     el('td', null, [t.nameCn ? el('span', { text: t.nameCn, title: t.nameCnSource === 'dictionary' ? '来自表字典' : t.nameCnSource === 'comment' ? '来自库表注释' : '来自目录盘点 / 标注' }) : el('span', { class: 'is-muted', text: '—' }), t.nameCn && !t.inDictionary ? el('sup', { class: 'gov-src', text: '非字典' }) : null]),
                     el('td', { text: t.nameEn || '—', class: t.nameEn ? '' : 'is-muted' }),
                     el('td', { text: [t.category, t.subCategory].filter(Boolean).join(' / ') }),
