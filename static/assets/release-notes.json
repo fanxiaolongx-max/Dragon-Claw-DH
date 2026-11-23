@@ -1,10 +1,10 @@
 {
   "zh": [
-    "数据探索 → 业务库巡检与表字典：表名旁新增来源标识。NetCare 业务表标为青色「NetCare」，DataFab 看板表标为橙色「DataFab」；被看板 SQL 计算引用的表再叠加粉色「二次加工」。表目录里可以按来源一键筛选。",
-    "「导出字典 / 模板」改为导出 Excel，共两张表：表字典分「表标识 / 表字典 / 最新一键体检 / 字段明细」四组，各用一种颜色；来源、二次加工、体检状态按颜色区分，并带上行数、异常情况和样例收集结果。另附一张体检汇总页。导出的文件改完可以直接导回。"
+    "DragonClaw 问答接入表字典：用中文表名、近似说法或英文表名都能找到 NetCare / DataFab 业务表并直接查数。找表时会同时匹配表字典里的中文名、看板、说明和字段中文名，结果里标出 NetCare / DataFab / 二次加工；看字段时附带字段中文名。",
+    "新增「看板指标」查询工具：问到看板或看板上的指标（如「整改清零--整体网元进展」）时，直接读取按看板 SQL 算好的结果，源表变化后会自动重算。"
   ],
   "en": [
-    "Data explorer → business DB watch & dictionary: tables now carry source badges next to their names: NetCare (teal), DataFab (orange), plus a pink Reprocessed badge for tables used by board SQL. The table catalog can be filtered by source.",
-    "Export dictionary / template now downloads an Excel workbook. Its dictionary sheet has colour-coded groups: identity, dictionary, latest health check and fields. Source, Reprocessed and check status are highlighted, with row counts, anomalies and sample results. A summary sheet is included, and the file can be edited and imported back."
+    "DragonClaw chat now uses the table dictionary: Chinese table names, close phrasings and English names all find NetCare / DataFab tables and query them directly. Table search also matches dictionary names, boards, descriptions and field names, labels NetCare / DataFab / Reprocessed, and column details include Chinese field names.",
+    "New board-metrics tool: questions about a board or one of its metrics (e.g. a rectification board) read the results already computed from the board SQL, which recompute automatically when source tables change."
   ]
 }

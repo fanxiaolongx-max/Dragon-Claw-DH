@@ -29,43 +29,149 @@ function rowsText(rows, { sql, truncated } = {}) {
     return lines.join('\n');
 }
 
+// 表字典（数据治理页导入的中文名、看板、字段中文名）和来源标识；读不到时退回只用目录
+const dataDict = () => import('../services/data-dictionary-service.js');
+async function dictIndex() {
+    try { return await (await dataDict()).chatTableIndex(); } catch { return new Map(); }
+}
+const ORIGIN_TEXT = { netcare: 'NetCare', datafab: 'DataFab' };
+const originText = (info) => [ORIGIN_TEXT[info?.origin], info?.reprocess ? '二次加工' : ''].filter(Boolean).join('·');
+
+// 关键词匹配：原词子串命中算满分；中文词再拆成两字片段，命中过半算近似（「整改超期」也能找到「整改…超期任务」）
+const CJK = /[㐀-鿿]/;
+function wordScore(text, word) {
+    if (!word) return 0;
+    if (text.includes(word)) return 1;
+    if (!CJK.test(word) || word.length < 3) return 0;
+    const grams = [];
+    for (let i = 0; i < word.length - 1; i += 1) grams.push(word.slice(i, i + 2));
+    const ratio = grams.filter((g) => text.includes(g)).length / grams.length;
+    return ratio >= 0.5 ? ratio * 0.8 : 0;
+}
+function keywordsOf(value) {
+    return String(value || '').toLowerCase().split(/[\s,，、;；|/]+/).filter(Boolean);
+}
+/** 多个关键词任一命中即可；主名称（表名 / 中文名）命中加权 */
+function matchScore(words, primary, secondary) {
+    let score = 0;
+    for (const word of words) score += Math.max(wordScore(primary, word) * 1.5, wordScore(secondary, word));
+    return score;
+}
+
 async function findTables(args) {
-    const result = await catalog.listTables({ scope: 'business' });
-    const words = String(args.keyword || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const [result, index] = await Promise.all([catalog.listTables({ scope: 'business' }), dictIndex()]);
+    const words = keywordsOf(args.keyword);
     const category = String(args.category || '').trim();
     const onlyWithData = args.onlyWithData !== false;
     const limit = clampInt(args.limit, 1, 120, 40);
-    const matched = result.tables.filter((table) => {
-        if (table.hidden) return false;
-        if (onlyWithData && (table.empty || table.status === 'missing')) return false;
-        if (category && !table.category.includes(category)) return false;
-        if (!words.length) return true;
-        const text = `${table.name} ${table.nameCn} ${table.module} ${table.category} ${table.description}`.toLowerCase();
-        return words.some((word) => text.includes(word));
-    }).sort((a, b) => Number(b.verified) - Number(a.verified) || Number(Boolean(b.nameCn)) - Number(Boolean(a.nameCn)) || b.rows - a.rows);
-    const lines = [
-        `${result.live ? `实时目录（${result.schema || '数据源当前库'}）` : `业务库暂时读不到，以下是全表盘点时的清单（${result.error || ''}），行数可能已过时`}：匹配 ${matched.length} 张${matched.length > limit ? `，显示前 ${limit} 张` : ''}`,
-        '表名 | 中文名 | 模块 | 类别 | 粒度 | 估算行数 | 已核对 | 说明',
-    ];
-    for (const table of matched.slice(0, limit)) {
-        lines.push([table.name, table.nameCn || '-', table.module || '-', table.category || '-', table.grain || '-', table.rows, table.verified ? '是' : '否', (table.description || table.review || '').slice(0, 80) || '-'].join(' | ')
-            + (table.family ? `（分区族 ${table.family}）` : ''));
+    const scored = [];
+    for (const table of result.tables) {
+        if (table.hidden) continue;
+        if (onlyWithData && (table.empty || table.status === 'missing')) continue;
+        const info = index.get(table.name.toLowerCase()) || null;
+        const d = info?.entry || null;
+        const view = {
+            ...table,
+            nameCn: table.nameCn || d?.nameCn || '',
+            module: table.module || d?.subCategory || '',
+            category: d?.category && !table.category ? d.category : table.category,
+            board: d?.category || '',
+            description: table.description || d?.description || '',
+            origin: originText(info),
+            boards: info?.boards || [],
+        };
+        if (category && ![view.category, view.board, d?.subCategory].some((v) => String(v || '').includes(category))) continue;
+        let score = 1;
+        if (words.length) {
+            const primary = `${table.name} ${view.nameCn} ${d?.nameEn || ''}`.toLowerCase();
+            const secondary = [table.module, table.category, view.description, table.review, table.seedNote, d?.category, d?.subCategory, d?.layer, d?.upstream, view.origin,
+                ...view.boards.map((b) => b.title), ...(d?.columns || []).flatMap((c) => [c.name, c.nameCn])].join(' ').toLowerCase();
+            score = matchScore(words, primary, secondary);
+            if (!score) continue;
+        }
+        scored.push({ view, score });
     }
-    return { content: lines.join('\n'), summary: `找到 ${matched.length} 张表` };
+    scored.sort((a, b) => b.score - a.score || Number(b.view.verified) - Number(a.view.verified) || Number(Boolean(b.view.nameCn)) - Number(Boolean(a.view.nameCn)) || b.view.rows - a.view.rows);
+    const lines = [
+        `${result.live ? `实时目录（${result.schema || '数据源当前库'}）` : `业务库暂时读不到，以下是全表盘点时的清单（${result.error || ''}），行数可能已过时`}：匹配 ${scored.length} 张${scored.length > limit ? `，显示前 ${limit} 张` : ''}`,
+        '表名 | 中文名 | 来源 | 模块 | 类别 / 看板 | 粒度 | 估算行数 | 已核对 | 说明',
+    ];
+    for (const { view: table } of scored.slice(0, limit)) {
+        lines.push([table.name, table.nameCn || '-', table.origin || '-', table.module || '-', [table.category, table.board].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' / ') || '-', table.grain || '-', table.rows, table.verified ? '是' : '否', (table.description || table.review || '').slice(0, 80) || '-'].join(' | ')
+            + (table.family ? `（分区族 ${table.family}）` : '')
+            + (table.boards.length ? `（看板指标 ${table.boards.length} 个已算好，如 ${table.boards.slice(0, 2).map((b) => b.title).join('、')}，可用 netcare_boards 直接取）` : ''));
+    }
+    // 关键词也对一下看板指标：问的是看板上的数时，直接给出可读取的指标
+    if (words.length) {
+        const boards = await matchBoards(words, 6).catch(() => []);
+        if (boards.length) {
+            lines.push('', `相关看板指标（结果已按看板 SQL 算好，用 netcare_boards 传 board 读取）：`);
+            for (const b of boards) lines.push(`- ${b.id} | ${b.title} | ${b.rowCount ?? '-'} 行 | 源表 ${b.sources.join(',')}`);
+        }
+    }
+    return { content: lines.join('\n'), summary: `找到 ${scored.length} 张表` };
+}
+
+// ── 看板指标：数据治理里的派生表（看板 SQL 按源表变化联动重算，结果存在应用库） ──
+async function matchBoards(words, limit) {
+    const { listDerived, boardTitle } = await dataDict();
+    const defs = await listDerived();
+    return defs.map((d) => {
+        const title = boardTitle(d);
+        const score = words.length ? matchScore(words, `${title} ${d.name}`.toLowerCase(), `${d.description || ''} ${d.sources.join(' ')} ${(d.columnsSeen || []).join(' ')}`.toLowerCase()) : 1;
+        return { ...d, title, score };
+    }).filter((d) => d.score > 0).sort((a, b) => b.score - a.score || a.title.localeCompare(b.title)).slice(0, limit);
+}
+
+async function boards(args) {
+    const mod = await dataDict();
+    const target = String(args.board || '').trim();
+    if (!target) {
+        const list = await matchBoards(keywordsOf(args.keyword), clampInt(args.limit, 1, 200, 60));
+        if (!list.length) return { content: args.keyword ? `没有和「${args.keyword}」相关的看板指标。可以换个说法，或用 netcare_tables 找源表直接查。` : '还没有看板指标（数据探索 → 数据治理 → 派生表 里导入看板 SQL 后就有）。', summary: '0 个看板指标' };
+        const lines = [`看板指标 ${list.length} 个（board 传第一列的标识读取结果）：`, '标识 | 看板--指标 | 行数 | 状态 | 最近计算 | 源表'];
+        for (const d of list) lines.push([d.id, d.title, d.rowCount ?? '-', d.status === 'error' ? `计算失败：${String(d.lastError || '').slice(0, 60)}` : d.status || '未计算', d.lastRunAt || '-', d.sources.join(',')].join(' | '));
+        return { content: lines.join('\n'), summary: `${list.length} 个看板指标` };
+    }
+    const defs = await mod.listDerived();
+    const lower = target.toLowerCase();
+    let def = defs.find((d) => d.id === target || d.name.toLowerCase() === lower || mod.boardTitle(d) === target || d.nameCn === target);
+    if (!def) {
+        const best = await matchBoards(keywordsOf(target), 5);
+        if (best.length === 1 || (best.length > 1 && best[0].score > best[1].score)) def = best[0];
+        else if (best.length) return { ok: false, summary: '看板指标不唯一', content: `「${target}」对上多个看板指标，请用标识指定：\n${best.map((d) => `- ${d.id} | ${d.title}`).join('\n')}` };
+        else throw Object.assign(new Error(`没有找到看板指标「${target}」，先不带 board 调用 netcare_boards 看清单`), { code: 'NOT_FOUND' });
+    }
+    if (!def.status || def.status === 'pending' || def.rowCount == null) def = await mod.refreshDerived(def.id, { reason: '对话里首次读取' });
+    if (def.status === 'error') throw Object.assign(new Error(`看板指标「${mod.boardTitle(def)}」计算失败：${def.lastError}`), { code: 'BOARD_ERROR' });
+    const data = await mod.derivedData(def.id, { limit: clampInt(args.limit, 1, MAX_MODEL_ROWS, 100), offset: clampInt(args.offset, 0, 100000, 0) });
+    const head = [
+        `看板指标：${mod.boardTitle(def)}（${def.id}），共 ${data.total} 行${data.truncated ? '（计算时已达行数上限）' : ''}，最近计算 ${data.refreshedAt || def.lastRunAt || '-'}`,
+        `源表：${def.sources.join(', ')}；源表数据变化后会自动重算。口径（看板 SQL）：${String(def.sourceSql || def.sql).replace(/\s+/g, ' ').slice(0, 600)}`,
+    ];
+    const body = rowsText(data.rows, { truncated: data.rows.length < data.total });
+    return { content: `${head.join('\n')}\n${body}`, summary: `${mod.boardTitle(def)}：${data.rows.length}/${data.total} 行`, output: def.id };
 }
 
 async function describe(args) {
     const detail = await catalog.describeTable('business', String(args.table || ''), { sampleRows: clampInt(args.sampleRows, 0, 20, 5) });
     const note = detail.note || {};
-    const nameCn = note.nameCn || detail.seed?.nameCn;
+    const info = (await dictIndex()).get(String(detail.name).toLowerCase()) || null;
+    const d = info?.entry || null;
+    const nameCn = note.nameCn || detail.seed?.nameCn || d?.nameCn;
     const lines = [`表 ${detail.schema ? `${detail.schema}.` : ''}${detail.name}${nameCn ? `（${nameCn}）` : ''}，${detail.columns.length} 个字段`];
+    if (info?.origin) lines.push(`来源：${originText(info)}`);
+    if (d) lines.push(`表字典：${[d.nameEn && `英文名 ${d.nameEn}`, (d.category || d.subCategory) && `分类 ${[d.category, d.subCategory].filter(Boolean).join(' / ')}`, d.layer && `分层 ${d.layer}`, d.description && `说明 ${d.description.slice(0, 200)}`].filter(Boolean).join('；') || '已登记'}`);
+    if (info?.boards.length) lines.push(`看板指标（已算好，可用 netcare_boards 直接取）：${info.boards.slice(0, 8).map((b) => b.title).join('、')}${info.boards.length > 8 ? ` 等 ${info.boards.length} 个` : ''}`);
+    const dictCols = new Map((d?.columns || []).map((c) => [String(c.name).toLowerCase(), c]));
     if (note.description) lines.push(`标注说明：${note.description}`);
     if (note.timeField || note.regionField || note.officeField) lines.push(`标注字段：时间=${note.timeField || '-'}，地区部=${note.regionField || '-'}，代表处=${note.officeField || '-'}${note.verified ? '（已核对）' : ''}`);
     else lines.push(`建议字段：时间=${detail.suggestions.timeField || '-'}，地区部=${detail.suggestions.regionField || '-'}，代表处=${detail.suggestions.officeField || '-'}`);
     if (detail.hints.length) lines.push(`提示：${detail.hints.join('；')}`);
-    lines.push('字段 | 类型 | 注释 | 识别 | 形态 | 占位值 | 示例');
+    lines.push('字段 | 类型 | 注释 / 字典中文名 | 识别 | 形态 | 占位值 | 示例');
     for (const column of detail.columns) {
-        lines.push([column.name, column.columnType || column.dataType, column.comment || '-', column.role || '-', column.kinds.join('/') || '-', column.sentinels.join('/') || '-', column.examples.join(' ; ').slice(0, 120) || '-'].join(' | '));
+        const cn = dictCols.get(String(column.name).toLowerCase())?.nameCn || '';
+        lines.push([column.name, column.columnType || column.dataType, [column.comment, cn && cn !== column.comment ? cn : ''].filter(Boolean).join(' / ') || '-', column.role || '-', column.kinds.join('/') || '-', column.sentinels.join('/') || '-', column.examples.join(' ; ').slice(0, 120) || '-'].join(' | '));
     }
     if (detail.sample.length) {
         lines.push(`样例 ${detail.sample.length} 行：`);
@@ -101,12 +207,12 @@ const guarded = (handler) => async (args) => {
 export const NETCARE_TOOLS = [
     {
         name: 'netcare_tables',
-        description: '在 NetCare 业务库的表目录里找表：返回表名、中文名、模块、类别、粒度、估算行数、是否已核对、标注说明。关键词匹配表名 / 中文名 / 模块 / 说明。回答 NetCare 业务数据（风险、整改、工单、网络、License 等）的问题时先用它找表。',
+        description: '在 NetCare 业务库的表目录里找表：返回表名、中文名、来源（NetCare / DataFab / 二次加工）、模块、类别 / 看板、粒度、估算行数、是否已核对、说明，以及相关的看板指标。关键词匹配英文表名、中文名、英文名、看板、说明、字段名和字段中文名，中文词支持近似匹配。用户说的是表的中文叫法或近似说法时，把可能的说法都作为关键词（空格分隔）一次传入。回答 NetCare / DataFab 业务数据（风险、整改、红线、巡检、漏洞、工单、网络、License 等）的问题时先用它找表。',
         parameters: {
             type: 'object',
             properties: {
-                keyword: { type: 'string', description: '关键词，如 风险、license、rectify、整改；可空格分隔多个（任一命中）' },
-                category: { type: 'string', description: '类别，如 风险、整改、任务/工单、网络、IOC运营' },
+                keyword: { type: 'string', description: '关键词，如 风险、license、rectify、整改超期、红线人员；可空格分隔多个（任一命中），中英文、近义说法都可以一起给' },
+                category: { type: 'string', description: '类别或看板，如 风险、整改、任务/工单、网络、IOC运营、整改管理、维护红线资源' },
                 onlyWithData: { type: 'boolean', description: '只看有数据的表，默认 true' },
                 limit: { type: 'integer', description: '最多返回条数，默认 40，上限 120' },
             },
@@ -175,5 +281,19 @@ export const NETCARE_TOOLS = [
             required: ['sql'],
         },
         run: guarded(sql),
+    },
+    {
+        name: 'netcare_boards',
+        description: '读取看板指标：数据治理里按看板 SQL（DataFab 口径）算好的结果表，源表变化后自动重算。用户问的是某个看板 / 指标（如「整改清零--整体网元进展」「各地区部整改完成率」）时优先用它，直接拿算好的结果，不要自己重写看板 SQL。不传 board 时按关键词列出看板指标；传 board（标识、英文名或「看板--指标」）读取结果行。',
+        parameters: {
+            type: 'object',
+            properties: {
+                keyword: { type: 'string', description: '列清单时的关键词，如 整改清零、网元进展、批量整改；可空格分隔多个' },
+                board: { type: 'string', description: '要读取的看板指标：清单里的标识（dv_…）、英文名或「看板--指标」' },
+                limit: { type: 'integer', description: `读取行数，默认 100，上限 ${MAX_MODEL_ROWS}` },
+                offset: { type: 'integer', description: '从第几行开始（翻页）' },
+            },
+        },
+        run: guarded(boards),
     },
 ];

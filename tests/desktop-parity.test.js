@@ -619,9 +619,30 @@ test('NetCare 数据探查工具：表目录（实时 + 种子 + 标注）、字
         for (const bad of ['DELETE FROM netcare.t', 'SELECT 1; SELECT 2', 'SELECT * FROM t INTO OUTFILE \'/tmp/x\'', 'UPDATE t SET a = 1', 'SELECT SLEEP(10)']) {
             assert.equal((await run('netcare_sql', { sql: bad })).ok, false, bad);
         }
+        // 表字典接进问答：中文名近似说法能找到表；看板 SQL 引用的表标 DataFab·二次加工；看板指标直接读算好的结果
+        const dict = await import('../src/services/data-dictionary-service.js');
+        await dict.importDictionary({ filename: 'd.csv', text: '表名,中文名,分类,字段名,字段中文名\nbrand_new_table_0,超期整改清单,整改管理,id,任务编号' }, { actor: 'alice' });
+        const fuzzy = await run('netcare_tables', { keyword: '整改超期' });
+        assert.match(fuzzy.content, /brand_new_table_0 \| 超期整改清单 \|/, fuzzy.content);
+        assert.match((await run('netcare_tables', { keyword: '任务编号' })).content, /brand_new_table_0/, '字段中文名也能搜');
+        const def = await dict.saveDerived({ name: 'kpi_progress', nameCn: '整体网元进展', category: '整改清零', sql: 'SELECT region_code, COUNT(*) AS total FROM risk_rectify_task_dwd GROUP BY region_code' }, 'alice');
+        await dict.refreshDerived(def.id);
+        const tagged = await run('netcare_tables', { keyword: '网元进展 rectify' });
+        assert.match(tagged.content, /risk_rectify_task_dwd \| 整改任务 \| DataFab·二次加工 \|.*看板指标 1 个已算好/, tagged.content);
+        assert.match(tagged.content, /相关看板指标[\s\S]*dv_kpi_progress \| 整改清零--整体网元进展/);
+        const listed = await run('netcare_boards', { keyword: '网元' });
+        assert.match(listed.content, /dv_kpi_progress \| 整改清零--整体网元进展 \| 2 \| ok/, listed.content);
+        const read = await run('netcare_boards', { board: '整改清零--整体网元进展' });
+        assert.equal(read.ok, true, read.content);
+        assert.match(read.content, /共 2 行[\s\S]*"region_code":"R1","total":7/);
+        assert.equal((await run('netcare_boards', { board: '不存在的看板' })).ok, false);
+        const described2 = await run('netcare_describe', { table: 'risk_rectify_task_dwd' });
+        assert.match(described2.content, /来源：DataFab·二次加工/);
+        assert.match(described2.content, /看板指标（已算好.*整改清零--整体网元进展/);
+
         // 工具清单里有单独一组，管理员可以整组停用
         const groups = (await ctx.call('alice', 'GET', '/api/agent-mcp/catalog')).data.groups;
-        assert.deepEqual(groups.find((g) => g.id === 'netcare').tools.map((t) => t.name), ['netcare_tables', 'netcare_describe', 'netcare_query', 'netcare_sql']);
+        assert.deepEqual(groups.find((g) => g.id === 'netcare').tools.map((t) => t.name), ['netcare_tables', 'netcare_describe', 'netcare_query', 'netcare_sql', 'netcare_boards']);
     } finally {
         delete ctx.mock.options.businessQuery;
         catalog.invalidate();

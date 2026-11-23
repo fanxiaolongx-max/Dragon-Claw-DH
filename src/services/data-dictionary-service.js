@@ -709,6 +709,27 @@ function tableOrigin(key, origins, reprocessed) {
 }
 export const ORIGIN_LABEL = { netcare: 'NetCare', datafab: 'DataFab', '': '其他' };
 
+/**
+ * 给对话里的查表工具用：表名（小写）→ { entry: 表字典条目, origin, reprocess, boards: [看板--指标] }。
+ * 覆盖表字典里登记的表、NetCare / DataFab 清单里的表和看板 SQL 引用的源表。
+ */
+export async function chatTableIndex() {
+    const [dict, derived] = await Promise.all([dictionaryMap(), listDerived()]);
+    const reprocessed = new Set(derived.flatMap((d) => d.sources.map((k) => String(k).toLowerCase())));
+    const boards = new Map();
+    for (const d of derived) for (const k of d.sources) {
+        const key = String(k).toLowerCase();
+        boards.set(key, [...(boards.get(key) || []), { id: d.id, title: boardTitle(d) }]);
+    }
+    const origins = bundledOrigins();
+    const index = new Map();
+    for (const key of new Set([...dict.keys(), ...origins.netcare, ...origins.datafab, ...reprocessed])) {
+        index.set(key, { entry: dict.get(key) || null, ...tableOrigin(key, origins, reprocessed), boards: boards.get(key) || [] });
+    }
+    return index;
+}
+export const boardTitle = (d) => (d.category ? `${d.category}--${d.nameCn}` : d.nameCn);
+
 // ── 治理总览：业务库所有表 × 字典 × 巡检 × 收集 × 派生表 ──
 export async function catalogView() {
     const settings = await watch.getSettings();

@@ -67,7 +67,7 @@ ${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@n
     if (hasBusinessDatasource()) {
         parts.push(`## NetCare 业务数据说明
 平台给本应用授权了业务库（${config.businessSchemaExplicit ? config.businessSchema : '数据源当前库'}，只读；以实际查到的表为准）。
-涉及风险、整改、工单、网络、License 等 NetCare 业务数据查询时：先用 netcare_tables 找表，再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
+涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录
