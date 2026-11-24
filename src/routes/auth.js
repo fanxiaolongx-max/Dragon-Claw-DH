@@ -45,7 +45,7 @@ export async function authRoutes(fastify) {
         // 共享对话的账号目录：记下用过本应用的人（底座没有员工通讯录）；每人每小时最多写一次库，这里等它写完，
         // 刚进来的人马上就能被搜到
         if (!id.devAdmin) await rememberUser(id).catch(() => {});
-        if (id.identified) recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' });
+        if (id.identified) await Promise.resolve(recordAuditOnce(`login:${id.username}:${parseClientInfo(req).platform}:${clientIp(req)}`, LOGIN_WINDOW_MS, req, { actor: id.username, action: 'login', detail: '基座单点登录' })).catch(() => {});
         const out = publicIdentity(id);
         if (out.teamId) out.teamName = (await listTeams().catch(() => ({ teams: [] }))).teams.find((t) => t.id === out.teamId)?.name || out.teamId;
         return out;
