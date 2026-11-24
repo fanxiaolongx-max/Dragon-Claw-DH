@@ -25,6 +25,7 @@ const MAX_HISTORY_MSG = 8_000;
 const KEEP_IMAGE_MESSAGES = 2;
 const MAX_COMPACTIONS = 3;
 const MAX_EMPTY_NUDGES = 2;
+const MAX_HISTORY_SEARCH_PER_TURN = 3;
 
 const normalizeQuestionText = (text) => String(text || '').replace(/\s+/g, ' ').trim();
 
@@ -53,7 +54,7 @@ function buildSystemPrompt({ identity, language, catalog, loaded, extra, memorie
 - 回答先给结论，再给依据。多行数据用 Markdown 表格；数字保留原始精度。
 - 普通闲聊、写作、解释概念、写代码不需要调用工具，直接回答。
 - 页面保存的配置（一键催办通讯录、报表看板配置、数据导入设置与映射模板、月报模板等）不在业务表里，用 read_page_config 读，不要用 SQL 去查键值表。
-- 用户问自己以前问过 / 聊过的内容、上次的结论时，用 search_my_conversations 找到对话，再用 read_my_conversation 看原文；只能查本人的对话。
+- **历史对话按需查询（严禁无故翻历史）**：**仅当用户明确要求**查找过去其他会话里聊过的内容或上次结论（如“我之前问过……”“找下上次那篇对话”）时，才调用 search_my_conversations 与 read_my_conversation（只能查本人的对话）；普通业务查询、表结构/字段问题、当前对话已包含的上下文**不要擅自翻历史**。历史记录仅含问答正文、不含工具 SQL 参数或底层报错明细，同一问题最多搜 1–2 次，找不到就直接告知用户，严禁反复换词循环搜索。
 - 占比、差距、增减幅、工作日这类数字用 calculate 算，不要心算。
 - 需要 3 步以上的任务先用 update_plan 列出步骤并随进度更新；必须由用户拍板的事用 ask_user 提问。
 - 用户上传了 Excel / CSV 并要做统计、筛选时用 query_data（服务端计算），不要用 read_file 把整张表读进来再心算。用户上传的图片会直接附给你；需要再看某张图时用 view_image。
@@ -83,7 +84,7 @@ ${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@n
         parts.push(`## NetCare 业务数据说明
 平台给本应用授权了业务库（${config.businessSchemaExplicit ? config.businessSchema : '数据源当前库'}，只读；以实际查到的表为准）。
 涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。
-**编码翻译为可读名称**：若查询涉及运营商编码（如 \`t1_operator_code\`、\`t2_operator_code\`、\`operator_code\`）或地区部/代表处编码（\`region_code\`、\`repoffice_code\`）且结果表里没有对应名称列，只要当前业务库存在相应映射维表（运营商/大T客户优先查 \`cs_nc_comm_customer_d_list\`，备选 \`cs_nc_comm_customer_d_list_dim\` / \`common_data_customer_dlvy_org\`；地代查 \`common_data_rep\`），**必须主动查映射表补全中/英文可读名称**（回答中以「名称（编码）」展示），不要只输出用户看不懂的纯数字代码；为防大表 JOIN 超时，建议先在业务表聚合出涉及的编码/客户号，再单独查维表映射。${businessHints ? `\n业务库表速查（中文叫法 / 看板 → 表名；用户这样说时就是指业务库的这些表，直接用 netcare_tables 查，不要反问是哪个库）：${businessHints}` : ''}`);
+**编码翻译为可读名称**：若查询返回运营商编码（如 \`t1_operator_code\`、\`t2_operator_code\`、\`operator_code\`）或地区部/代表处编码（\`region_code\`、\`repoffice_code\`）且结果表无名称列，工具后端会自动实时查业务库维表并把「【实时编码名称映射】」附在结果末尾——**直接使用该映射以「名称（编码）」展示即可，无需重复查维表或 describe 97 列**。若需手动补充查询，一级运营商编码直接查 \`cs_nc_comm_customer_d_list.hq_cust_category_code IN (...)\` 取 \`hq_cust_category_cn_name\` / \`hq_cust_category_en_name\`（毫秒级，避免全表 LEFT JOIN），地代查 \`common_data_rep.dept_code\`；\`Others\` 仅在用户明确要求拆分时再按 \`customer_number = cust_account_num\` 下钻。${businessHints ? `\n业务库表速查（中文叫法 / 看板 → 表名；用户这样说时就是指业务库的这些表，直接用 netcare_tables 查，不要反问是哪个库）：${businessHints}` : ''}`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录
@@ -249,6 +250,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
     let rounds = 0;
     let toolsOn = true;
     let toolCallCount = 0;
+    let historySearchCalls = 0;
 
     while (rounds < MAX_ROUNDS) {
         rounds += 1;
@@ -452,9 +454,13 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
                         }
                     }
                     if (allowed) {
-                        out = await tool.run(call.args || {}, ctx);
-                        // 对话里执行的写操作留一条记录给管理员
-                        if (tool.approval && out?.ok) pushAdminAlert({ type: 'user_action', severity: 'info', title: `${identity.displayName || identity.username} 通过对话执行了「${call.name}」`, message: String(out.summary || out.content || '').slice(0, 400), actor: identity.username, objectType: 'tool', objectId: call.name });
+                        if (call.name === 'search_my_conversations' && ++historySearchCalls > MAX_HISTORY_SEARCH_PER_TURN) {
+                            out = { ok: false, summary: '本轮历史搜索次数已达上限', content: `本轮已搜索历史对话 ${MAX_HISTORY_SEARCH_PER_TURN} 次仍未拿到所需内容（注：历史对话仅保存问答正文，不含工具 SQL 与底层报错日志）。请立即停止继续搜索，直接根据已有信息回答或如实告知用户未找到。` };
+                        } else {
+                            out = await tool.run(call.args || {}, ctx);
+                            // 对话里执行的写操作留一条记录给管理员
+                            if (tool.approval && out?.ok) pushAdminAlert({ type: 'user_action', severity: 'info', title: `${identity.displayName || identity.username} 通过对话执行了「${call.name}」`, message: String(out.summary || out.content || '').slice(0, 400), actor: identity.username, objectType: 'tool', objectId: call.name });
+                        }
                     }
                 } catch (error) { out = { ok: false, summary: '执行出错', content: `工具执行出错：${error.message}` }; }
             }

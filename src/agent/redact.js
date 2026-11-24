@@ -5,7 +5,7 @@ const COMPOUND_ACCOUNT_PASSWORD = /(["']?(?:账号|用户(?:名)?|account|user(?
 const PATTERNS = [
     // 键值形式：password=xxx、"token": "xxx"、Authorization: Bearer xxx、Cookie: a=b
     [/(https?:\/\/|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/)([^\s/@:]+):([^\s/@]+)@/gi, '$1$2:[已隐藏]@'],
-    [/((?:password|passwd|pwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|authorization|x-auth-token|x-csrf-token|cookie|set-cookie|session[_-]?id|密码|口令|密钥)["']?\s*[:=：]\s*["']?)(?:Bearer\s+)?([^\s"',;}{]{6,})/gi, '$1[已隐藏]'],
+    [/((?:password|passwd|pwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|authorization|x-auth-token|x-csrf-token|cookie|set-cookie|密码|口令|密钥)["']?\s*[:=：]\s*["']?)(?:Bearer\s+)?([^\s"',;}{]{6,})/gi, '$1[已隐藏]'],
     [/\b(Bearer)\s+[A-Za-z0-9._~+/-]{16,}=*/g, '$1 [已隐藏]'],
     [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[已隐藏的 JWT]'],
     [/\b(?:sk|pk|rk|ak)-(?:proj-|ant-|live-|test-)?[A-Za-z0-9_-]{16,}/g, '[已隐藏的密钥]'],

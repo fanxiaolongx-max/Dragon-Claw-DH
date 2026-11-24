@@ -194,14 +194,15 @@ async function mySessions(user) {
     return list.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-async function searchMine(args, identity, secrets) {
+async function searchMine(args, identity, secrets, currentSessionId = '') {
     const user = requireUser(identity);
     const words = terms(args.query);
     const limit = Math.max(1, Math.min(Number(args.limit) || 10, 30));
     const offset = Math.max(0, Number(args.offset) || 0);
     const since = dayStart(args.since);
     const until = dayStart(args.until);
-    let sessions = (await mySessions(user)).filter((s) => (since == null || s.updatedAt >= since) && (until == null || s.createdAt < until + 86_400_000));
+    const excludeCurrent = Boolean(words.length && currentSessionId && !args.includeCurrent);
+    let sessions = (await mySessions(user)).filter((s) => (!excludeCurrent || s.id !== currentSessionId) && (since == null || s.updatedAt >= since) && (until == null || s.createdAt < until + 86_400_000));
     const hitsBySession = new Map();
     if (words.length && sessions.length) {
         const ids = sessions.map((s) => s.id);
@@ -232,12 +233,18 @@ async function searchMine(args, identity, secrets) {
         title: redactText(s.title || '', { secrets }),
         createdAt: iso(s.createdAt),
         updatedAt: iso(s.updatedAt),
+        ...(s.id === currentSessionId ? { isCurrentConversation: true } : {}),
         ...(s.shared ? { shared: true } : {}),
         ...(s.archived ? { archived: true } : {}),
         ...(words.length ? { matches: (hitsBySession.get(s.id) || []).slice(0, 3).map((r) => ({ messageId: String(r.id), role: roleOf(r.role), at: iso(r.created_at), text: redactText(snippet(r.content, words), { secrets }) })) } : {}),
     }));
     const hasMore = offset + limit < sessions.length;
-    return { sessions: items, hasMore, nextOffset: hasMore ? offset + limit : null, ...(items.length ? {} : { note: words.length ? '没有找到含这些关键词的对话，可以换个说法或少用几个词' : '还没有历史对话' }) };
+    return {
+        sessions: items,
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+        ...(items.length ? {} : { note: words.length ? '没有找到匹配的历史对话（注意：历史对话仅保存问答正文，不含工具 SQL 与底层报错日志）；如已换词查过一次仍无命中，请直接告知用户，不要反复重试' : '还没有历史对话' }),
+    };
 }
 
 async function readMine(args, identity, secrets, currentSessionId) {
@@ -290,22 +297,22 @@ const guarded = (fn, summarize) => async (args, ctx) => {
 export const HISTORY_TOOLS = [
     {
         name: 'search_my_conversations',
-        description: '搜索当前用户自己的历史 AI 对话（自己发起的，以及已加入的共享对话）。用户问“我之前问过 / 聊过……”“上次那个结论是什么”“找一下以前关于 X 的对话”时用。query 为关键词（空格分隔，全部命中才算），不传则按最近更新列出会话；可用 since / until（YYYY-MM-DD）限定时间。返回会话 id、标题、时间和命中的片段，需要全文再用 read_my_conversation。',
+        description: '搜索当前用户自己的历史 AI 对话（自己发起的，以及已加入的共享对话）。**仅在用户明确要求查找过去其他对话里的内容或结论**（如“我之前问过 / 聊过……”“找一下以前关于 X 的对话”）时调用；普通业务查数、表结构/字段核对、概念问答以及当前对话已有上下文**严禁主动翻历史**。历史记录仅保存问答正文，不含工具 SQL 参数或底层报错日志；按关键词搜索时会自动排除当前对话。同一轮最多调用 1–2 次，没命中就直接告知用户，勿反复换词重试。',
         parameters: {
             type: 'object',
             properties: {
-                query: { type: 'string', description: '关键词，空格分隔；不传则列出最近的会话' },
+                query: { type: 'string', description: '关键词，空格分隔（全部命中才算）；不传则列出最近的会话' },
                 since: { type: 'string', description: '起始日期 YYYY-MM-DD，可选' },
                 until: { type: 'string', description: '截止日期 YYYY-MM-DD（含当天），可选' },
                 limit: { type: 'integer', description: '最多返回几个会话，默认 10，上限 30' },
                 offset: { type: 'integer', description: '翻页偏移，默认 0' },
             },
         },
-        run: guarded((args, identity, secrets) => searchMine(args, identity, secrets), (r) => (r.sessions.length ? `找到 ${r.sessions.length} 个对话${r.hasMore ? '（还有更多）' : ''}` : '没有找到')),
+        run: guarded((args, identity, secrets, currentSessionId) => searchMine(args, identity, secrets, currentSessionId), (r) => (r.sessions.length ? `找到 ${r.sessions.length} 个对话${r.hasMore ? '（还有更多）' : ''}` : '没有找到')),
     },
     {
         name: 'read_my_conversation',
-        description: '读取当前用户自己的某个历史对话的消息（问题与回答正文，不含工具细节）。sessionId 取自 search_my_conversations。默认返回最近 20 条；继续往前翻传上一页返回的 before；传 query 时只返回含关键词的消息。',
+        description: '读取当前用户自己的某个历史对话的消息（仅问题与回答正文，不含工具调用参数、SQL 原文和底层报错细节）。sessionId 取自 search_my_conversations。默认返回最近 20 条；继续往前翻传上一页返回的 before；传 query 时只返回含关键词的消息。',
         parameters: {
             type: 'object',
             properties: {

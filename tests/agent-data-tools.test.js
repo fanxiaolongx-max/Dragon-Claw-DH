@@ -143,4 +143,16 @@ test('我的历史对话：只搜本人和已加入的共享对话，别人的�
     assert.equal((await run('read_my_conversation', { sessionId: 'chat_carol_1' }, bob)).ok, false, '没共享的仍然读不到');
     assert.equal((await run('search_my_conversations', {}, { username: 'default', identified: false })).ok, false);
     assert.equal(parse(await run('search_my_conversations', {}, carol)).sessions.length, 2);
+
+    // 回归：redactText 绝不能把 search_my_conversations 返回的 sessionId 脱敏成 [已隐藏]
+    const { redactText } = await import('../src/agent/redact.js');
+    const redactedSearch = redactText(JSON.stringify(found));
+    assert.match(redactedSearch, /"sessionId":"chat_bob_1"/, 'sessionId 必须保持原样，避免 read_my_conversation 误报无权访问');
+    assert.doesNotMatch(redactText('api_key=sk-1234567890abcdef password=mySecret99'), /mySecret99|sk-1234567890abcdef/, '真实密钥与密码仍被脱敏');
+
+    // 回归：带关键词搜索历史对话时默认排除当前会话，避免把用户刚发的问题误当成历史命中
+    const skipSelf = parse(await run('search_my_conversations', { query: '一键催办 接收人' }, bob, { sessionId: 'chat_bob_1' }));
+    assert.equal(skipSelf.sessions.length, 0, '按关键词搜历史时应排除当前会话本身');
+    const listWithCurrent = parse(await run('search_my_conversations', {}, bob, { sessionId: 'chat_bob_1' }));
+    assert.equal(listWithCurrent.sessions.find((s) => s.sessionId === 'chat_bob_1')?.isCurrentConversation, true);
 });

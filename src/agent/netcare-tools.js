@@ -205,7 +205,7 @@ async function boards(args) {
         `看板指标：${mod.boardTitle(def)}（${def.id}），共 ${data.total} 行${data.truncated ? '（计算时已达行数上限）' : ''}，最近计算 ${data.refreshedAt || def.lastRunAt || '-'}`,
         `源表：${def.sources.join(', ')}；源表数据变化后会自动重算。口径（看板 SQL）：${String(def.sourceSql || def.sql).replace(/\s+/g, ' ').slice(0, 600)}`,
     ];
-    const body = rowsText(data.rows, { truncated: data.rows.length < data.total });
+    const body = await appendCodeMappingHint(rowsText(data.rows, { truncated: data.rows.length < data.total }), data.rows);
     return { content: `${head.join('\n')}\n${body}`, summary: `${mod.boardTitle(def)}：${data.rows.length}/${data.total} 行`, output: def.id };
 }
 
@@ -253,9 +253,8 @@ async function assertUsable(tables) {
 
 async function appendCodeMappingHint(content, rows) {
     if (!Array.isArray(rows) || !rows.length) return content;
-    const mapTables = await catalog.availableMappingTables('business').catch(() => null);
-    const hint = catalog.codeMappingHintForRows(rows, mapTables);
-    return hint ? `${content}\n${hint}` : content;
+    const resolved = await catalog.resolveCodeMappingsForRows(rows, { scope: 'business' }).catch(() => '');
+    return resolved ? `${content}\n${resolved}` : content;
 }
 
 async function query(args) {
