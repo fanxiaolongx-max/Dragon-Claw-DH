@@ -6,8 +6,8 @@ import { hasAdminMatch, isAuthEnforced, isSameUserId, listAdmins, saveAdmins } f
 import { pushLog } from '../core/log-ring.js';
 import { isMemoryMode } from '../services/system-service.js';
 import { pushAdminAlert } from '../services/alert-service.js';
-import { recordAudit, recordAuditOnce, listAudit, clientIp, parseClientInfo } from '../services/audit-service.js';
-import { listKnownUsers, rememberUser } from '../services/share-service.js';
+import { recordAudit, recordAuditOnce, listAudit, getLoginStats, clientIp, parseClientInfo } from '../services/audit-service.js';
+import { listKnownUsers, rememberUser, userKey } from '../services/share-service.js';
 import { listTeams, createTeam, renameTeam, deleteTeam, setMemberTeam, teamOf, setAdminViewing } from '../services/team-service.js';
 
 const LOGIN_WINDOW_MS = 8 * 3600_000;
@@ -102,18 +102,32 @@ export async function authRoutes(fastify) {
 
     // 管理员名单（仅管理员；写操作由入口权限钩子拦截非管理员）
     async function buildAdminsView(me) {
-        const { env, stored, openAdmin } = await listAdmins();
-        const known = await listKnownUsers().catch(() => []);
+        const [{ env, stored, openAdmin }, known, auditStats] = await Promise.all([
+            listAdmins(),
+            listKnownUsers().catch(() => []),
+            getLoginStats().catch(() => null),
+        ]);
+        const now = new Date();
+        const todayStart = auditStats?.todayStart || new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const weekStart = auditStats?.weekStart || (todayStart - 6 * 86400_000);
+        const auditLastSeen = new Map();
+        if (auditStats?.lastSeenByActor) {
+            for (const [actor, ts] of auditStats.lastSeenByActor.entries()) {
+                const k = userKey(actor);
+                if (ts > (auditLastSeen.get(k) || 0)) auditLastSeen.set(k, ts);
+            }
+        }
         const map = new Map();
         const upsert = (username, displayName = '', seenAt = 0) => {
             const cleanId = String(username || '').trim();
             if (!cleanId) return;
             const key = cleanId.toLowerCase();
             const prev = map.get(key);
+            const fromAudit = auditLastSeen.get(userKey(cleanId)) || 0;
             map.set(key, {
                 username: prev?.username || cleanId,
                 displayName: String(displayName || prev?.displayName || '').trim(),
-                seenAt: Math.max(Number(prev?.seenAt) || 0, Number(seenAt) || 0),
+                seenAt: Math.max(Number(prev?.seenAt) || 0, Number(seenAt) || 0, fromAudit),
             });
         };
         for (const u of known) upsert(u.username, u.name, u.seenAt);
@@ -136,7 +150,29 @@ export async function authRoutes(fastify) {
                 };
             })
             .sort((a, b) => (Number(b.isSuper) - Number(a.isSuper)) || (b.seenAt - a.seenAt) || a.username.localeCompare(b.username));
-        return { env, stored, openAdmin, users };
+        const todayActiveSet = new Set();
+        const weekActiveSet = new Set();
+        for (const u of users) {
+            const k = userKey(u.username);
+            if (u.seenAt >= todayStart) todayActiveSet.add(k);
+            if (u.seenAt >= weekStart) weekActiveSet.add(k);
+        }
+        if (auditStats?.todayActiveActors) {
+            for (const a of auditStats.todayActiveActors) todayActiveSet.add(userKey(a));
+        }
+        if (auditStats?.weekActiveActors) {
+            for (const a of auditStats.weekActiveActors) weekActiveSet.add(userKey(a));
+        }
+        const stats = {
+            totalUsers: users.length,
+            loggedInUsers: users.filter((u) => u.seenAt > 0).length,
+            superAdmins: users.filter((u) => u.isSuper).length,
+            todayLogins: auditStats?.todayLogins || 0,
+            todayActiveUsers: todayActiveSet.size,
+            weekActiveUsers: weekActiveSet.size,
+            totalLogins: auditStats?.totalLogins || 0,
+        };
+        return { env, stored, openAdmin, users, stats };
     }
 
     fastify.get('/admins', async (req) => buildAdminsView(resolveRequestIdentity(req)));

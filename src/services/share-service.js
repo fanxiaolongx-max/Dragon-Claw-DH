@@ -60,13 +60,14 @@ async function directory() {
     const map = new Map();
     for (const rec of await listRecords(K.user, { withPayload: true, limit: 1000 })) {
         const p = rec.payload || {};
-        if (p.username) map.set(userKey(p.username), { username: p.username, name: p.name || p.username });
+        const seenAt = Number(rec.sortKey) || (rec.updatedAt ? Date.parse(rec.updatedAt) : 0) || 0;
+        if (p.username) map.set(userKey(p.username), { username: p.username, name: p.name || p.username, seenAt });
     }
     try {
         const dir = await kvGet('expedite_notify_directory', {});
         for (const item of Array.isArray(dir?.history) ? dir.history : []) {
             const id = clean(item?.id);
-            if (id && !map.has(userKey(id))) map.set(userKey(id), { username: id, name: clean(item.name) || id });
+            if (id && !map.has(userKey(id))) map.set(userKey(id), { username: id, name: clean(item.name) || id, seenAt: 0 });
         }
     } catch { /* 催办名录读不到不影响 */ }
     return map;

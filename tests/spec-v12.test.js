@@ -362,3 +362,122 @@ test('dh-runtime.js 全局鉴权下载与服务端 attachment 响应放行', asy
     assert.equal(savedLinks.length, 2);
     assert.equal(savedLinks[1].download, 'hello.txt');
 });
+
+test('dh-runtime.js 全局鉴权图片加载与 Blob 缓存（需求图片/对话附件图不再 401）', async () => {
+    const runtimeSrc = fs.readFileSync(path.join(ROOT, 'static', 'js', 'shared', 'dh-runtime.js'), 'utf8');
+    const basePrefix = '/digital-human/dh/7746a1d1-27c7-4139-90aa-b772336c940f';
+    const fetchCalls = [];
+    const blobUrls = new Map();
+    let blobSeq = 0;
+
+    const fakeFetch = async (url, init = {}) => {
+        const u = String(url);
+        const headers = new Headers(init.headers || {});
+        fetchCalls.push({ url: u, headers });
+        if (u === '/digital-human/api/dh/user/current') {
+            return new Response(JSON.stringify({ code: 0, data: { uid: 'dWX1545337', cn: 'dragon WX1545337', canAccessSystem: true } }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+        if (u === `${basePrefix}/api/requirements/12/images/0`) {
+            assert.equal(headers.get('x-dh-user'), 'dWX1545337', '图片请求必须携带基座身份头 x-dh-user');
+            return new Response(new Uint8Array([0x52, 0x49, 0x46, 0x46]), {
+                status: 200,
+                headers: { 'Content-Type': 'image/webp' },
+            });
+        }
+        return new Response(JSON.stringify({ code: 0, message: 'ok', data: {} }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', 'x-dh-envelope': '1' },
+        });
+    };
+
+    class FakeHTMLImageElement {
+        constructor() {
+            this.tagName = 'IMG';
+            this.nodeType = 1;
+            this.dataset = {};
+            this._src = '';
+            this.rawSrcHistory = [];
+        }
+        get src() { return this._src; }
+        set src(val) {
+            this._src = String(val ?? '');
+            this.rawSrcHistory.push(this._src);
+        }
+        getAttribute(k) { return k === 'src' ? this._src : (k === 'data-dh-api-src' ? (this.dataset.dhApiSrc || null) : null); }
+        setAttribute(k, v) { if (k === 'src') this.src = v; }
+    }
+    class FakeURL extends URL {
+        static createObjectURL(blob) {
+            const id = `blob:img/${++blobSeq}`;
+            blobUrls.set(id, blob);
+            return id;
+        }
+        static revokeObjectURL(id) { blobUrls.delete(id); }
+    }
+    const fakeDocument = {
+        readyState: 'complete',
+        cookie: '',
+        currentScript: null,
+        documentElement: { nodeType: 1, classList: { add() {} }, appendChild() {}, querySelectorAll: () => [] },
+        head: { appendChild() {} },
+        body: { appendChild() {} },
+        getElementById: () => null,
+        querySelector: () => null,
+        createElement: () => ({ style: {}, classList: { add() {} }, setAttribute() {}, appendChild() {} }),
+        addEventListener: () => {},
+    };
+    const sandbox = {
+        URL: FakeURL,
+        URLSearchParams,
+        Headers,
+        Response,
+        Request,
+        Blob,
+        Event: class Event { constructor(t) { this.type = t; } },
+        HTMLImageElement: FakeHTMLImageElement,
+        Element: { prototype: {} },
+        MutationObserver: class { observe() {} },
+        CustomEvent: class CustomEvent { constructor(t, opts = {}) { this.type = t; this.detail = opts.detail; } },
+        document: fakeDocument,
+        localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        location: {
+            href: `https://netcareclaw.gde.huawei.com${basePrefix}/requirements.html`,
+            origin: 'https://netcareclaw.gde.huawei.com',
+            pathname: `${basePrefix}/requirements.html`,
+        },
+        fetch: fakeFetch,
+        addEventListener: () => {},
+        dispatchEvent: () => {},
+        setTimeout: () => 0,
+        clearTimeout: () => {},
+    };
+    sandbox.window = sandbox;
+    vm.runInNewContext(runtimeSrc, sandbox);
+
+    // 1. 需求缩略图 img.src = '/api/requirements/12/images/0'：拦截直连 401，带鉴权拉取并赋 blob URL
+    const thumbImg = new FakeHTMLImageElement();
+    thumbImg.src = '/api/requirements/12/images/0';
+    assert.ok(thumbImg.rawSrcHistory.every((s) => !s.includes('/api/requirements/')), '绝不把未鉴权的 /api/ 路径直接交由浏览器 <img> 直连');
+    assert.equal(thumbImg.src, `${basePrefix}/api/requirements/12/images/0`, '加载中读取 .src 返回逻辑 API 地址');
+    await sandbox.dhLoadImage('/api/requirements/12/images/0');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(thumbImg.src, 'blob:img/1');
+    const imgFetches = fetchCalls.filter((c) => c.url === `${basePrefix}/api/requirements/12/images/0`);
+    assert.equal(imgFetches.length, 1);
+
+    // 2. 点击缩略图打开大图预览：同步命中 Blob 缓存，零额外请求
+    const modalImg = new FakeHTMLImageElement();
+    modalImg.src = '/api/requirements/12/images/0';
+    assert.equal(modalImg.src, 'blob:img/1');
+    assert.equal(fetchCalls.filter((c) => c.url === `${basePrefix}/api/requirements/12/images/0`).length, 1);
+
+    // 3. innerHTML 里的 /api/* 图片改写成 data-dh-api-src + 透明占位，静态资源图保持原样
+    const rewritten = sandbox.dhRewriteHtml('<img src="/api/agent-files/raw?path=uploads/1/a.png" alt="shot"><img src="/assets/logo.png">');
+    assert.match(rewritten, new RegExp(`data-dh-api-src="${basePrefix}/api/agent-files/raw\\?path=uploads/1/a\\.png"`));
+    assert.match(rewritten, /src="data:image\/gif;base64,/);
+    assert.match(rewritten, new RegExp(`<img src="${basePrefix}/assets/logo\\.png">`));
+});

@@ -251,17 +251,26 @@ async function assertUsable(tables) {
     }
 }
 
+async function appendCodeMappingHint(content, rows) {
+    if (!Array.isArray(rows) || !rows.length) return content;
+    const mapTables = await catalog.availableMappingTables('business').catch(() => null);
+    const hint = catalog.codeMappingHintForRows(rows, mapTables);
+    return hint ? `${content}\n${hint}` : content;
+}
+
 async function query(args) {
     await assertUsable([String(args.table || '')]);
     const result = await catalog.queryTable('business', { ...args, limit: clampInt(args.limit, 1, MAX_MODEL_ROWS, 100) });
-    return { content: rowsText(result.rows, result), summary: `${args.table}：${result.rows.length} 行`, output: result.sql };
+    const content = await appendCodeMappingHint(rowsText(result.rows, result), result.rows);
+    return { content, summary: `${args.table}：${result.rows.length} 行`, output: result.sql };
 }
 
 async function sql(args) {
     await assertUsable(await dataDict().then((m) => m.parseSources(String(args.sql || ''))).catch(() => []));
     const result = await queryAll(args.sql, { scope: 'business', maxRows: clampInt(args.maxRows, 1, MAX_MODEL_ROWS, 200) });
     const text = String(args.sql).slice(0, 600);
-    return { content: rowsText(result.rows, { sql: text, truncated: result.truncated }), summary: `SQL：${result.rows.length} 行`, output: text };
+    const content = await appendCodeMappingHint(rowsText(result.rows, { sql: text, truncated: result.truncated }), result.rows);
+    return { content, summary: `SQL：${result.rows.length} 行`, output: text };
 }
 
 // 统一的出错口径：把错误码和原因交给模型，由它向用户说明

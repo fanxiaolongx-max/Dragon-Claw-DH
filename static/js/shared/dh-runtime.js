@@ -406,7 +406,237 @@
         };
     }
 
-    // ── Synchronously rewrite dynamic DOM element src/href under gateway subpath ──
+    // ── Authenticated API Image Loader ──
+    // 基座生产环境下，浏览器原生 <img> 请求不会自动携带 x-dh-user / x-dh-displayname 鉴权头，
+    // 访问 /api/requirements/:id/images/:index、/api/agent-files/raw、/api/ai-report/images/* 等均会 401。
+    // 统一在运行垫片层拦截所有站内 /api/* 图片地址，走带基座鉴权头的 window.fetch -> Blob URL 并缓存。
+    const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    const AUTH_IMG_CACHE_MAX = 120;
+    const authImgCache = new Map(); // resolvedUrl -> Promise<blobUrl>
+    const authImgBlobs = new Map(); // resolvedUrl -> blobUrl
+    let nativeImgSrcDesc = null;
+    let nativeSetAttribute = null;
+
+    function isAuthApiImageUrl(url) {
+        if (typeof url !== 'string') return false;
+        const s = url.trim();
+        if (!s || s.startsWith('blob:') || s.startsWith('data:') || s.startsWith('#')) return false;
+        return isApiUrl(dhResolveUrl(s));
+    }
+
+    function fetchAuthenticatedImageUrl(rawUrl) {
+        const resolved = dhResolveUrl(String(rawUrl || ''));
+        if (!resolved || !isApiUrl(resolved)) return Promise.resolve(resolved);
+        if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof window.fetch !== 'function') {
+            return Promise.resolve(resolved);
+        }
+        if (authImgCache.has(resolved)) return authImgCache.get(resolved);
+        const task = Promise.resolve()
+            .then(() => window.fetch(resolved, { credentials: 'same-origin' }))
+            .then(async (resp) => {
+                if (!resp || !resp.ok) throw new Error(`HTTP ${resp ? resp.status : 0}`);
+                const ct = String(resp.headers?.get?.('content-type') || '').toLowerCase();
+                if (ct.includes('application/json') || ct.includes('text/html')) {
+                    throw new Error(`Unexpected image content-type: ${ct}`);
+                }
+                const blob = await resp.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                authImgBlobs.set(resolved, blobUrl);
+                if (authImgBlobs.size > AUTH_IMG_CACHE_MAX) {
+                    const oldestKey = authImgBlobs.keys().next().value;
+                    const oldestUrl = authImgBlobs.get(oldestKey);
+                    authImgBlobs.delete(oldestKey);
+                    authImgCache.delete(oldestKey);
+                    try { if (oldestUrl) URL.revokeObjectURL(oldestUrl); } catch (_) { /* ignore */ }
+                }
+                return blobUrl;
+            })
+            .catch((err) => {
+                authImgCache.delete(resolved);
+                throw err;
+            });
+        authImgCache.set(resolved, task);
+        return task;
+    }
+
+    function applyRawImgSrc(img, value) {
+        if (!img) return;
+        if (nativeImgSrcDesc?.set) nativeImgSrcDesc.set.call(img, value);
+        else if (nativeSetAttribute) nativeSetAttribute.call(img, 'src', value);
+        else img.src = value;
+    }
+
+    function loadAuthenticatedImage(img, rawUrl) {
+        if (!img) return;
+        const resolved = dhResolveUrl(String(rawUrl || ''));
+        if (!resolved || !isAuthApiImageUrl(resolved)) {
+            if (img.dataset) delete img.dataset.dhApiSrc;
+            img.__dhImgLoadingUrl = '';
+            img.__dhImgReqId = (img.__dhImgReqId || 0) + 1;
+            applyRawImgSrc(img, resolved);
+            return;
+        }
+        const curRaw = nativeImgSrcDesc?.get ? nativeImgSrcDesc.get.call(img) : (img.getAttribute?.('src') || '');
+        if (img.dataset?.dhApiSrc === resolved && typeof curRaw === 'string' && curRaw.startsWith('blob:')) {
+            return;
+        }
+        if (img.__dhImgLoadingUrl === resolved) return;
+        if (img.dataset) img.dataset.dhApiSrc = resolved;
+        const reqId = (img.__dhImgReqId || 0) + 1;
+        img.__dhImgReqId = reqId;
+        const cachedBlob = authImgBlobs.get(resolved);
+        if (cachedBlob) {
+            img.__dhImgLoadingUrl = '';
+            applyRawImgSrc(img, cachedBlob);
+            return;
+        }
+        img.__dhImgLoadingUrl = resolved;
+        applyRawImgSrc(img, TRANSPARENT_PIXEL);
+        fetchAuthenticatedImageUrl(resolved)
+            .then((blobUrl) => {
+                if (img.__dhImgReqId !== reqId) return;
+                img.__dhImgLoadingUrl = '';
+                applyRawImgSrc(img, blobUrl);
+            })
+            .catch(() => {
+                if (img.__dhImgReqId !== reqId) return;
+                img.__dhImgLoadingUrl = '';
+                applyRawImgSrc(img, '');
+                try {
+                    if (typeof Event === 'function') img.dispatchEvent?.(new Event('error'));
+                } catch (_) { /* ignore */ }
+            });
+    }
+
+    function hydrateAuthImages(node) {
+        if (!node || node.nodeType !== 1) return;
+        const handleImg = (img) => {
+            if (!img || img.tagName !== 'IMG') return;
+            const pending = img.getAttribute?.('data-dh-api-src');
+            if (pending && isAuthApiImageUrl(pending)) {
+                loadAuthenticatedImage(img, pending);
+                return;
+            }
+            const rawSrc = img.getAttribute?.('src');
+            if (rawSrc && isAuthApiImageUrl(rawSrc)) {
+                loadAuthenticatedImage(img, rawSrc);
+            }
+        };
+        if (node.tagName === 'IMG') handleImg(node);
+        node.querySelectorAll?.('img[data-dh-api-src], img[src]').forEach(handleImg);
+    }
+
+    window.dhLoadImage = fetchAuthenticatedImageUrl;
+
+    // ── Synchronously rewrite dynamic DOM element src/href under gateway subpath & auth API images ──
+    try {
+        const imgProto = window.HTMLImageElement?.prototype;
+        if (imgProto) {
+            const desc = Object.getOwnPropertyDescriptor(imgProto, 'src');
+            if (desc && desc.configurable && desc.set && desc.get) {
+                nativeImgSrcDesc = desc;
+                Object.defineProperty(imgProto, 'src', {
+                    configurable: true,
+                    enumerable: desc.enumerable,
+                    get() {
+                        const raw = desc.get.call(this);
+                        if (raw === TRANSPARENT_PIXEL && this.dataset?.dhApiSrc) return this.dataset.dhApiSrc;
+                        return raw;
+                    },
+                    set(val) {
+                        if (typeof val === 'string' && isAuthApiImageUrl(val)) {
+                            loadAuthenticatedImage(this, val);
+                            return;
+                        }
+                        if (this.dataset) delete this.dataset.dhApiSrc;
+                        this.__dhImgLoadingUrl = '';
+                        this.__dhImgReqId = (this.__dhImgReqId || 0) + 1;
+                        const resolved = (DH_BASE && typeof val === 'string') ? dhResolveUrl(val) : val;
+                        return desc.set.call(this, resolved);
+                    },
+                });
+            }
+        }
+    } catch (_) { /* ignore non-configurable */ }
+
+    const HTML_URL_ATTR_RE = /(\s(?:src|href|poster|data-src)\s*=\s*)(["'])(\/(?!\/)[^"'\s>]*)\2/gi;
+    const IMG_TAG_RE = /<img\b[^>]*>/gi;
+    const IMG_SRC_ATTR_RE = /(\s)src(\s*=\s*)(["'])([^"']+)\3/i;
+    const CSS_URL_RE = /url\(\s*(["']?)(\/(?!\/)[^"')\s]+)\1\s*\)/gi;
+    const rewriteHtml = (html) => {
+        if (typeof html !== 'string' || html.indexOf('/') === -1) return html;
+        let out = html;
+        if (DH_BASE && /(?:src|href|poster)\s*=/i.test(out)) {
+            out = out.replace(HTML_URL_ATTR_RE, (m, a, q, u) => `${a}${q}${dhResolveUrl(u)}${q}`);
+        }
+        if (/<img\b/i.test(out) && /\/api\//i.test(out)) {
+            out = out.replace(IMG_TAG_RE, (tag) => tag.replace(IMG_SRC_ATTR_RE, (m, ws, eq, q, u) => {
+                const resolved = dhResolveUrl(u);
+                if (!isAuthApiImageUrl(resolved)) return m;
+                return `${ws}data-dh-api-src=${q}${resolved}${q}${ws}src=${q}${TRANSPARENT_PIXEL}${q}`;
+            }));
+        }
+        if (DH_BASE && out.indexOf('url(') !== -1) {
+            out = out.replace(CSS_URL_RE, (m, q, u) => `url(${q}${dhResolveUrl(u)}${q})`);
+        }
+        return out;
+    };
+    window.dhRewriteHtml = rewriteHtml;
+
+    const wrapHtmlProp = (Proto, prop) => {
+        try {
+            const desc = Object.getOwnPropertyDescriptor(Proto, prop);
+            if (!desc || !desc.configurable || !desc.set) return;
+            Object.defineProperty(Proto, prop, {
+                configurable: true,
+                enumerable: desc.enumerable,
+                get() { return desc.get.call(this); },
+                set(val) {
+                    const out = desc.set.call(this, rewriteHtml(val));
+                    if (typeof val === 'string' && /<img\b/i.test(val) && /\/api\//i.test(val)) {
+                        hydrateAuthImages(this);
+                    }
+                    return out;
+                },
+            });
+        } catch (_) { /* ignore */ }
+    };
+    if (typeof Element !== 'undefined' && Element.prototype) {
+        wrapHtmlProp(Element.prototype, 'innerHTML');
+        wrapHtmlProp(Element.prototype, 'outerHTML');
+        try {
+            const origInsert = Element.prototype.insertAdjacentHTML;
+            if (typeof origInsert === 'function') {
+                Element.prototype.insertAdjacentHTML = function (position, html) {
+                    const out = origInsert.call(this, position, rewriteHtml(html));
+                    if (typeof html === 'string' && /<img\b/i.test(html) && /\/api\//i.test(html)) {
+                        hydrateAuthImages(this.parentElement || this);
+                    }
+                    return out;
+                };
+            }
+            const origSetAttr = Element.prototype.setAttribute;
+            if (typeof origSetAttr === 'function') {
+                nativeSetAttribute = origSetAttr;
+                const URL_ATTRS = { src: 1, href: 1, poster: 1 };
+                Element.prototype.setAttribute = function (name, value) {
+                    const key = typeof name === 'string' ? name.toLowerCase() : name;
+                    if (typeof value === 'string') {
+                        if (key === 'src' && this.tagName === 'IMG' && isAuthApiImageUrl(value)) {
+                            loadAuthenticatedImage(this, value);
+                            return;
+                        }
+                        if (DH_BASE) {
+                            if (URL_ATTRS[key] === 1) value = dhResolveUrl(value);
+                            else if (key === 'style' && value.indexOf('url(') !== -1) value = rewriteHtml(value);
+                        }
+                    }
+                    return origSetAttr.call(this, name, value);
+                };
+            }
+        } catch (_) { /* ignore */ }
+    }
+
     if (DH_BASE) {
         const wrapProp = (Proto, prop) => {
             if (!Proto) return;
@@ -425,56 +655,12 @@
             } catch (_) { /* ignore non-configurable */ }
         };
         wrapProp(window.HTMLScriptElement?.prototype, 'src');
-        wrapProp(window.HTMLImageElement?.prototype, 'src');
         wrapProp(window.HTMLLinkElement?.prototype, 'href');
         wrapProp(window.HTMLAnchorElement?.prototype, 'href');
         wrapProp(window.HTMLIFrameElement?.prototype, 'src');
         wrapProp(window.HTMLMediaElement?.prototype, 'src');
         wrapProp(window.HTMLSourceElement?.prototype, 'src');
         wrapProp(window.HTMLVideoElement?.prototype, 'poster');
-
-        // 页面里大量用 innerHTML 拼出 <img src="/assets/...">：字符串进 DOM 之前就把站内绝对路径补上前缀，
-        // 否则浏览器会先向网关根路径发一次请求（404，图标裂开）。
-        const HTML_URL_ATTR_RE = /(\s(?:src|href|poster|data-src)\s*=\s*)(["'])(\/(?!\/)[^"'\s>]*)\2/gi;
-        const CSS_URL_RE = /url\(\s*(["']?)(\/(?!\/)[^"')\s]+)\1\s*\)/gi;
-        const rewriteHtml = (html) => {
-            if (typeof html !== 'string' || html.indexOf('/') === -1) return html;
-            let out = html;
-            if (/(?:src|href|poster)\s*=/i.test(out)) out = out.replace(HTML_URL_ATTR_RE, (m, a, q, u) => `${a}${q}${dhResolveUrl(u)}${q}`);
-            if (out.indexOf('url(') !== -1) out = out.replace(CSS_URL_RE, (m, q, u) => `url(${q}${dhResolveUrl(u)}${q})`);
-            return out;
-        };
-        window.dhRewriteHtml = rewriteHtml;
-        const wrapHtmlProp = (Proto, prop) => {
-            try {
-                const desc = Object.getOwnPropertyDescriptor(Proto, prop);
-                if (!desc || !desc.configurable || !desc.set) return;
-                Object.defineProperty(Proto, prop, {
-                    configurable: true,
-                    enumerable: desc.enumerable,
-                    get() { return desc.get.call(this); },
-                    set(val) { return desc.set.call(this, rewriteHtml(val)); },
-                });
-            } catch (_) { /* ignore */ }
-        };
-        wrapHtmlProp(Element.prototype, 'innerHTML');
-        wrapHtmlProp(Element.prototype, 'outerHTML');
-        try {
-            const origInsert = Element.prototype.insertAdjacentHTML;
-            Element.prototype.insertAdjacentHTML = function (position, html) {
-                return origInsert.call(this, position, rewriteHtml(html));
-            };
-            const origSetAttr = Element.prototype.setAttribute;
-            const URL_ATTRS = { src: 1, href: 1, poster: 1 };
-            Element.prototype.setAttribute = function (name, value) {
-                const key = typeof name === 'string' ? name.toLowerCase() : name;
-                if (typeof value === 'string') {
-                    if (URL_ATTRS[key] === 1) value = dhResolveUrl(value);
-                    else if (key === 'style' && value.indexOf('url(') !== -1) value = rewriteHtml(value);
-                }
-                return origSetAttr.call(this, name, value);
-            };
-        } catch (_) { /* ignore */ }
     }
 
     // 页面没声明图标时浏览器会去网关根路径取 /favicon.ico（那是门户的地址，不是本应用的）
@@ -1282,28 +1468,39 @@
 
     window.addEventListener('tools:languagechange', () => applyUivDisabledState(document));
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            applyUivDisabledState(document.documentElement);
+    function startDomObserver() {
+        applyUivDisabledState(document.documentElement);
+        hydrateAuthImages(document.documentElement);
+        if (DH_BASE) fixAttributes(document.documentElement);
+        if (typeof MutationObserver === 'function') {
             new MutationObserver((records) => {
                 for (const rec of records) {
                     if (rec.type === 'childList') {
                         rec.addedNodes.forEach((node) => {
                             if (DH_BASE) fixAttributes(node);
-                            if (node && node.nodeType === 1) applyUivDisabledState(node);
+                            if (node && node.nodeType === 1) {
+                                hydrateAuthImages(node);
+                                applyUivDisabledState(node);
+                            }
                         });
-                    } else if (DH_BASE) {
-                        fixAttributes(rec.target);
+                    } else {
+                        if (DH_BASE) fixAttributes(rec.target);
+                        hydrateAuthImages(rec.target);
                     }
                 }
-            }).observe(document.documentElement, { subtree: true, childList: true, ...(DH_BASE ? { attributes: true, attributeFilter: ['src', 'href'] } : {}) });
-            if (DH_BASE) {
-                fixAttributes(document.documentElement);
-            }
-            mountDebugWidgetAssets();
-        }, { once: true });
-    } else {
-        applyUivDisabledState(document.documentElement);
+            }).observe(document.documentElement, {
+                subtree: true,
+                childList: true,
+                attributes: true,
+                attributeFilter: DH_BASE ? ['src', 'href', 'data-dh-api-src'] : ['src', 'data-dh-api-src'],
+            });
+        }
         mountDebugWidgetAssets();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startDomObserver, { once: true });
+    } else {
+        startDomObserver();
     }
 })();

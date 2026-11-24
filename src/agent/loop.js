@@ -82,7 +82,8 @@ ${hasBusinessDatasource() && !netcareSelected ? `  1) 用户已显式使用 \`@n
     if (hasBusinessDatasource()) {
         parts.push(`## NetCare 业务数据说明
 平台给本应用授权了业务库（${config.businessSchemaExplicit ? config.businessSchema : '数据源当前库'}，只读；以实际查到的表为准）。
-涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。${businessHints ? `\n业务库表速查（中文叫法 / 看板 → 表名；用户这样说时就是指业务库的这些表，直接用 netcare_tables 查，不要反问是哪个库）：${businessHints}` : ''}`);
+涉及风险、整改、工单、网络、License 等 NetCare / DataFab 业务数据查询时：问的是看板或看板上的指标就先用 netcare_boards 取已算好的结果；否则先用 netcare_tables 找表（用户说中文表名或近似说法时把几种说法一起作为关键词），再用 netcare_describe 看字段和取数提示，然后用 netcare_query（结构化）或 netcare_sql（${config.businessSchemaExplicit ? `表名写 ${config.businessSchema}.表名` : '表名直接写，不加库名'}）查询。统计在库里聚合；回答时说明所用的表、条件、时间范围，并附 SQL 摘要。分区族（_0/_1、_01~_12）的表合并前先确认哪张是当前有效数据，避免重复计数。
+**编码翻译为可读名称**：若查询涉及运营商编码（如 \`t1_operator_code\`、\`t2_operator_code\`、\`operator_code\`）或地区部/代表处编码（\`region_code\`、\`repoffice_code\`）且结果表里没有对应名称列，只要当前业务库存在相应映射维表（运营商/大T客户优先查 \`cs_nc_comm_customer_d_list\`，备选 \`cs_nc_comm_customer_d_list_dim\` / \`common_data_customer_dlvy_org\`；地代查 \`common_data_rep\`），**必须主动查映射表补全中/英文可读名称**（回答中以「名称（编码）」展示），不要只输出用户看不懂的纯数字代码；为防大表 JOIN 超时，建议先在业务表聚合出涉及的编码/客户号，再单独查维表映射。${businessHints ? `\n业务库表速查（中文叫法 / 看板 → 表名；用户这样说时就是指业务库的这些表，直接用 netcare_tables 查，不要反问是哪个库）：${businessHints}` : ''}`);
     }
     if (catalog.length) {
         parts.push(`## 技能目录

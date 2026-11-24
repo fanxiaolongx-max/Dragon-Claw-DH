@@ -111,3 +111,39 @@ export async function listAudit({ page = 1, limit = 20, platform = '', actor = '
     }
     return { items: items.map(toItem), total, page: current, pageSize, totalPages: Math.ceil(total / pageSize) || 1 };
 }
+
+/** 统计今日登录次数、今日/近 7 日活跃操作人及各账号最近活跃时间（基于轻量审计元数据） */
+export async function getLoginStats() {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const weekStart = todayStart - 6 * 86400_000;
+    const rows = await listRecords(KIND, { limit: MAX_ROWS, maxRows: MAX_ROWS }).catch(() => []);
+    let todayLogins = 0;
+    let totalLogins = 0;
+    const todayActiveActors = new Set();
+    const weekActiveActors = new Set();
+    const lastSeenByActor = new Map();
+    for (const r of rows) {
+        const action = String(r.name || '');
+        const actor = String(r.updatedBy || '').trim().toLowerCase();
+        const ts = Number(r.sortKey) || (r.createdAt ? Date.parse(r.createdAt) : 0) || 0;
+        const isLogin = action === 'login' || action === 'dev_login';
+        if (isLogin) {
+            totalLogins += 1;
+            if (ts >= todayStart) todayLogins += 1;
+        }
+        if (!actor || actor === '（未登录）' || action === 'login_failed') continue;
+        if (ts > (lastSeenByActor.get(actor) || 0)) lastSeenByActor.set(actor, ts);
+        if (ts >= todayStart) todayActiveActors.add(actor);
+        if (ts >= weekStart) weekActiveActors.add(actor);
+    }
+    return {
+        todayStart,
+        weekStart,
+        todayLogins,
+        totalLogins,
+        todayActiveActors,
+        weekActiveActors,
+        lastSeenByActor,
+    };
+}
