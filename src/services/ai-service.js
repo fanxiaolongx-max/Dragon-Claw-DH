@@ -260,10 +260,11 @@ export async function deleteProfile(profileId) {
 
 export { addUsage, getUsage, clearUsage } from './usage-service.js';
 
-export function buildCompletionRequest(settings, messages, { stream = false, maxTokens } = {}) {
+export function buildCompletionRequest(settings, messages, { stream = false, maxTokens, temperature } = {}) {
     const provider = settings.provider || 'openai';
     const base = settings.apiBaseUrl || (provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : 'https://api.openai.com/v1');
     const outTokens = Number(maxTokens) || Number(settings.maxOutputTokens) || 2048;
+    const temp = Number.isFinite(Number(temperature)) ? Number(temperature) : settings.temperature;
 
     if (provider === 'anthropic') {
         const url = base.endsWith('/v1/messages') ? base : `${base.replace(/\/v1$/, '')}/v1/messages`;
@@ -286,7 +287,7 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
                 ...(settings.extraBody || {}),
                 model: settings.model,
                 max_tokens: outTokens,
-                temperature: settings.temperature,
+                temperature: temp,
                 system: sysMsg || undefined,
                 messages: userMsgs,
                 stream,
@@ -307,14 +308,14 @@ export function buildCompletionRequest(settings, messages, { stream = false, max
             ...(settings.extraBody || {}),
             model: settings.model,
             max_tokens: outTokens,
-            temperature: settings.temperature,
+            temperature: temp,
             messages,
             stream,
         },
     };
 }
 
-export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens, timeoutMs = 90_000, overrideSettings = null } = {}) {
+export async function callAiCompletion({ messages, profileId = '', model = '', maxTokens, temperature, timeoutMs = 90_000, overrideSettings = null } = {}) {
     const profiles = overrideSettings ? [] : await listProfiles();
     const baseSettings = overrideSettings || (profileId ? profiles.find((p) => p.id === profileId) : null) || await getActiveSettings();
     const modelOverride = String(model || '').trim();
@@ -331,7 +332,7 @@ export async function callAiCompletion({ messages, profileId = '', model = '', m
         };
     }
 
-    const reqSpec = buildCompletionRequest(settings, messages, { stream: false, maxTokens });
+    const reqSpec = buildCompletionRequest(settings, messages, { stream: false, maxTokens, temperature });
     const started = Date.now();
     const clampedTimeout = Math.max(1000, Math.min(300_000, Number(timeoutMs) || 90_000));
     try {
@@ -669,7 +670,7 @@ export async function getSession(sessionId) {
     };
 }
 
-export async function saveSession({ id, ownerId = 'default', title, summary = '', archived, pinned, metadata = {} }) {
+export async function saveSession({ id, ownerId = 'default', title, summary = '', archived, pinned, metadata = {}, preserveUpdatedAt = false }) {
     const sid = String(id || `chat_${crypto.randomUUID().slice(0, 12)}`);
     const existing = await getSession(sid);
     const now = Date.now();
@@ -682,7 +683,7 @@ export async function saveSession({ id, ownerId = 'default', title, summary = ''
         summary: String(summary || existing?.summary || ''),
         metadata_json: JSON.stringify({ ...(existing?.metadata || {}), ...(metadata || {}) }),
         created_at: existing?.createdAt || now,
-        updated_at: now,
+        updated_at: preserveUpdatedAt && existing?.updatedAt ? existing.updatedAt : now,
     }, ['id'], ['title', 'archived', 'pinned', 'summary', 'metadata_json', 'updated_at']);
     return getSession(sid);
 }

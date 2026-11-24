@@ -2528,10 +2528,21 @@
                 },
                 onStatus: status => activity.status(status),
                 onEvent: event => {
-                    // 模型精简好的对话名称：刷新侧栏（切走了也照样更新）
-                    if (event.type === 'title') { scheduleChatListRefresh(100); return; }
+                    // 模型精简好的对话名称：先原地更新已有侧栏项，再刷新侧栏（切走了也照样更新）
+                    if (event.type === 'title') {
+                        if (event.sessionId && event.title) {
+                            let hit = false;
+                            for (const row of [...(chatList.items || []), ...(chatList.cached || [])]) {
+                                if (row && row.id === event.sessionId) { row.title = event.title; hit = true; }
+                            }
+                            if (hit) renderChatList();
+                        }
+                        scheduleChatListRefresh(100);
+                        return;
+                    }
                     if (controller.signal.aborted || !reply.isConnected) return;
                     if (event.type === 'start' && event.sessionId) {
+                        const isBrandNew = !state.sessionId;
                         sessionTouched = true;
                         const draftKey = panelConversationKey();
                         if (!state.sessionId && dismissedPanels.has(draftKey)) {
@@ -2540,6 +2551,7 @@
                         }
                         state.sessionId = event.sessionId;
                         rememberLastChat(event.sessionId, workspacePayload ? { agentSessionId: workspacePayload.agentSessionId, root: workspacePayload.root } : null);
+                        if (isBrandNew) scheduleChatListRefresh(150);
                     }
                     if (event.type === 'skills_changed') { window.dispatchEvent(new CustomEvent('skills:changed', { detail: { ids: event.ids } })); return; }
                     if (event.type === 'skill_grant_prompt' && event.skill) { window.HomeSharedConversations?.promptSkillRequest?.(event.skill.id, event.skill); return; }

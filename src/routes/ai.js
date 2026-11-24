@@ -36,7 +36,8 @@ import { listSkills } from '../services/skill-service.js';
 import { filterSkillsForUser } from '../services/distribution-service.js';
 import { getAutoSwitch, hasUsableCredentials, normalizeProfile, resolveProfileCategory, IMAGE_TEST_MODEL_RE, testAiImageConnection } from '../services/ai-service.js';
 import { formatTestFailure } from '../services/ai-test-diagnostics.js';
-import { prepareContext, compactSession, generateTitle, isTrivialProbe } from '../services/conversation-service.js';
+import { prepareContext, compactSession, generateTitle, isTrivialProbe, backfillSessionTitles } from '../services/conversation-service.js';
+import { conversationTitle } from '../services/conversation-title.js';
 import { schedulePage, removeSchedule, runScheduleNow, listSchedules, createSchedule, cancelSchedule } from '../services/schedule-service.js';
 import { config } from '../config.js';
 import {
@@ -120,7 +121,7 @@ export async function aiRoutes(fastify) {
                         archived: false,
                         pinned: false,
                         messageCount: 0,
-                        title: q.slice(0, 40) || '新对话',
+                        title: conversationTitle(q) || q.slice(0, 40) || '新对话',
                         firstQuestion: q.slice(0, 160),
                         lastQuestion: q.slice(0, 160),
                         discussionMode: null,
@@ -129,6 +130,7 @@ export async function aiRoutes(fastify) {
                     };
                 });
             items.unshift(...fresh);
+            backfillSessionTitles({ ownerId: owner, sessions: items, skipIds: runningSessions(owner).map((r) => r.sessionId) });
         }
         return { items };
     });
@@ -220,9 +222,9 @@ export async function aiRoutes(fastify) {
 
         const lastUserMsg = [...messages].reverse().find((m) => m?.role === 'user');
         const userText = String(lastUserMsg?.content || body.message || '').trim();
-        // 标题只取用户的话，不带附件清单
+        // 标题只取用户的话，不带附件清单；先用规则精简成短标题，再由模型并行精炼
         const questionText = userText.split('📎 附件：')[0];
-        const plainTitle = questionText.replace(/\s+/g, ' ').trim().slice(0, 40);
+        const plainTitle = conversationTitle(questionText);
         const probeOnly = isTrivialProbe(questionText);
         let sessionId = body.sessionId ? String(body.sessionId) : '';
         let existingSession = null;
@@ -366,8 +368,29 @@ export async function aiRoutes(fastify) {
         if (stream && sessionId) write({ type: 'start', sessionId });
 
         try {
-            // 新对话：和回答并行地让模型起一个短标题
-            const titlePromise = ((createdNow && userText && !probeOnly) || retitle) ? generateTitle({ settings: selected, text: questionText }) : null;
+            // 新对话（或首轮仅为寒暄/探活后的首句正经问题）：与回答并行起短标题，就绪立刻落库并推流刷新侧栏，不阻塞、不因中途停止而丢失
+            const shouldTitle = Boolean(persist && sessionId && ((createdNow && userText && !probeOnly) || retitle));
+            let titleDone = false;
+            const titlePromise = shouldTitle
+                ? generateTitle({ settings: selected, text: questionText })
+                    .then(async (aiTitle) => {
+                        const title = aiTitle || (retitle ? plainTitle : '');
+                        if (!title) return '';
+                        await saveSession({
+                            id: sessionId,
+                            title,
+                            preserveUpdatedAt: true,
+                            metadata: {
+                                ...(aiTitle ? { titleSource: 'ai' } : {}),
+                                ...(retitle ? { probeTitle: '' } : {}),
+                            },
+                        }).catch(() => {});
+                        titleDone = true;
+                        write({ type: 'title', title, sessionId });
+                        return title;
+                    })
+                    .catch(() => '')
+                : null;
             const secrets = [...profiles.map((p) => p.apiKey), config.secretKey].filter(Boolean);
             const context = persist && sessionId
                 ? await prepareContext({ sessionId, history, settings: selected, emit: write, secrets })
@@ -423,13 +446,9 @@ export async function aiRoutes(fastify) {
                 });
             }
             await addUsage(res.usage, usedModel);
-            if (titlePromise) {
-                const title = (await Promise.race([titlePromise, new Promise((r) => setTimeout(() => r(''), 4000))])) || (retitle ? plainTitle : '');
-                if (title) {
-                    // 只更新标题和试探消息标记，保留会话状态。
-                    await saveSession({ id: sessionId, title, ...(retitle ? { metadata: { probeTitle: '' } } : {}) });
-                    write({ type: 'title', title, sessionId });
-                }
+            // 若主回答极快结束而标题还在收尾，礼貌最多再等 1.5s 以便在流关闭前推给前端；超时也不丢弃，后台继续落库
+            if (titlePromise && !titleDone) {
+                await Promise.race([titlePromise, new Promise((r) => setTimeout(r, 1500))]);
             }
             return sendDone({
                 reply: res.text,
