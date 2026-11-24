@@ -16,8 +16,10 @@ html.dh-web .v2-nav-item[data-v2-action="links"],
 html.dh-web #homeKnowledgeGraphEntry,
 /* 快速提问里依赖已隐藏能力的场景：知识图谱 */
 html.dh-web .v2-scenes [data-scene="graph"],
-/* 对话区：内嵌浏览器、语音输入 */
+/* 对话区：内嵌浏览器、终端、语音输入（基座 Web 版禁用终端，超管亦不显示） */
 html.dh-web #dcBrowserToggle,
+html.dh-web #dcTerminalToggle,
+html.dh-web #dcTerminalPanel,
 html.dh-web #dcVoice,
 /* 左下角：扫码使用 */
 html.dh-web #v2ScanBtn,

@@ -1,14 +1,10 @@
 {
   "zh": [
-    "支持首页多对话并发后台续跑与重连：切换对话或刷新页面后回答不会中断，支持查看运行中状态、随时停止以及后台完成提醒。",
-    "对齐主线智能体与共享会话可靠性：工具调用参数超长截断时自动识别并提高下一轮输出上限重试；打开已撤销的共享会话前自动拦截并清理。",
-    "优化团队管理与切换体验：团队人数标签支持点击查看全部成员列表，移出团队最后一位成员前弹窗提示确认；「正在查看团队」悬浮条升级平滑胶囊切换动画。",
-    "对齐主线前端细节：工具市场弹窗支持暗色主题，账号头像按 icon → logo → 首字母逐级回退，月报支持章节大纲查询，支持跨来源置顶拖拽排序、键帽 Emoji/分割线渲染与思考过程平滑折叠动效。"
+    "DragonClaw 回复下方的复制按钮旁新增「问题反馈」按钮：点击后自动收集本对话的研发日志，打开意见反馈弹窗并附上日志，描述问题后提交，就会在需求广场生成一条「意见反馈」。",
+    "意见反馈支持上传任意格式的附件（最多 5 个，合计 20 MB）；附件只有提交人和管理员可以下载，需求详情里会列出附件。"
   ],
   "en": [
-    "Added parallel background continuation and live re-attachment for home conversations: replies keep running when switching chats or refreshing, with running indicators, stop controls, and completion toasts.",
-    "Aligned agent and shared-conversation reliability: automatically detects truncated tool-call arguments on max-token stop reasons and retries with higher output budget; blocks opening revoked shared conversations upfront.",
-    "Improved team management and switching UX: clickable team member count popovers, sole-member move confirmation warnings, and smooth pill-morphing animation on the viewing-team banner.",
-    "Aligned frontend polish with Mainline: dark-theme Tool Market modal variables, cascading account logo fallback, monthly-report chapter outline queries, cross-source pinned drag sorting, keycap emoji and horizontal rule rendering, and smooth thinking panel transitions."
+    "A \"Report a problem\" button now sits next to Copy under each DragonClaw reply: it collects this chat's developer log, opens the feedback dialog with the log attached, and posts your description to the requests board as feedback.",
+    "Feedback now accepts attachments of any type (up to 5 files, 20 MB in total); only the submitter and admins can download them, and request details list them."
   ]
 }

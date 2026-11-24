@@ -12,7 +12,7 @@ import {
 } from '../services/business/topic-service.js';
 
 import {
-    listRequirements, getRequirement, getRequirementImage, createRequirement, updateRequirement, deleteRequirement,
+    listRequirements, getRequirement, getRequirementImage, getRequirementFile, createRequirement, updateRequirement, deleteRequirement,
     transportConfig, decryptBody, startUpload, receiveUploadChunk, completeUpload, cancelUpload,
 } from '../services/business/requirements-service.js';
 
@@ -115,6 +115,11 @@ export async function requirementsRoutes(fastify) {
         const image = await getRequirementImage(req.params.id, req.params.index);
         reply.header('Cache-Control', 'private, max-age=86400').header('X-Content-Type-Options', 'nosniff');
         return reply.type(image.type).send(image.buffer);
+    });
+    fastify.get('/:id/files/:index', async (req, reply) => {
+        const file = await getRequirementFile(req.params.id, req.params.index, me(req));
+        reply.header('X-Content-Type-Options', 'nosniff').header('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+        return reply.type('application/octet-stream').send(file.buffer);
     });
     fastify.put('/:id', async (req) => updateRequirement(req.params.id, await plain(req, `/api/requirements/${req.params.id}`), me(req)));
     fastify.delete('/:id', async (req) => deleteRequirement(req.params.id, me(req)));

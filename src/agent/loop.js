@@ -26,6 +26,19 @@ const KEEP_IMAGE_MESSAGES = 2;
 const MAX_COMPACTIONS = 3;
 const MAX_EMPTY_NUDGES = 2;
 
+const normalizeQuestionText = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+
+/** 提问工具（ask_user）触发时：若本轮已有正文尚未包含问题本身，补出需要追加到正文的文本 */
+export function buildAskedQuestionDelta(existingText, question) {
+    const q = String(question || '').trim();
+    if (!q) return '';
+    const existing = String(existingText || '');
+    if (!existing.trim()) return q;
+    if (normalizeQuestionText(existing).includes(normalizeQuestionText(q))) return '';
+    const prefix = /\n\s*\n\s*$/.test(existing) ? '' : (/\n\s*$/.test(existing) ? '\n' : '\n\n');
+    return `${prefix}${q}`;
+}
+
 function buildSystemPrompt({ identity, language, catalog, loaded, extra, memories, summary, historyEvidence = '', followups = '', isShared = false, availableFiles = [], sharedCapabilities = null, netcareSelected = false, businessHints = '' }) {
     const en = String(language || '').startsWith('en');
     const now = new Date();
@@ -186,7 +199,7 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
             events.push(ev);
             emit(ev);
         },
-        ask: (q) => { asked = q; },
+        ask: (q) => { if (!asked && q) asked = q; },
         pendingImages: [],
         attachImage: (img) => { ctx.pendingImages.push(img); },
     };
@@ -462,8 +475,9 @@ export async function runAgent({ settings, identity, history, skillIds = [], lan
         }
         if (signal?.aborted) break;
         if (asked) {
-            // 提问后本轮结束：问题作为正文显示，选项由前端渲染成按钮
-            const lead = finalText.trim() ? '' : asked.question;
+            // 提问后本轮结束：若此前工具轮次或开场引导语已输出正文，但正文未包含问题本身，
+            // 仍需补写问题到正文并流式推送，确保前端气泡、落库记录、复制/导出与下一轮模型上下文都完整可见
+            const lead = buildAskedQuestionDelta(finalText, asked.question);
             if (lead) { finalText += lead; emit({ type: 'delta', delta: lead }); }
             ctx.emit({ type: 'question', question: asked.question, options: asked.options });
             break;

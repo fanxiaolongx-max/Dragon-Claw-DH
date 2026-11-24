@@ -1,6 +1,7 @@
 // 需求广场：提需求、按流程流转、留处理记录。数据存统一记录表：
 //   requirement              一条需求（正文、处理记录）；列表只读摘要
 //   requirement_images       需求的配图（单独存，打开详情时不必把图片一起读出来）
+//   requirement_file         需求 / 意见反馈的附件（任意格式，如对话研发日志），每 1 MB 一条分片存
 //   requirement_upload(+_chunk)  大请求的分块暂存，15 分钟过期
 // 与主线版的差别：处理人是管理员（主线版是超级管理员）；没有技能/工具的发布审核（基座 Web 版管理员直接保存技能）。
 // 提交内容沿用主线版前端的加密信封；密钥对存应用库（私钥加密后保存），多实例共用同一把。
@@ -12,6 +13,7 @@ import { listRecords, getRecord, putRecord, deleteRecord } from '../record-store
 
 const KIND = 'requirement';
 const IMAGES = 'requirement_images';
+const FILES = 'requirement_file';
 const UPLOAD = 'requirement_upload';
 const CHUNK = 'requirement_upload_chunk';
 export const STATUSES = ['提交', '需求接受', '需求实现中', '需求完成', '验收完成', '需求评价'];
@@ -39,6 +41,44 @@ function parseImages(input, existing = []) {
         if (bytes.length > MAX_IMAGE_BYTES || bytes.toString('base64') !== image.data || !isImage(image.type, bytes)) throw invalid();
         return { name: String(image.name || 'image').slice(0, 120), type: image.type, data: image.data };
     })];
+}
+
+// ── 附件（任意格式；只做大小限制，下载一律按二进制附件返回；只给提交人和管理员下载）──
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const FILE_PART_BYTES = 1024 * 1024;
+const cleanName = (name) => String(name || 'file').replace(/[\\/\u0000-\u001f\u007f]+/g, '_').trim().slice(0, 160) || 'file';
+const cleanType = (type) => (/^[\w.+-]+\/[\w.+-]+$/.test(String(type || '')) ? String(type).slice(0, 100) : 'application/octet-stream');
+function parseFiles(input) {
+    if (input === undefined || input === null) return [];
+    const invalid = () => fail('最多上传 5 个附件，合计不超过 20 MB', 400, 'REQUIREMENT_FILE_INVALID');
+    if (!Array.isArray(input) || input.length > MAX_FILES) throw invalid();
+    let total = 0;
+    return input.map((file) => {
+        if (typeof file?.data !== 'string' || file.data.length > 4 * Math.ceil(MAX_FILE_BYTES / 3)) throw invalid();
+        const bytes = Buffer.from(file.data, 'base64');
+        total += bytes.length;
+        if (bytes.length > MAX_FILE_BYTES || total > MAX_FILE_BYTES || bytes.toString('base64') !== file.data) throw invalid();
+        return { name: cleanName(file.name), type: cleanType(file.type), bytes };
+    });
+}
+const filePartId = (reqId, index, part) => `${pad(reqId)}-${index}-${part}`;
+async function saveFiles(reqId, files, username) {
+    const meta = [];
+    for (const [index, file] of files.entries()) {
+        const parts = Math.max(1, Math.ceil(file.bytes.length / FILE_PART_BYTES));
+        for (let part = 0; part < parts; part++) {
+            const data = file.bytes.subarray(part * FILE_PART_BYTES, (part + 1) * FILE_PART_BYTES).toString('base64');
+            await putRecord(FILES, { id: filePartId(reqId, index, part), group: pad(reqId), payload: { data }, updatedBy: username });
+        }
+        meta.push({ name: file.name, type: file.type, size: file.bytes.length, parts });
+    }
+    return meta;
+}
+async function deleteFiles(req) {
+    for (const [index, file] of (req.files || []).entries()) {
+        for (let part = 0; part < (file.parts || 1); part++) await deleteRecord(FILES, filePartId(req.id, index, part)).catch(() => {});
+    }
 }
 
 // ── 记录读写 ──
@@ -78,6 +118,7 @@ export async function getRequirement(id, identity) {
         ...req,
         images: (req.imageNames || []).map((name, index) => ({ name, href: `/api/requirements/${req.id}/images/${index}` })),
         imageNames: undefined,
+        files: (req.files || []).map((file, index) => ({ name: file.name, size: file.size, href: canEdit(req, identity) ? `/api/requirements/${req.id}/files/${index}` : undefined })),
         canEdit: canEdit(req, identity),
         canManage: Boolean(identity.isAdmin),
     };
@@ -91,12 +132,27 @@ export async function getRequirementImage(id, index) {
     return { type: image.type, buffer: Buffer.from(image.data, 'base64') };
 }
 
+export async function getRequirementFile(id, index, identity) {
+    const req = await load(id);
+    const file = req && /^\d+$/.test(String(index)) ? req.files?.[Number(index)] : null;
+    if (!file) throw fail('附件不存在', 404);
+    if (!canEdit(req, identity)) throw fail('附件只有提交人和管理员可以下载', 403);
+    const chunks = [];
+    for (let part = 0; part < (file.parts || 1); part++) {
+        const data = (await getRecord(FILES, filePartId(req.id, Number(index), part)))?.payload?.data;
+        if (typeof data !== 'string') throw fail('附件已损坏或不存在', 404);
+        chunks.push(Buffer.from(data, 'base64'));
+    }
+    return { name: file.name, buffer: Buffer.concat(chunks) };
+}
+
 export async function createRequirement(body, identity) {
-    const { title, description = '', category, urgent, images } = body || {};
+    const { title, description = '', category, urgent, images, files } = body || {};
     if (typeof title !== 'string' || !title.trim()) throw fail('标题为必填项');
     if (typeof category !== 'string' || !category.trim()) throw fail('页面分类为必选项');
     if (typeof description !== 'string') throw fail('需求描述无效');
     const attachments = parseImages(images);
+    const extraFiles = parseFiles(files);
     // 编号取现有最大值加一；两人同时提交撞号时再往后挪
     let id = (await listRecords(KIND, { limit: 1 })).map((r) => Number(r.id))[0] || 0;
     do { id += 1; } while (await getRecord(KIND, pad(id)));
@@ -108,6 +164,7 @@ export async function createRequirement(body, identity) {
     };
     addLog(req, '', STATUSES[0], '创建需求', identity.username);
     if (attachments.length) await putRecord(IMAGES, { id: pad(id), payload: attachments, updatedBy: identity.username });
+    if (extraFiles.length) req.files = await saveFiles(id, extraFiles, identity.username);
     await store(req);
     return { success: true, id, message: '需求提交成功' };
 }
@@ -159,6 +216,7 @@ export async function deleteRequirement(id, identity) {
     if (!req) throw fail('需求不存在', 404);
     if (!canEdit(req, identity)) throw fail('没有权限删除此需求', 403);
     await deleteRecord(IMAGES, pad(req.id));
+    await deleteFiles(req);
     await deleteRecord(KIND, pad(req.id));
     return { success: true, message: '删除成功' };
 }

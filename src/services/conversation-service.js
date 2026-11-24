@@ -20,6 +20,31 @@ const SALIENT_RE = /error|fail|exception|denied|timeout|错误|失败|异常|报
 const TRUNCATED_RE = /^(MAX_TOKENS|LENGTH|max_tokens)$/i;
 const clip = (t, n) => (t.length > n ? `${t.slice(0, n)}…` : t);
 
+/** 把 assistant 消息 events 里的 ask_user 提问与选项并入上下文，避免旧消息正文缺问题或用户回复“第1个”时模型失忆 */
+export function appendQuestionContext(content, events) {
+    const base = String(content || '');
+    const list = Array.isArray(events) ? events : [];
+    const questions = list.filter((ev) => ev && ev.type === 'question' && (ev.question || (Array.isArray(ev.options) && ev.options.length)));
+    if (!questions.length) return base;
+    const normBase = base.replace(/\s+/g, ' ').trim();
+    const blocks = [];
+    for (const ev of questions) {
+        const q = String(ev.question || '').trim();
+        const opts = Array.isArray(ev.options) ? ev.options.map((o) => String(o || '').trim()).filter(Boolean) : [];
+        const lines = [];
+        if (q && !normBase.includes(q.replace(/\s+/g, ' ').trim())) {
+            lines.push(`[向用户确认的问题] ${q}`);
+        }
+        if (opts.length) {
+            const optText = opts.map((opt, idx) => `${idx + 1}. ${opt}`).join(' / ');
+            if (!normBase.includes(optText)) lines.push(`[提供的选项] ${optText}`);
+        }
+        if (lines.length) blocks.push(lines.join('\n'));
+    }
+    if (!blocks.length) return base;
+    return base.trim() ? `${base.trimEnd()}\n\n${blocks.join('\n\n')}` : blocks.join('\n\n');
+}
+
 function excerptEntry(entry, budget) {
     if (entry.role === 'tool') {
         const content = String(entry.content || '');
@@ -130,10 +155,24 @@ export async function prepareContext({ sessionId, history, settings, emit, secre
     while (kept.length > 1 && estimateTokens(kept.map((m) => m.content).join('')) > budget) kept.shift();
 
     const stored = await listMessages(sessionId);
+    const storedTail = stored.slice(Math.max(0, stored.length - kept.length));
+    const storedQuestionMsgs = stored.filter((m) => m.role !== 'user' && Array.isArray(m.events) && m.events.some((ev) => ev?.type === 'question'));
+    if (storedQuestionMsgs.length) {
+        kept = kept.map((entry, idx) => {
+            if (entry.role !== 'assistant') return entry;
+            const entryTrim = String(entry.content || '').trim();
+            const direct = storedTail.length === kept.length ? storedTail[idx] : null;
+            const matched = (direct && direct.role !== 'user' && Array.isArray(direct.events) && String(direct.content || '').trim() === entryTrim)
+                ? direct
+                : storedQuestionMsgs.findLast((m) => String(m.content || '').trim() === entryTrim);
+            if (!matched) return entry;
+            return { ...entry, content: appendQuestionContext(entry.content, matched.events) };
+        });
+    }
     const older = stored.slice(0, Math.max(0, stored.length - kept.length)).map((m) => ({
         id: m.id,
         role: m.role === 'user' ? 'user' : 'assistant',
-        content: String(m.content || ''),
+        content: m.role === 'user' ? String(m.content || '') : appendQuestionContext(m.content, m.events),
     }));
     const meta = session.metadata || {};
     const done = Math.min(Number(meta.summarizedCount) || 0, older.length);
@@ -194,7 +233,7 @@ export async function compactSession({ sessionId, settings, secrets = [] }) {
     const older = stored.slice(0, Math.max(0, stored.length - 2)).map((m) => ({
         id: m.id,
         role: m.role === 'user' ? 'user' : 'assistant',
-        content: String(m.content || ''),
+        content: m.role === 'user' ? String(m.content || '') : appendQuestionContext(m.content, m.events),
     }));
     const meta = session.metadata || {};
     const done = Math.min(Number(meta.summarizedCount) || 0, older.length);

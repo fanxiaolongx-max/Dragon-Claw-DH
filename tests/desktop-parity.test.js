@@ -168,6 +168,24 @@ test('需求广场：提交、加密信封、分块上传、流转规则与权�
         assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
         assert.equal((await call('carol', 'GET', '/api/requirements/1/images/5')).status, 404);
 
+        // 意见反馈附件（对话研发日志等任意文件）：超过 1 MB 分片存；只有提交人和管理员能下载；删除时一起清掉
+        const log = Buffer.from(JSON.stringify({ session: 'abc', events: 'x'.repeat(2_500_000) }));
+        const fb = { title: '回答错了', description: '回答错了', category: '意见反馈', files: [{ name: 'dragon-claw-log-abc.json', type: 'application/json', data: log.toString('base64') }, { name: '../x.zip', type: 'bad type', data: Buffer.from('PK').toString('base64') }] };
+        const fbId = (await call('bob', 'POST', '/api/requirements', fb)).data.id;
+        const fbDetail = (await call('bob', 'GET', `/api/requirements/${fbId}`)).data;
+        assert.deepEqual(fbDetail.files.map((f) => [f.name, f.size]), [['dragon-claw-log-abc.json', log.length], ['.._x.zip', 2]]);
+        const got = await fetch(`${ctx.url}${fbDetail.files[0].href}`, { headers: as('bob') });
+        assert.equal(got.status, 200);
+        assert.equal(got.headers.get('content-type'), 'application/octet-stream');
+        assert.match(got.headers.get('content-disposition'), /^attachment;/);
+        assert.deepEqual(Buffer.from(await got.arrayBuffer()), log);
+        assert.equal((await fetch(`${ctx.url}${fbDetail.files[1].href}`, { headers: as('alice') })).status, 200, '管理员能下载');
+        assert.equal((await call('carol', 'GET', `/api/requirements/${fbId}`)).data.files[0].href, undefined);
+        assert.equal((await call('carol', 'GET', `/api/requirements/${fbId}/files/0`)).status, 403);
+        assert.equal((await call('bob', 'POST', '/api/requirements', { title: 't', category: 'c', files: Array.from({ length: 6 }, () => ({ name: 'a', data: 'AA==' })) })).data.code, 'REQUIREMENT_FILE_INVALID');
+        assert.equal((await call('bob', 'DELETE', `/api/requirements/${fbId}`)).status, 200);
+        assert.equal((await call('alice', 'GET', `/api/requirements/${fbId}/files/0`)).status, 404);
+
         // 权限：别人不能改；本人能改内容但不能改状态；管理员按流程流转，不能跳级、回退
         assert.equal((await call('carol', 'PUT', '/api/requirements/1', { title: 'x' })).status, 403);
         assert.equal((await call('bob', 'PUT', '/api/requirements/1', { status: '需求接受' })).status, 403);

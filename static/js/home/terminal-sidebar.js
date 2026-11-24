@@ -7,6 +7,7 @@
     'use strict';
     const L = (zh, en) => /^en/.test(window.ToolsI18n?.getLanguage?.() || localStorage.getItem('tools_lang') || '') ? en : zh;
     const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    const isDhWeb = () => document.documentElement.classList.contains('dh-web') || typeof window.DH_BASE === 'string';
     const isSuperAdmin = () => {
         try {
             if (typeof window.isNavSuperAdmin === 'function') return window.isNavSuperAdmin() === true;
@@ -15,7 +16,8 @@
             return false;
         }
     };
-    const isAdmin = isSuperAdmin;
+    const canUseTerminal = () => !isDhWeb() && isSuperAdmin();
+    const isAdmin = canUseTerminal;
     const AUTO_KEY = 'dragon_terminal_auto_open';
     const ICONS = {
         plus: '<path d="M10 4v12M4 10h12"/>', caret: '<path d="m6 8 4 4 4-4"/>', close: '<path d="m5 5 10 10M15 5 5 15"/>',
@@ -288,7 +290,7 @@
     }
     const folderName = cwd => String(cwd || '').split(/[\\/]/).filter(Boolean).pop() || '~';
     function onCommand(event) {
-        if (!event?.type) return;
+        if (isDhWeb() || !event?.type) return;
         if (event.type === 'command_start') {
             agentRunning += 1;
             Object.assign(tabs.get('agent'), { used: true, lastCommandCwd: event.cwd });
@@ -411,7 +413,8 @@
         renderTabs();
     }
     async function newTerminal(shell, { cwd = window.DragonClawWorkspace?.getWorkspacePayload?.()?.root || '' } = {}) {
-        if (!isSuperAdmin()) return showError(L('基座版规范：非超级管理员禁止开启终端', 'Only super administrators can open a terminal in digital human web edition'));
+        if (isDhWeb()) return;
+        if (!canUseTerminal()) return showError(L('基座版规范：非超级管理员禁止开启终端', 'Only super administrators can open a terminal in digital human web edition'));
         try {
             const count = [...tabs.values()].filter(tab => tab.kind === 'shell').length;
             const shellInfo = info?.shells?.find(item => item.id === shell) || info?.shells?.find(item => item.default);
@@ -466,7 +469,11 @@
         window.dispatchEvent(new Event('dragon-claw:sidebar-layout'));
     }
     async function show({ tab, auto = false } = {}) {
-        if (!isSuperAdmin()) {
+        if (isDhWeb()) {
+            if (open) close();
+            return;
+        }
+        if (!canUseTerminal()) {
             if (open) close();
             showError(L('基座版规范：非超级管理员禁止开启终端', 'Only super administrators can open a terminal in digital human web edition'));
             return;
@@ -481,7 +488,7 @@
         // 手动打开且还没有任何可见标签：直接新建默认终端，不显示空的 Agent 标签
         if (!tab) {
             await restored;
-            if (open && ![...tabs.values()].some(visibleTab) && isSuperAdmin()) { await newTerminal(); if (!auto) tabs.get(activeId)?.term?.focus(); return; }
+            if (open && ![...tabs.values()].some(visibleTab) && canUseTerminal()) { await newTerminal(); if (!auto) tabs.get(activeId)?.term?.focus(); return; }
         }
         select(tab || activeId);
         if (!auto) tabs.get(activeId)?.term?.focus();
@@ -491,6 +498,11 @@
         open = false; menuNode.hidden = true; visibility();
     }
     function init() {
+        // 基座 Web 版不允许使用终端：即便是超管也不创建终端按钮与面板，不注册快捷键
+        if (isDhWeb()) {
+            window.DragonTerminalSidebar = { open: () => {}, close: () => {}, isOpen: () => false, newTerminal: () => {}, loopbackUrl, relayCallback };
+            return;
+        }
         const browserToggle = document.getElementById('dcBrowserToggle');
         const workspace = document.getElementById('dcWorkspacePanel');
         if (!browserToggle || !workspace) return;
@@ -500,11 +512,11 @@
         toggle.innerHTML = `<svg class="dc-btn-ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="m4.5 6 2.5 2-2.5 2M9 10.5h3"/></svg><span class="dc-btn-label">${esc(L('终端', 'Terminal'))}</span>`;
         toggle.title = L('终端', 'Terminal');
         toggle.setAttribute('aria-label', L('终端', 'Terminal'));
-        toggle.hidden = !isSuperAdmin(); // 基座版规范：非超管用户不显示也不允许用户开启终端
+        toggle.hidden = !canUseTerminal(); // 基座版规范：非超管用户不显示也不允许用户开启终端
         browserToggle.after(toggle);
 
         function updateToggleVisibility() {
-            const allowed = isSuperAdmin();
+            const allowed = canUseTerminal();
             if (toggle) toggle.hidden = !allowed;
             if (!allowed && open) close();
         }
@@ -588,9 +600,9 @@
         document.addEventListener('pointerdown', event => { if (!menuNode.hidden && !event.target.closest('.dc-term-menu,[data-term-action="menu"]')) menuNode.hidden = true; });
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && !menuNode.hidden) { menuNode.hidden = true; event.preventDefault(); }
-            // Ctrl+` 切换终端面板（仅限超级管理员）
+            // Ctrl+` 切换终端面板（仅限非基座 Web 版的超级管理员）
             if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) {
-                if (!isSuperAdmin()) return;
+                if (!canUseTerminal()) return;
                 event.preventDefault();
                 open ? close() : show();
             }

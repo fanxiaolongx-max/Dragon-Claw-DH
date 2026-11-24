@@ -2251,6 +2251,10 @@ html.platform-home:not([data-theme="dark"]) .dc-action--danger { border-color: #
 
 html.platform-home:not([data-theme="dark"]) .dc-action--danger:hover { border-color: #e57373; background: #fef4f4; }
 
+html.platform-home:not([data-theme="dark"]) .dc-question.has-title { border-color: var(--v2-line); background: var(--v2-side); }
+
+html.platform-home:not([data-theme="dark"]) .dc-question-title { color: var(--v2-ink); }
+
 html.platform-home:not([data-theme="dark"]) .dc-question-options .dc-action.is-chosen { border-color: var(--v2-accent); background: var(--v2-accent-soft); color: var(--v2-accent); }
 /* 命令输出、写入 / 编辑后的文件卡片 */
 html.platform-home:not([data-theme="dark"]) .dc-tool-output summary:hover { color: var(--v2-ink); }

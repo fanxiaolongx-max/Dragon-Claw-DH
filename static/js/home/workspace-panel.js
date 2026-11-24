@@ -1514,11 +1514,17 @@
                 box.innerHTML = `<div class="dc-todo-head"><b>${escapeHtml(tx('todoTitle'))}</b><span>${done}/${items.length}</span></div><ol>${items.map(item => `<li class="is-${escapeHtml(item.status)}"><span class="dc-todo-mark" aria-hidden="true">${item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '●' : ''}</span><span>${escapeHtml(item.content)}</span></li>`).join('')}</ol>`;
             }
         } else if (event.type === 'question') {
-            // 智能体提问：选项按钮点一下就作为下一条消息发送；历史记录里的只读
+            // 智能体提问：若正文未包含问题本身（含历史旧对话），把问题一起显示在卡片内；
+            // 选项按钮点一下就作为下一条消息发送；历史记录里的只读
             const card = document.createElement('div');
-            card.className = `dc-question${replaying ? ' is-history' : ''}`;
+            const questionText = String(event.question || '').trim();
+            const bodyRaw = String(messageEl.dataset?.dcRawText ?? messageEl.querySelector('.dc-msg-body')?.textContent ?? '');
+            const norm = value => String(value || '').replace(/\s+/g, ' ').trim();
+            const showTitle = Boolean(questionText) && (!bodyRaw.trim() || !norm(bodyRaw).includes(norm(questionText)));
+            card.className = `dc-question${showTitle ? ' has-title' : ''}${replaying ? ' is-history' : ''}`;
             const options = Array.isArray(event.options) ? event.options : [];
-            card.innerHTML = `<div class="dc-question-hint">${escapeHtml(tx('questionHint'))}</div><div class="dc-question-options">${options.map((option, index) => `<button type="button" class="dc-action" data-answer="${escapeHtml(option)}"${replaying ? ' disabled' : ''}>${index + 1}. ${escapeHtml(option)}</button>`).join('')}</div>`;
+            const titleHtml = showTitle ? `<div class="dc-question-title">${escapeHtml(questionText)}</div>` : '';
+            card.innerHTML = `${titleHtml}<div class="dc-question-hint">${escapeHtml(tx('questionHint'))}</div><div class="dc-question-options">${options.map((option, index) => `<button type="button" class="dc-action" data-answer="${escapeHtml(option)}"${replaying ? ' disabled' : ''}>${index + 1}. ${escapeHtml(option)}</button>`).join('')}</div>`;
             card.addEventListener('click', clickEvent => {
                 const button = clickEvent.target.closest('[data-answer]');
                 if (!button || card.classList.contains('is-history')) return;

@@ -12,6 +12,7 @@ import { isSameUserId, listAdmins } from '../core/access.js';
 import { kvGet, sendBaseNotify } from '../dao/scoped.js';
 import { listRecords, getRecord, putRecord, deleteRecord } from './record-store.js';
 import { getSession, saveSession, listMessages } from './ai-service.js';
+import { appendQuestionContext } from './conversation-service.js';
 import { listSkills } from './skill-service.js';
 import { pushAlert } from './alert-service.js';
 import { enabledTools } from './tool-catalog-service.js';
@@ -617,6 +618,7 @@ export async function sharedHistory(sessionId, { ownerId, viewer, limit = 30 }) 
         let content = String(m.content || '')
             .replace(/\n{0,2}（\s*本轮调用工具\s*\d+\s*次：[^）\n]*）\s*$/u, '')
             .trimEnd();
+        if (role === 'assistant') content = appendQuestionContext(content, m.events);
         const extra = summarizeMessageResources(m);
         if (extra) content = `${content}${content ? '\n' : ''}${extra}`;
         if (!same(author, viewer)) {
