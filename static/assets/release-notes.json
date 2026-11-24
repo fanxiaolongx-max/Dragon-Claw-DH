@@ -1,8 +1,8 @@
 {
   "zh": [
-    "新增对话「向用户提问」与终端输出裁剪的回归测试，保证这两项行为后续不被改坏。"
+    "修复首页「全部工具」按最新排序时系统内置工具因发包重置文件时间而集体排到最前的问题，并补齐「需求管理」页面更新时间；构建期按 git 真实实质提交生成 page-updates.json（隔离跨页复用资源归属），服务端优先读取该清单。"
   ],
   "en": [
-    "Added regression tests for in-chat ask-user prompts and terminal output trimming."
+    "Fixed newest-first tool sorting where built-in system pages jumped to the top after zip packaging reset file mtimes, and added /requirements to page-updates; builds now generate git-based page-updates.json (with cross-page asset ownership isolation) served by /api/home/page-updates."
   ]
 }

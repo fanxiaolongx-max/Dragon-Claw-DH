@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { runCheck } from './check.js';
+import { computePageUpdateTimes } from './page-updates.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -63,6 +64,7 @@ function addDirToZip(zip, absDir, zipPrefix, assetTag) {
         if (entry.isDirectory()) {
             count += addDirToZip(zip, absPath, relZip, assetTag);
         } else if (entry.isFile()) {
+            if (relZip === 'static/assets/page-updates.json') continue;
             if (LITE && LITE_SKIP.some((re) => re.test(relZip))) continue;
             const raw = fs.readFileSync(absPath);
             const content = assetTag && /\.html?$/i.test(relZip)
@@ -110,6 +112,13 @@ for (const dirName of INCLUDE_DIRS) {
     totalFiles += addDirToZip(zip, path.join(ROOT, dirName), dirName, dirName === 'static' ? assetTag : '');
 }
 
+// 构建期按 git 真实实质提交时间固化内置页面更新时间，避免 zip 解压后所有 HTML 的 mtime 全变成部署时间
+const pageUpdates = await computePageUpdateTimes(ROOT);
+zip.file('static/assets/page-updates.json', Buffer.from(`${JSON.stringify(pageUpdates, null, 2)}\n`, 'utf8'), {
+    unixPermissions: 0o644,
+});
+totalFiles += 1;
+
 const zipBuffer = await zip.generateAsync({
     type: 'nodebuffer',
     platform: 'UNIX',
@@ -119,7 +128,7 @@ const zipBuffer = await zip.generateAsync({
 
 // 产物自检：根目录必须直接是 app.json / run.js（不含外层目录），路径一律正斜杠，体积不超限
 const names = Object.keys(zip.files);
-for (const must of ['app.json', 'run.js', 'package.json', 'package-lock.json', '.npmrc', '.nvmrc', 'static/index.html', 'static/js/api.js', 'db/init.sql', 'dragon-claw-dh.version']) {
+for (const must of ['app.json', 'run.js', 'package.json', 'package-lock.json', '.npmrc', '.nvmrc', 'static/index.html', 'static/js/api.js', 'static/assets/page-updates.json', 'db/init.sql', 'dragon-claw-dh.version']) {
     if (!names.includes(must)) { console.error(`❌ 构建中止：包内缺少 ${must}`); process.exit(1); }
 }
 const bad = names.filter((n) => n.includes('\\') || /(^|\/)\.env(\.|$)/.test(n) || n.startsWith('node_modules/') || n.startsWith('scripts/'));

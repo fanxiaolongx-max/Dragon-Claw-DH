@@ -11,6 +11,7 @@
     "dev": "node scripts/dev.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "check": "node scripts/check.js",
+    "page-updates": "node scripts/page-updates.mjs",
     "sync": "node scripts/sync-debian.mjs",
     "sync:watch": "node scripts/sync-debian.mjs --watch",
     "build": "npm run check && node scripts/build.js",

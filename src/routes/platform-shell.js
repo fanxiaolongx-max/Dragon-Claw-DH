@@ -466,6 +466,29 @@ export async function platformShellRoutes(fastify) {
         return { groups: await filterCapabilitiesForUser(groups, resolveRequestIdentity(req)), generatedAt: new Date().toISOString() };
     });
 
+    let bundledPageUpdatesCache = null;
+    function readBundledPageUpdates() {
+        const manifestPath = path.join(STATIC_DIR, 'assets', 'page-updates.json');
+        try {
+            const stat = fs.statSync(manifestPath);
+            if (bundledPageUpdatesCache && bundledPageUpdatesCache.mtimeMs === stat.mtimeMs && bundledPageUpdatesCache.size === stat.size) {
+                return bundledPageUpdatesCache.data;
+            }
+            const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const data = {};
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                for (const [href, value] of Object.entries(parsed)) {
+                    const ms = Date.parse(String(value || ''));
+                    if (Number.isFinite(ms) && ms > 0) data[href] = new Date(ms).toISOString();
+                }
+            }
+            bundledPageUpdatesCache = { mtimeMs: stat.mtimeMs, size: stat.size, data };
+            return data;
+        } catch {
+            return {};
+        }
+    }
+
     fastify.get('/api/home/page-updates', async () => {
         const pageFiles = {
             '/uivf12': 'uivf12.html',
@@ -480,9 +503,15 @@ export async function platformShellRoutes(fastify) {
             '/duty-roster': 'duty-roster.html',
             '/frt': 'frt.html',
             '/praudit': 'praudit.html',
+            '/requirements': 'requirements.html',
         };
+        const bundled = readBundledPageUpdates();
         const out = {};
         for (const [key, rel] of Object.entries(pageFiles)) {
+            if (bundled[key]) {
+                out[key] = bundled[key];
+                continue;
+            }
             const full = path.join(STATIC_DIR, rel);
             if (fs.existsSync(full)) {
                 out[key] = fs.statSync(full).mtime.toISOString();
