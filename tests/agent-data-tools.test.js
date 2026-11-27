@@ -34,7 +34,7 @@ async function tools() {
 }
 const parse = (out) => JSON.parse(out.content);
 
-test('页面配置：白名单内可读、密钥字段隐藏、跟着页面权限走、敏感键永不开放', async () => {
+test('页面配置：白名单内可读、内容原样返回、跟着页面权限走、敏感键永不开放', async () => {
     const run = await tools();
     const { kvSet, kvGet } = await import('../src/dao/scoped.js');
     const { sharedKeys } = await import('../src/services/distribution-service.js');
@@ -48,7 +48,7 @@ test('页面配置：白名单内可读、密钥字段隐藏、跟着页面权�
 
     const read = parse(await run('read_page_config', { key: 'expedite_notify_directory' }, bob));
     assert.equal(read.value.roster.length, 2);
-    assert.equal(read.value.webhook.token, '[已隐藏]', '键名像令牌的字段被隐藏');
+    assert.equal(read.value.webhook.token, 'tok-1234567890', '脱敏已取消：原样返回');
     const sub = parse(await run('read_page_config', { key: 'expedite_notify_directory', path: 'roster', limit: 1 }, bob));
     assert.deepEqual(sub.value, [{ name: '张三', empId: 'a001' }]);
     assert.equal(sub.nextOffset, 1);

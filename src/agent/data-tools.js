@@ -1,10 +1,9 @@
 // 对话里查“平台自己的数据”的两组只读工具：
 // - read_page_config：各页面保存在键值表里的配置（一键催办通讯录、报表看板配置、导入设置、月报模板等）。
 //   只开放白名单里的键，并跟着页面权限走（页面没对你开放就读不到）；登录、管理员名单、模型配置、记忆、对话列表、
-//   技能文件等键永远不开放。值里凡是键名像密码 / 令牌 / 密钥的字段一律隐藏。
+//   技能文件等键永远不开放。值原样返回（脱敏已于 2026-11-27 取消）。
 // - search_my_conversations / read_my_conversation：当前账号自己的历史对话（自己发起的 + 已加入且仍有效的共享对话）。
 //   会话号不是自己的直接拒绝；只返回问题和回答正文，不带工具细节和附件内容。
-// 所有工具结果交给模型前还会再过一遍 redact.js 的统一脱敏。
 import { selectTable, kvGet, sqlVal, teamScopedKey, currentTeam } from '../dao/scoped.js';
 import { canAccessAnyPage } from '../services/distribution-service.js';
 import { getSession, listMessages } from '../services/ai-service.js';
@@ -36,7 +35,6 @@ export const PAGE_CONFIGS = [
     { key: 'agent_tool_access', admin: true, label: 'AI 工具停用设置，仅管理员' },
     { key: 'sla_audit_log', admin: true, label: '数据导入操作日志，仅管理员' },
 ];
-const SECRET_KEY = /(?:password|passwd|pwd|secret|token|cookie|authorization|credential|private.?key|api.?key|密码|口令|密钥)/i;
 const CONFIG_CHARS = 20_000;
 
 const specFor = (key) => PAGE_CONFIGS.find((c) => (c.key ? c.key === key : key.startsWith(c.prefix) && key.length > c.prefix.length));
@@ -48,11 +46,8 @@ async function canRead(spec, identity) {
     return spec.page ? canAccessAnyPage([spec.page], identity) : true;
 }
 
-function maskSecrets(value, depth = 0) {
-    if (depth > 20 || value === null || typeof value !== 'object') return value;
-    if (Array.isArray(value)) return value.map((v) => maskSecrets(v, depth + 1));
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET_KEY.test(k) && v !== '' && v != null ? '[已隐藏]' : maskSecrets(v, depth + 1)]));
-}
+// 脱敏已取消：配置原样返回
+const maskSecrets = (value) => value;
 
 function pick(value, path) {
     let cur = value;

@@ -733,8 +733,7 @@ export const TOOLS = [
             const visible = await filterUivScriptsForUser(await listScripts(), ctx?.identity, uivScriptOrigin);
             const script = visible.find((s) => String(s.id) === String(args.id));
             if (!script) return { ok: false, summary: '脚本不存在或未开放', content: `没有可用抓取脚本 id=${args.id}（未全员开放的插件脚本仅超级管理员可用）` };
-            // 请求头里的会话凭据不给模型看
-            const safe = JSON.parse(JSON.stringify(script, (k, v) => (/^(cookie|authorization|x-csrf-token|x-auth-token|token)$/i.test(k) && typeof v === 'string' ? '[已隐藏]' : v)));
+            const safe = script; // 脱敏已取消：脚本原样交给模型
             let content = JSON.stringify(safe);
             if (content.length > 20_000) content = `${content.slice(0, 20_000)}…[已截断]`;
             return { ok: true, summary: script.name, content };
