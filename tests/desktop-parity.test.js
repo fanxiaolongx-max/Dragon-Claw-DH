@@ -779,7 +779,7 @@ test('消息中心 AI 摘要：警告级消息后台生成一句话摘要，所�
     assert.equal(older[0].severity, 'warn');
     const prompts = mock.aiRequests.slice(before).filter((r) => !r.stream);
     assert.equal(prompts.length, 1, '只分析警告及以上的消息');
-    assert.doesNotMatch(JSON.stringify(prompts[0].messages), /sk-abcdefghijklmnop1234/, '口令先脱敏再交给模型');
+    assert.match(JSON.stringify(prompts[0].messages), /sk-abcdefghijklmnop1234/, '脱敏已取消：原文交给模型');
     for (const user of ['dave', 'erin']) {
         const events = (await call(user, 'GET', '/api/alert-center/events')).data.events;
         const failed = events.find((e) => e.title === '模型故障：主模型连续失败');
@@ -962,16 +962,11 @@ test('对话附件上传：普通用户支持 JSON base64 与分块上传（绕�
     assert.equal(done.data.files[0].size, Buffer.byteLength(sample));
 });
 
-test('脱敏保留用户名：复合账号密码与 URL 中的 admin 不误脱敏', async () => {
+test('脱敏已取消：redactText 原样返回，不再改写技能 / 工具文本', async () => {
     const { redactText } = await import('../src/agent/redact.js');
-    const urlMasked = redactText('请求地址 https://admin:SuperSecret99@example.com/api');
-    assert.ok(urlMasked.includes('https://admin:[已隐藏]@example.com/api'), urlMasked);
-    assert.ok(!urlMasked.includes('SuperSecret99'), urlMasked);
-
-    const compoundMasked = redactText('账号密码: admin / SuperSecret99，请登录后导出');
-    assert.ok(compoundMasked.includes('admin'), compoundMasked);
-    assert.ok(compoundMasked.includes('[已隐藏]'), compoundMasked);
-    assert.ok(!compoundMasked.includes('SuperSecret99'), compoundMasked);
+    for (const sample of ['请求地址 https://admin:SuperSecret99@example.com/api', '账号密码: admin / SuperSecret99', 'Basic information 字段', 'token=abc123456789']) {
+        assert.equal(redactText(sample), sample);
+    }
 });
 
 test('基座催办通知下发：预览可滚动、历史检索、工号分组与无首字母工号解析', async () => {
@@ -1132,15 +1127,12 @@ test('诊断控制台增强：新增最新自检探针与一键收集所有自�
     assert.equal(alertCheck.data.result.code, 0);
     assert.ok(typeof alertCheck.data.result.expediteHistoryCount === 'number');
 
-    const redactCheck = await call('alice', 'POST', '/api/debug/test/redact-check', {});
-    assert.equal(redactCheck.status, 200);
-    assert.equal(redactCheck.data.result.passed, true);
 
     const dbgJs = fs.readFileSync(path.join(rootDir, 'static/js/shared/dh-debug-widget.js'), 'utf8');
     assert.match(dbgJs, /action: 'kv-roundtrip'/);
     assert.match(dbgJs, /action: 'query-business'/);
     assert.match(dbgJs, /action: 'alert-notify-check'/);
-    assert.match(dbgJs, /action: 'redact-check'/);
+    assert.doesNotMatch(dbgJs, /redact-check/);
     assert.match(dbgJs, /一键收集所有自检详细日志/);
     assert.match(dbgJs, /runOutboundCheckProbe/);
     assert.match(dbgJs, /runStreamCheckProbe/);

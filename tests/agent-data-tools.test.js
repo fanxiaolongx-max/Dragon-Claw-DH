@@ -126,7 +126,7 @@ test('我的历史对话：只搜本人和已加入的共享对话，别人的�
     const read = parse(await run('read_my_conversation', { sessionId: 'chat_bob_2' }, bob, { sessionId: 'chat_bob_2' }));
     assert.deepEqual(read.messages.map((m) => m.role), ['user', 'assistant']);
     assert.equal(read.isCurrentConversation, true);
-    assert.doesNotMatch(JSON.stringify(read), /sk-abcdefghijklmnopqrstuvwxyz/, '密钥被隐藏');
+    assert.match(JSON.stringify(read), /sk-abcdefghijklmnopqrstuvwxyz/, '脱敏已取消：原文保留');
 
     const denied = await run('read_my_conversation', { sessionId: 'chat_carol_1' }, bob);
     assert.equal(denied.ok, false);
@@ -148,7 +148,7 @@ test('我的历史对话：只搜本人和已加入的共享对话，别人的�
     const { redactText } = await import('../src/agent/redact.js');
     const redactedSearch = redactText(JSON.stringify(found));
     assert.match(redactedSearch, /"sessionId":"chat_bob_1"/, 'sessionId 必须保持原样，避免 read_my_conversation 误报无权访问');
-    assert.doesNotMatch(redactText('api_key=sk-1234567890abcdef password=mySecret99'), /mySecret99|sk-1234567890abcdef/, '真实密钥与密码仍被脱敏');
+    assert.equal(redactText('api_key=sk-1234567890abcdef password=mySecret99'), 'api_key=sk-1234567890abcdef password=mySecret99', '脱敏已取消：原样返回');
 
     // 回归：带关键词搜索历史对话时默认排除当前会话，避免把用户刚发的问题误当成历史命中
     const skipSelf = parse(await run('search_my_conversations', { query: '一键催办 接收人' }, bob, { sessionId: 'chat_bob_1' }));

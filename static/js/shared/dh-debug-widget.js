@@ -38,7 +38,6 @@
         { action: 'row-limit', label: '📏 查询行数上限' },
         { action: 'sql-size', label: '📦 单条 SQL 大小上限' },
         { action: 'alert-notify-check', label: '🔔 消息中心与催办名录状态' },
-        { action: 'redact-check', label: '🔒 敏感凭据脱敏规则自检' },
     ];
 
     const state = {
@@ -413,8 +412,7 @@
             const resultCode = data?.result?.code;
             const isExpectedReject = /^write-(base|netcare)|query-netcare$/.test(action) && (resultCode === 400 || resultCode === 409);
             const kvFailed = action === 'kv-roundtrip' && data?.result && data.result.intact === false;
-            const redactFailed = action === 'redact-check' && data?.result && data.result.passed === false;
-            const ok = res.ok && !kvFailed && !redactFailed && (isExpectedReject || resultCode === undefined || resultCode === 0);
+            const ok = res.ok && !kvFailed && (isExpectedReject || resultCode === undefined || resultCode === 0);
             state.probeResults.unshift({
                 action,
                 durationMs: data.durationMs || (Date.now() - started),

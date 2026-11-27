@@ -647,7 +647,7 @@ test('AI Report frontend trace export deduplicates response and validateInteract
     await win.AiReportTrace.post('c1', '编译配方（第 1 次）', '/api/ai-report/cell/compile', { month: '2026-10', interactive: false, authToken: 'secret-jwt-123' });
     const exported = win.AiReportTrace.exportLog('c1', { title: '整改情况', prompt: '按运营商展示整改指标', chat: [] });
     assert.ok(exported);
-    assert.equal(exported.entries[0].request.authToken, '[REDACTED]', 'real secret token fields must still be redacted');
+    assert.equal(exported.entries[0].request.authToken, 'secret-jwt-123', 'redaction removed: trace keeps original values');
     assert.equal('result' in exported.entries[0], false, 'entry should not duplicate serialized result alongside response');
     assert.ok(exported.entries[0].response?.recipe);
     assert.equal(exported.entries[0].steps.length, 1);

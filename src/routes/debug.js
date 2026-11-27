@@ -6,7 +6,6 @@ import { debugProbeAction, isMemoryMode } from '../services/system-service.js';
 import { sendExpediteNotification, listExpediteDirectory } from '../services/report-service.js';
 import { getActiveSettings } from '../services/ai-service.js';
 import { alertSummary } from '../services/alert-service.js';
-import { redactText } from '../agent/redact.js';
 import { secretsAreStrong } from '../core/secrets.js';
 import { guardStatus, generateDevToken, revokeDevToken, setVerifyUrl, probeVerifyUrl } from '../core/identity-guard.js';
 import { recordAudit } from '../services/audit-service.js';
@@ -166,11 +165,6 @@ export async function debugRoutes(fastify) {
                 expediteGroupCount: Array.isArray(directory?.groups) ? directory.groups.length : 0,
                 knownEmployeeCount: Array.isArray(directory?.knownEmployees) ? directory.knownEmployees.length : 0,
             };
-        } else if (action === 'redact-check') {
-            const sample = '请求 https://admin:SecretPass99@example.com/api | 账号密码: admin / SecretPass99';
-            const output = redactText(sample);
-            const passed = output.includes('admin') && !output.includes('SecretPass99') && output.includes('[已隐藏]');
-            result = { code: passed ? 0 : 500, passed, sampleLength: sample.length, output };
         } else {
             result = await debugProbeAction(action, {
                 ...(req.body && typeof req.body === 'object' ? req.body : {}),

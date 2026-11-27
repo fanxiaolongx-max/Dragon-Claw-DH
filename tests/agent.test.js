@@ -313,7 +313,7 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.deepEqual(JSON.parse(calcMsg).map((r) => r.result ?? 'ERR'), [15, 22, 'ERR']);
         const res5 = Object.fromEntries(ev5.filter((e) => e.type === 'tool_result').map((e) => [e.tool + ':' + e.summary, e.ok]));
         assert.equal(res5['memory:已记住 #1'], true);
-        assert.equal(res5['memory:未保存'], false, '凭据不能进记忆');
+        assert.equal(res5['memory:已记住 #2'], true, '凭据拦截已取消：照常保存');
         assert.equal(res5['save_uiv_script:保存抓取脚本需要管理员权限'], false, '非管理员在确认前就被拒绝');
         const q = ev5.find((e) => e.type === 'question');
         assert.deepEqual(q.options, ['按网络', '按责任人']);
@@ -402,7 +402,7 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         assert.equal(noVision.find((e) => e.type === 'done').reply, '看不到图，但可以描述你的问题。');
         assert.match(streamReqs().at(-1).messages.at(-1).content, /当前模型不支持看图/);
 
-        // ── 9. 脱敏：工具结果里的口令、密钥不进模型 ──
+        // ── 9. 脱敏已取消：工具结果原样交给模型 ──
         const secretForm = new FormData();
         secretForm.append('files', new Blob(['服务器配置\npassword=Abc12345!\napi_key: sk-proj-abcdefghijklmnopqrst\n']), '配置.txt');
         const secretUp = (await (await fetch(`${url}/api/ai/uploads`, { method: 'POST', headers: as('bob'), body: secretForm })).json()).files[0];
@@ -411,7 +411,8 @@ test('智能体：查库回答问题、越权 SQL 被拦、技能、附件与 HT
         await chat('bob', { messages: [{ role: 'user', content: '看下配置' }] });
         const readBack = streamReqs()[1].messages.find((m) => m.role === 'tool').content;
         assert.match(readBack, /服务器配置/);
-        assert.doesNotMatch(readBack, /Abc12345|abcdefghijklmnopqrst/);
+        assert.match(readBack, /Abc12345/);
+        assert.match(readBack, /abcdefghijklmnopqrst/);
 
         // ── 10. 写操作审批：普通用户直接被拒；管理员看到确认卡，允许才执行，拒绝不执行，别人批不了 ──
         mock.aiScript.push({ toolCalls: [{ name: 'update_database_rows', args: { table: 'report_metric_data', values: { target_val: '93%' }, where: "metric_label = '整改闭环率'" } }] }, { text: '不行。' });
