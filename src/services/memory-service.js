@@ -9,7 +9,6 @@ const MAX_CHARS = 500;
 const MAX_TOPIC_CHARS = 100;
 const PROMPT_CHARS = 4000;
 const keyOf = (username) => `agent_memory:${String(username || 'anonymous').toLowerCase()}`;
-// 凭据不进记忆：记忆会进系统提示，也会被同平台其他应用读到
 
 export async function listMemories(username) {
     const list = await kvGet(keyOf(username), []);

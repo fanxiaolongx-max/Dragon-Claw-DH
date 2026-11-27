@@ -46,7 +46,7 @@ export function enqueueAlertAnalysis(event, users) {
 async function summarize(event) {
     const { callAiCompletion } = await import('./ai-service.js');
     const prompt = `你是 Dragon Claw 消息中心的值班分析助手。根据下面这条站内消息，用中文写一句话总结，最多 55 个汉字。
-要求：直接说出了什么事、影响什么、需不需要人处理；不要寒暄、不要项目符号；不要复述口令、令牌或长段原文。
+要求：直接说出了什么事、影响什么、需不需要人处理；不要寒暄、不要项目符号；不要复述长段原文。
 如果写不出比标题更清楚的话，就只输出标题。
 
 标题：${event.title}

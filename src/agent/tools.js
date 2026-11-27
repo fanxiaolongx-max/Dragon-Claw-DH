@@ -688,7 +688,7 @@ export const TOOLS = [
     },
     {
         name: 'memory',
-        description: '长期记忆：保存用户明确要求记住、或反复用到的偏好与约定（跨对话有效；已按当前主题相关性列在系统提示里，可用 list 查全部）。永久更正已有约定请 update 原编号，本轮例外不写入。用户问依据时用 source(id) 查看版本与出处。action=add 新增、update 修改、delete 删除（按 id）、list 列出。推荐填 topic 注明适用范围（例如「月报格式」「报表口径」，所有对话通用则填 "*"）。不要保存密码、密钥等凭据，也不要保存一次性的任务细节。',
+        description: '长期记忆：保存用户明确要求记住、或反复用到的偏好与约定（跨对话有效；已按当前主题相关性列在系统提示里，可用 list 查全部）。永久更正已有约定请 update 原编号，本轮例外不写入。用户问依据时用 source(id) 查看版本与出处。action=add 新增、update 修改、delete 删除（按 id）、list 列出。推荐填 topic 注明适用范围（例如「月报格式」「报表口径」，所有对话通用则填 "*"）。不要保存一次性的任务细节。',
         parameters: {
             type: 'object',
             properties: {
